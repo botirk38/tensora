@@ -4,29 +4,31 @@
 
 This document outlines the **Minimum Viable Product (MVP)** implementation strategy for TensorStore, focusing on core functionality needed to validate the io_uring approach and demonstrate basic performance improvements.
 
-## MVP Goals
+## MVP Goals (Within 300-Hour Constraint)
 
 ### Primary Objective
-**Validate the core hypothesis**: Can io_uring provide measurable performance improvements for tensor loading compared to traditional async I/O approaches?
+**Validate the core hypothesis**: Can io_uring provide measurable performance improvements (>20%) for tensor loading compared to traditional async I/O approaches?
 
-**Note**: The real innovation is in the io_uring loading approach, not the file format. We include a custom TensorStore format for learning purposes, but the main comparison should be:
+**Time-Constrained Focus**: Given 300 hours total, prioritize empirical validation over comprehensive features. The main comparison is:
 - **Baseline**: safetensors with tokio::fs
 - **Test**: safetensors with tokio-uring
-- **Bonus**: TensorStore format with tokio-uring (educational)
+- **Educational**: Basic TensorStore format (minimal implementation)
 
 ### MVP Success Criteria
-1. **Primary**: Demonstrate io_uring performance improvement loading safetensors vs tokio::fs
-2. **Secondary**: Load tensors from custom TensorStore format using io_uring (learning)
-3. **Proof of concept**: Show that io_uring approach is technically viable and beneficial
+1. **Primary (must achieve)**: Demonstrate measurable performance difference between tokio-uring vs tokio::fs for safetensors
+2. **Secondary (educational)**: Basic TensorStore format working with io_uring
+3. **Documentation**: Clear analysis of when/why performance benefits occur (or don't)
 
-### Explicitly OUT OF SCOPE for MVP
+### Explicitly OUT OF SCOPE for MVP (to fit 300-hour constraint)
 - NUMA awareness
 - Multi-GPU support
-- Complex prefetching
+- Complex prefetching strategies
 - Production-grade error handling
 - Comprehensive testing framework
 - Advanced memory management
 - Conversion from multiple formats
+- Cross-platform compatibility
+- Python bindings or framework integration
 
 ## MVP Technology Stack
 
@@ -187,111 +189,85 @@ criterion_group!(benches, benchmark_loading);
 criterion_main!(benches);
 ```
 
-## MVP Development Plan
+## MVP Development Plan (Time-Constrained)
 
-### Week 1: Core Implementation
-1. **Day 1-2**: Set up project structure and dependencies
-2. **Day 3-4**: Implement basic TensorStore format
-3. **Day 5-7**: Implement io_uring loader
+### Week 3-4: Core Implementation (~40 hours)
+1. **Setup**: Basic Rust project with minimal dependencies
+2. **Baseline**: Implement safetensors loading with tokio::fs
+3. **Test Implementation**: Implement safetensors loading with tokio-uring
+4. **Basic Benchmarks**: Create criterion-based performance comparison
 
-### Week 2: Testing and Validation
-1. **Day 1-2**: Implement safetensors converter
-2. **Day 3-4**: Create basic tests and benchmarks
-3. **Day 5-7**: Performance testing and validation
+### Week 5-6: Validation & Decision Point (~40 hours)
+1. **Performance Testing**: Comprehensive benchmarking across file sizes
+2. **Analysis**: Profile CPU/memory usage and identify bottlenecks
+3. **Go/No-Go Decision**: Determine if performance benefits justify continued work
+4. **Initial Documentation**: Document findings and methodology
+
+### Week 7-8: Educational Component (~40 hours, if justified)
+1. **TensorStore Format**: Minimal implementation with alignment
+2. **Converter**: Basic safetensors → TensorStore conversion
+3. **Comparison**: TensorStore vs safetensors performance
+4. **Documentation**: Learning outcomes and format analysis
 
 ### Success Metrics for MVP
-- **Primary Goal**: Show measurable improvement of tokio-uring vs tokio::fs loading safetensors (target: >20% faster)
-- **Secondary Goal**: Successfully implement custom TensorStore format (learning exercise)
-- **Reliability**: Basic tests pass consistently
+- **Primary Goal**: Demonstrate >20% performance difference (positive or negative) between tokio-uring vs tokio::fs
+- **Secondary Goal**: Working TensorStore format for educational purposes
+- **Decision Clarity**: Clear recommendation on approach viability
 
-## Decision Points
+## Decision Points (300-Hour Constraint)
 
-### Go/No-Go Criteria
-1. **Technical feasibility**: MVP works on target hardware
-2. **Performance improvement**: Shows meaningful gains over baseline
-3. **Development velocity**: Can implement core features within timeframe
+### Week 6 Go/No-Go Criteria
+1. **Performance Validation**: Clear evidence of io_uring benefits (or lack thereof)
+2. **Technical Feasibility**: tokio-uring integration works reliably
+3. **Time Efficiency**: Remaining hours justify continued development
 
-### If MVP Succeeds
-- Proceed with full TensorStore implementation
-- Add advanced features (NUMA, multi-GPU, etc.)
-- Implement production-grade error handling
+### If Performance Benefits Proven (>20% improvement)
+- Continue with educational TensorStore format implementation
+- Focus on understanding why benefits occur
+- Document optimization strategies for broader application
 
-### If MVP Fails
-- Analyze bottlenecks and performance characteristics
-- Consider alternative approaches (different I/O strategies)
-- Document findings for future reference
+### If No Significant Benefits (<20% improvement)
+- Document findings and pivot to analysis-focused conclusion
+- Investigate why expected benefits didn't materialize
+- Recommend alternative approaches or conditions where io_uring might help
 
-This MVP strategy focuses on validating the core concept with minimal complexity, allowing for quick iteration and clear go/no-go decisions.
+### If Technical Blockers Occur
+- Document challenges with tokio-uring ecosystem
+- Provide recommendations for future attempts
+- Focus remaining time on comprehensive analysis of approach
 
-## Post-MVP: Next Steps if Successful
+This strategy maximizes learning and validation within the 300-hour constraint while providing clear decision points to avoid time waste.
 
-### Phase 3: Full Implementation (Weeks 4-12)
+## Post-MVP: Future Work (Beyond 300 Hours)
 
-If the MVP demonstrates >20% performance improvement and validates the core approach, proceed with full implementation:
+**Note**: These are potential directions if the 300-hour validation proves successful and additional resources become available.
 
-#### 3.1 Production TensorStore Format
-- Enhanced format with compression integration
-- Chunk-based storage for large tensors
-- Format versioning and backward compatibility
-- Advanced validation and error recovery
+### If MVP Validates io_uring Benefits (>20% improvement)
 
-#### 3.2 Advanced io_uring Engine
-- Vectored I/O operations for batch loading
+#### Immediate Next Steps (Weeks 13-16)
+- Production-grade error handling and edge case coverage
+- Framework integration (PyTorch, HuggingFace Transformers)
+- Cross-platform compatibility (Windows IOCP, macOS kqueue)
+- Python bindings for broader adoption
+
+#### Advanced Features (Weeks 17-24)
+- Vectored I/O optimization for batch loading
+- NUMA-aware memory allocation for multi-GPU systems
 - Intelligent prefetching based on access patterns
-- NUMA-aware memory allocation
-- Comprehensive error handling and recovery mechanisms
+- Comprehensive production testing and benchmarking
 
-#### 3.3 Multi-GPU and Scaling Support
-- Concurrent model loading across multiple GPUs
-- Priority-based loading scheduling
-- Resource isolation between models
-- Memory sharing for common layers
+### If MVP Shows Mixed or Negative Results
 
-### Phase 4: Production Readiness (Weeks 13-16)
+#### Analysis-Focused Outcomes
+- Detailed bottleneck analysis and root cause investigation
+- Recommendations for specific use cases where io_uring might excel
+- Documentation of ecosystem limitations and improvement areas
+- Contribution to io_uring community knowledge base
 
-#### 4.1 Framework Integration
-- PyTorch tensor integration
-- HuggingFace Transformers adapter
-- Python bindings using PyO3
-- C FFI for broader compatibility
+#### Alternative Approaches
+- Hybrid threading + io_uring strategies
+- Alternative async runtimes (monoio, glommio) evaluation
+- Focus on specific tensor loading patterns where benefits are clear
+- Integration with existing high-performance storage solutions
 
-#### 4.2 Production Testing
-- Comprehensive performance benchmarking
-- Comparison against ServerlessLLM baseline
-- Production workload validation
-- Memory and CPU efficiency analysis
-
-### Phase 5: Advanced Features (Weeks 17-24)
-
-#### 5.1 Cross-Platform Support
-- Windows IOCP backend implementation
-- macOS kqueue support
-- Runtime I/O backend selection
-
-#### 5.2 Enterprise Features
-- Network storage support (NFS, S3)
-- Distributed loading across nodes
-- Monitoring and observability integration
-- Security and access control
-
-## Post-MVP: Alternative Paths if Unsuccessful
-
-### If Performance Gains < 20%
-1. **Analyze bottlenecks**: Profile to identify where gains are lost
-2. **Optimize implementation**: Focus on critical performance paths
-3. **Adjust targets**: Consider lower but still meaningful improvements
-4. **Hybrid approach**: Combine io_uring with threading for optimal performance
-
-### If Technical Issues Block Progress
-1. **Fallback strategy**: Implement tokio::fs fallback for compatibility
-2. **Alternative runtimes**: Evaluate monoio or glommio as alternatives
-3. **Scope reduction**: Focus on specific use cases where io_uring excels
-4. **Documentation**: Document findings for future io_uring adoption
-
-### If Ecosystem Issues Arise
-1. **Fork tokio-uring**: Take ownership of maintenance if needed
-2. **Contribute upstream**: Fix issues and contribute back to ecosystem
-3. **Build coalition**: Work with other users to share maintenance burden
-4. **Timing consideration**: Wait for ecosystem maturity if needed
-
-This staged approach ensures that resources are invested incrementally based on validated success at each phase.
+This approach ensures that even if io_uring doesn't provide expected benefits, the 300 hours generate valuable insights for the broader community and future optimization efforts.
