@@ -33,3 +33,8 @@ Thumbs.db
 .env.local
 
 # Project specific directories
+
+
+# Added by cargo
+
+/target

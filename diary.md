@@ -2,4 +2,6 @@
 
 - Scaffolded initial Zig project structure with build.zig and build.zig.zon files
 - Added ServerlessLLM repo to use as a reference to my own implementation.
+- Migrated from Zig to Rust due to WriterGate breaking changes in Zig I/O system
+- Removed Zig build files (build.zig, build.zig.zon) and source directory
 
