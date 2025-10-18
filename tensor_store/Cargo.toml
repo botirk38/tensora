@@ -13,6 +13,8 @@ harness = false
 
 
 [dependencies]
+parking_lot = "0.12"
+region = "3.0"
 safetensors = "0.6.2"
 tikv-jemallocator = "0.6.0"
 tokio = { version = "1", features = ["rt", "fs", "macros"] }

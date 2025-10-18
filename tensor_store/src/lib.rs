@@ -4,17 +4,16 @@ use std::io::Result as IoResult;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod loaders;
+mod pinned_pool;
 
+pub use pinned_pool::PinnedPool;
 
 #[cfg(target_os = "linux")]
-pub async fn load_safetensors(path: &str) -> IoResult<Vec<u8>> {
-    loaders::uring::BasicLoader::load(path).await
+pub async fn load_safetensors(path: &str, pool: Option<&PinnedPool>) -> IoResult<Vec<u8>> {
+    loaders::uring::BasicLoader::load(path, pool).await
 }
-
-
 
 #[cfg(not(target_os = "linux"))]
-pub async fn load_safetensors(path: &str) -> IoResult<Vec<u8>> {
-    loaders::tokio::BasicLoader::load(path).await
+pub async fn load_safetensors(path: &str, pool: Option<&PinnedPool>) -> IoResult<Vec<u8>> {
+    loaders::tokio::BasicLoader::load(path, pool).await
 }
-
