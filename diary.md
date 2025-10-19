@@ -38,3 +38,20 @@
 - Discovered through benchmarking that unsafe code is critical: safe resize() causes massive slowdown
 - Validated that all "magic values" should be data-driven: initial 4KB min was 130,000x too small for 523MB tensor files
 - Learned that premature optimization (best-fit search) can hurt more than help in uniform workloads
+
+## 2025-10-19
+
+- Replaced custom PinnedPool with external zeropool crate for better buffer management
+- Made tokio loader available on all platforms (previously Linux-only used io_uring)
+- Added comprehensive benchmark suite comparing pooled vs non-pooled variants:
+  - sync_safetensors (tokio loader, no pool)
+  - sync_safetensors_with_pool (tokio loader, with pool)
+  - io_uring_safetensors (io_uring, no pool)
+  - io_uring_safetensors_with_pool (io_uring, with pool)
+  - io_uring_safetensors_with_pool_pinned (io_uring, pinned memory pool)
+  - tokio_safetensors (async tokio, no pool)
+  - tokio_safetensors_with_pool (async tokio, with pool)
+  - tokio_safetensors_with_pool_pinned (async tokio, pinned memory pool)
+- Updated tokio dependency with io-util and rt-multi-thread features for proper async support
+- Removed custom buffer pool implementation in favor of battle-tested external crate
+- Key lesson: Don't reinvent the wheel when external crates already solve the problem well
