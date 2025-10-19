@@ -1,11 +1,11 @@
 use super::IoResult;
-use crate::PinnedPool;
 use tokio_uring::fs::File as UringFile;
 
 pub struct BasicLoader;
 
 impl BasicLoader {
-    pub async fn load(path: &str, pool: Option<&PinnedPool>) -> IoResult<Vec<u8>> {
+    #[inline]
+    pub async fn load(path: &str, pool: Option<&zeropool::BufferPool>) -> IoResult<Vec<u8>> {
         let file = UringFile::open(path).await?;
         let metadata = std::fs::metadata(path)?;
         let file_size = metadata.len() as usize;

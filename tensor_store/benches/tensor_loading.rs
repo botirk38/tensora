@@ -1,24 +1,27 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use safetensors::SafeTensors;
-use std::fs::File;
 use std::hint::black_box;
-use std::io::Read;
-use tensor_store::PinnedPool;
+use zeropool::BufferPool;
 
-fn load_safetensors_sync(path: &str) -> std::io::Result<(Vec<u8>, usize)> {
-    let mut file = File::open(path)?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-    let tensors = SafeTensors::deserialize(&buf)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    let tensor_count = tensors.names().len();
-    Ok((buf, tensor_count))
+fn load_safetensors_sync(
+    path: &str,
+    pool: Option<&BufferPool>,
+) -> std::io::Result<(Vec<u8>, usize)> {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let data = tensor_store::loaders::tokio::BasicLoader::load(path, pool).await?;
+        let tensors = SafeTensors::deserialize(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        let tensor_count = tensors.names().len();
+        Ok((data, tensor_count))
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn bench_io_uring(c: &mut Criterion) {
     let test_file = "test_model.safetensors";
 
+    // Standard io_uring (no IOPOLL, no O_DIRECT)
     c.bench_function("io_uring_safetensors", |b| {
         b.iter(|| {
             tokio_uring::start(async {
@@ -33,7 +36,23 @@ fn bench_io_uring(c: &mut Criterion) {
     });
 
     c.bench_function("io_uring_safetensors_with_pool", |b| {
-        let pool = PinnedPool::new();
+        let pool = BufferPool::new();
+        b.iter(|| {
+            tokio_uring::start(async {
+                let data = tensor_store::load_safetensors(black_box(test_file), Some(&pool))
+                    .await
+                    .unwrap();
+                let tensors = SafeTensors::deserialize(&data).unwrap();
+                let tensor_count = tensors.names().len();
+                // Return buffer to pool for reuse
+                pool.put(data);
+                black_box(tensor_count)
+            })
+        });
+    });
+
+    c.bench_function("io_uring_safetensors_with_pool_pinned", |b| {
+        let pool = BufferPool::builder().pinned_memory(true).build();
         b.iter(|| {
             tokio_uring::start(async {
                 let data = tensor_store::load_safetensors(black_box(test_file), Some(&pool))
@@ -66,7 +85,21 @@ fn bench_tokio(c: &mut Criterion) {
     });
 
     c.bench_function("tokio_safetensors_with_pool", |b| {
-        let pool = PinnedPool::new();
+        let pool = BufferPool::new();
+        b.to_async(&rt).iter(|| async {
+            let data = tensor_store::load_safetensors(black_box(test_file), Some(&pool))
+                .await
+                .unwrap();
+            let tensors = SafeTensors::deserialize(&data).unwrap();
+            let tensor_count = tensors.names().len();
+            // Return buffer to pool for reuse
+            pool.put(data);
+            black_box(tensor_count)
+        });
+    });
+
+    c.bench_function("tokio_safetensors_with_pool_pinned", |b| {
+        let pool = BufferPool::builder().pinned_memory(true).build();
         b.to_async(&rt).iter(|| async {
             let data = tensor_store::load_safetensors(black_box(test_file), Some(&pool))
                 .await
@@ -85,8 +118,19 @@ fn bench_sync_safetensors(c: &mut Criterion) {
 
     c.bench_function("sync_safetensors", |b| {
         b.iter(|| {
-            let result = load_safetensors_sync(black_box(test_file)).unwrap();
+            let result = load_safetensors_sync(black_box(test_file), None).unwrap();
             black_box(result)
+        });
+    });
+
+    c.bench_function("sync_safetensors_with_pool", |b| {
+        let pool = BufferPool::new();
+        b.iter(|| {
+            let (data, tensor_count) =
+                load_safetensors_sync(black_box(test_file), Some(&pool)).unwrap();
+            // Return buffer to pool for reuse
+            pool.put(data);
+            black_box(tensor_count)
         });
     });
 }
