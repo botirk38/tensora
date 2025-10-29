@@ -1,5 +1,54 @@
 # Project Development Diary
 
+## 2025-10-29
+
+- Implemented zero-copy parallel loading for both async_io and io_uring backends
+- Key innovation: Pre-allocate single final buffer, split into non-overlapping slices for parallel tasks
+- Created BufferSlice abstraction (async_io) and BorrowedVec (io_uring) for safe slice passing to async tasks
+- Achieved ~50% speedup for parallel loads by eliminating 523MB of memory copies
+- Added load_range() function to both backends for efficient byte-range loading (enables future sharded format support)
+- Refactored codebase to format-based organization:
+  - backends/ - Format-agnostic I/O implementations (async_io, io_uring)
+  - formats/ - Format-specific wrappers (safetensors)
+- Added comprehensive zero-copy tests for both Linux (io_uring) and portable (tokio) implementations
+- All tests passing, documentation generated successfully
+
+## 2025-10-19
+
+- Replaced custom PinnedPool with external zeropool crate for better buffer management
+- Made tokio loader available on all platforms (previously Linux-only used io_uring)
+- Added comprehensive benchmark suite comparing pooled vs non-pooled variants:
+  - sync_safetensors (tokio loader, no pool)
+  - sync_safetensors_with_pool (tokio loader, with pool)
+  - io_uring_safetensors (io_uring, no pool)
+  - io_uring_safetensors_with_pool (io_uring, with pool)
+  - io_uring_safetensors_with_pool_pinned (io_uring, pinned memory pool)
+  - tokio_safetensors (async tokio, no pool)
+  - tokio_safetensors_with_pool (async tokio, with pool)
+  - tokio_safetensors_with_pool_pinned (async tokio, pinned memory pool)
+- Updated tokio dependency with io-util and rt-multi-thread features for proper async support
+- Removed custom buffer pool implementation in favor of battle-tested external crate
+- Key lesson: Don't reinvent the wheel when external crates already solve the problem well
+
+## 2025-10-18
+
+- Implemented high-performance buffer pool achieving 70% speedup over no-pool baseline
+- Custom pool implementation beats io_uring without pool: 176ms → 52ms (3.36x faster)
+- Key optimizations applied:
+  - Thread-local storage for lock-free fast path
+  - parking_lot::Mutex instead of std::sync::Mutex
+  - First-fit (O(1)) allocation instead of best-fit (O(n))
+  - Unsafe set_len() to avoid zero-filling 500MB buffers
+  - Data-driven defaults: 1MB min buffer, 16 buffer max pool size
+- Replaced nix crate with cross-platform region crate for mlock support
+- Discovered through benchmarking that unsafe code is critical: safe resize() causes massive slowdown
+- Validated that all "magic values" should be data-driven: initial 4KB min was 130,000x too small for 523MB tensor files
+- Learned that premature optimization (best-fit search) can hurt more than help in uniform workloads
+
+## 2025-10-09
+
+- Setup io_uring loaders and basic tokio loaders, beat sync loading by 5%
+
 ## 2025-09-30
 
 - Scaffolded initial Zig project structure with build.zig and build.zig.zon files
@@ -19,27 +68,6 @@
 - Updated implementation strategy to prioritize empirical testing over features
 - Established Week 6 go/no-go decision point for performance validation
 - Revised time estimates to be more realistic for competent engineer (300 hours → MVP in weeks 3-4, analysis weeks 5-7)
-
-## 2025-10-09
-
-- Setup io_uring loaders and basic tokio loaders, beat sync loading by 5%
-
-## 2025-10-18
-
-- Implemented high-performance buffer pool achieving 70% speedup over no-pool baseline
-- Custom pool implementation beats io_uring without pool: 176ms → 52ms (3.36x faster)
-- Key optimizations applied:
-  - Thread-local storage for lock-free fast path
-  - parking_lot::Mutex instead of std::sync::Mutex
-  - First-fit (O(1)) allocation instead of best-fit (O(n))
-  - Unsafe set_len() to avoid zero-filling 500MB buffers
-  - Data-driven defaults: 1MB min buffer, 16 buffer max pool size
-- Replaced nix crate with cross-platform region crate for mlock support
-- Discovered through benchmarking that unsafe code is critical: safe resize() causes massive slowdown
-- Validated that all "magic values" should be data-driven: initial 4KB min was 130,000x too small for 523MB tensor files
-- Learned that premature optimization (best-fit search) can hurt more than help in uniform workloads
-
-## 2025-10-19
 
 - Replaced custom PinnedPool with external zeropool crate for better buffer management
 - Made tokio loader available on all platforms (previously Linux-only used io_uring)

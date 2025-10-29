@@ -1,19 +1,17 @@
 use super::IoResult;
+use std::sync::OnceLock;
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
-use std::sync::OnceLock;
 use zeropool::BufferPool;
 
 static BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 fn get_buffer_pool() -> &'static BufferPool {
-    BUFFER_POOL.get_or_init(|| {
-        BufferPool::new()
-    })
+    BUFFER_POOL.get_or_init(|| BufferPool::new())
 }
 
 /// Helper struct to safely pass buffer slices to async tasks
-/// 
+///
 /// SAFETY: This struct holds a raw pointer to a slice of a pre-allocated buffer.
 /// The parent function retains ownership of the buffer and ensures:
 /// 1. The buffer lives for the entire duration of all async tasks
@@ -30,7 +28,7 @@ unsafe impl Send for BufferSlice {}
 
 impl BufferSlice {
     /// Create a BufferSlice from a mutable slice
-    /// 
+    ///
     /// SAFETY: Caller must ensure:
     /// - The slice remains valid for the lifetime of this BufferSlice
     /// - No other code accesses this slice until BufferSlice is consumed
@@ -43,7 +41,7 @@ impl BufferSlice {
     }
 
     /// Reconstruct the mutable slice for reading
-    /// 
+    ///
     /// SAFETY: This can only be called once per BufferSlice
     unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
@@ -105,7 +103,7 @@ pub async fn load_parallel(path: &str, chunks: usize) -> IoResult<Vec<u8>> {
 
         // Create non-overlapping mutable slice
         let chunk_slice = &mut final_buf[start..end];
-        
+
         // SAFETY: This slice is unique to this task and won't be accessed elsewhere
         let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
 
@@ -113,13 +111,13 @@ pub async fn load_parallel(path: &str, chunks: usize) -> IoResult<Vec<u8>> {
         let handle = tokio::spawn(async move {
             // Seek to the correct position
             file_clone.seek(SeekFrom::Start(start as u64)).await?;
-            
+
             // SAFETY: We're the only task with access to this BufferSlice
             let slice = unsafe { buffer_slice.as_mut_slice() };
-            
+
             // Read directly into the final buffer slice (ZERO COPY!)
             file_clone.read_exact(slice).await?;
-            
+
             IoResult::Ok(())
         });
 
@@ -139,10 +137,10 @@ pub async fn load_parallel(path: &str, chunks: usize) -> IoResult<Vec<u8>> {
 #[inline]
 pub async fn load_range(path: &str, offset: u64, len: usize) -> IoResult<Vec<u8>> {
     let mut file = TokioFile::open(path).await?;
-    
+
     // Seek to the specified offset
     file.seek(SeekFrom::Start(offset)).await?;
-    
+
     // Use internal buffer pool for optimization
     let mut buf = get_buffer_pool().get(len);
     file.read_exact(&mut buf).await?;

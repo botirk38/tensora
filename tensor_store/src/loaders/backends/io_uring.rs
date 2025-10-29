@@ -1,14 +1,12 @@
 use super::IoResult;
-use tokio_uring::fs::File as UringFile;
 use std::sync::OnceLock;
+use tokio_uring::fs::File as UringFile;
 use zeropool::BufferPool;
 
 static BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 fn get_buffer_pool() -> &'static BufferPool {
-    BUFFER_POOL.get_or_init(|| {
-        BufferPool::new()
-    })
+    BUFFER_POOL.get_or_init(|| BufferPool::new())
 }
 
 /// A Vec-like type that borrows memory from a slice but acts like Vec<u8> for tokio-uring
@@ -142,13 +140,13 @@ pub async fn load_parallel(path: &str, chunks: usize) -> IoResult<Vec<u8>> {
 #[inline]
 pub async fn load_range(path: &str, offset: u64, len: usize) -> IoResult<Vec<u8>> {
     let file = UringFile::open(path).await?;
-    
+
     // Use internal buffer pool for optimization
     let buf = get_buffer_pool().get(len);
-    
+
     let (res, buf) = file.read_at(buf, offset).await;
     let n = res?;
-    
+
     if n != len {
         file.close().await?;
         return Err(std::io::Error::new(
@@ -156,7 +154,7 @@ pub async fn load_range(path: &str, offset: u64, len: usize) -> IoResult<Vec<u8>
             format!("Expected to read {} bytes, but read {}", len, n),
         ));
     }
-    
+
     file.close().await?;
     Ok(buf)
 }
