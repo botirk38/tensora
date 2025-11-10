@@ -1,5 +1,10 @@
 # Project Development Diary
 
+## 2025-11-10
+
+- Organized project into modular modules (backends, converts, readers, writers). This allows us to reuse and encapsulate logic.
+- Implemented mmap loader to use the OS's virtual memory system for efficient file access.
+
 ## 2025-10-29
 
 - Implemented zero-copy parallel loading for both async_io and io_uring backends
@@ -12,6 +17,19 @@
   - formats/ - Format-specific wrappers (safetensors)
 - Added comprehensive zero-copy tests for both Linux (io_uring) and portable (tokio) implementations
 - All tests passing, documentation generated successfully
+
+## 2025-10-30
+
+- Created comprehensive writers module structure for checkpoint format conversion
+- Designed modular architecture mirroring loaders pattern:
+  - writers/backends/ - Format-agnostic I/O operations (async_io, io_uring)
+  - writers/formats/ - Format-specific writers (SafeTensors, TensorStore, ServerlessLLM)
+  - writers/converters/ - High-level format conversion orchestration
+- Created detailed SafeTensors to ServerlessLLM conversion plan (SAFETENSORS_TO_SERVERLESSLLM_PLAN.md)
+- Analyzed ServerlessLLM format: JSON index + multiple partitioned binary files
+- Planned 4-phase implementation: infrastructure, parser, orchestration, integration
+- Added writers module to lib.rs public API
+- All placeholder files created with comprehensive documentation
 
 ## 2025-10-19
 
