@@ -21,22 +21,45 @@ Writers are responsible for:
 
 ```
 writers/
-├── serverlessllm.rs   # ServerlessLLM format writer
-├── tensorstore.rs     # TensorStore format writer
+├── safetensors.rs    # SafeTensors format writer
+├── serverlessllm.rs  # ServerlessLLM format writer
+├── tensorstore.rs    # TensorStore format writer
 └── mod.rs            # Module exports
 ```
 
 ## Key Interfaces
 
+### SafeTensors Writer
+```rust
+use tensor_store::writers::{SafeTensorsWriter, MetadataMap, TensorView, Dtype};
+
+let writer = SafeTensorsWriter::new();
+let tensor = TensorView::new(Dtype::F32, vec![1, 1], &[0u8; 4]).unwrap();
+let _buffer = writer.write_to_buffer([("weight", tensor.clone())], None)?;
+writer.write_to_file([("weight", tensor)], MetadataMap::default(), "model.safetensors")?;
+```
+
 ### ServerlessLLM Writer
 ```rust
-use tensor_store::writers::serverlessllm;
+use tensor_store::writers::{ServerlessLlmWriter, TensorEntry};
+use std::collections::HashMap;
 
-// Write tensor index (JSON)
-serverlessllm::write_index("tensor_index.json", &tensors).await?;
+let writer = ServerlessLlmWriter::new();
+let tensors: HashMap<String, TensorEntry> = HashMap::new();
 
-// Write partition data (binary)
-serverlessllm::write_partition("tensor.data_0", 0, &data).await?;
+writer.write_index("tensor_index.json", &tensors).await?;
+writer.write_partition("tensor.data_0", 0, &[0u8; 1024]).await?;
+```
+
+### TensorStore Writer
+```rust
+use tensor_store::writers::{TensorStoreWriter, TensorStoreIndexEntry};
+
+let writer = TensorStoreWriter::new();
+let entries = vec![TensorStoreIndexEntry::default()];
+
+writer.write_index("model.index", &entries).await?;
+writer.write_shard("shard_0.bin", 0, &[0u8; 4096]).await?;
 ```
 
 ### Backend I/O Operations
@@ -58,12 +81,13 @@ backends::io_uring::write_all(path, data).await?;
 let serverlessllm_tensors = converters::prepare_serverlessllm_data(safetensors_data);
 
 // 2. Use appropriate writer for output format
-writers::serverlessllm::write_index(output_path, &serverlessllm_tensors).await?;
+let writer = writers::ServerlessLlmWriter::new();
+writer.write_index(output_path, &serverlessllm_tensors).await?;
 
 // 3. Write partition files as needed
 for (partition_id, data) in partitions {
     let partition_path = format!("tensor.data_{}", partition_id);
-    writers::serverlessllm::write_partition(&partition_path, partition_id, &data).await?;
+    writer.write_partition(&partition_path, partition_id, &data).await?;
 }
 ```
 

@@ -20,15 +20,14 @@
 //! # Example Usage (Future)
 //!
 //! ```rust,ignore
-//! use tensor_store::writers::formats::serverlessllm;
+//! use tensor_store::writers::serverlessllm::ServerlessLlmWriter;
 //!
-//! // Write tensor index
-//! serverlessllm::write_index("tensor_index.json", &tensors).await?;
-//!
-//! // Write partition data
-//! serverlessllm::write_partition("tensor.data_0", &data).await?;
+//! let writer = ServerlessLlmWriter::new();
+//! writer.write_index("tensor_index.json", &tensors).await?;
+//! writer.write_partition("tensor.data_0", 0, &data).await?;
 //! ```
 
+use crate::writers::IoResult;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -47,11 +46,42 @@ pub struct TensorEntry {
     pub dtype: String,
 }
 
+/// High-level writer for the ServerlessLLM checkpoint format.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ServerlessLlmWriter;
+
+impl ServerlessLlmWriter {
+    /// Create a new writer instance.
+    #[inline]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Write `tensor_index.json`.
+    pub async fn write_index(
+        &self,
+        output_path: &str,
+        tensors: &HashMap<String, TensorEntry>,
+    ) -> IoResult<()> {
+        write_index(output_path, tensors).await
+    }
+
+    /// Write a partition file (`tensor.data_N`).
+    pub async fn write_partition(
+        &self,
+        output_path: &str,
+        partition_id: usize,
+        data: &[u8],
+    ) -> IoResult<()> {
+        write_partition(output_path, partition_id, data).await
+    }
+}
+
 /// Write tensor_index.json
 pub async fn write_index(
     _output_path: &str,
     _tensors: &HashMap<String, TensorEntry>,
-) -> std::io::Result<()> {
+) -> IoResult<()> {
     todo!("Implement ServerlessLLM index writing")
 }
 
@@ -60,6 +90,6 @@ pub async fn write_partition(
     _output_path: &str,
     _partition_id: usize,
     _data: &[u8],
-) -> std::io::Result<()> {
+) -> IoResult<()> {
     todo!("Implement ServerlessLLM partition writing")
 }

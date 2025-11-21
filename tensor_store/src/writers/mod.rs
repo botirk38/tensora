@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! writers/
+//! ├── safetensors.rs     Wrap SafeTensors serialization
 //! ├── serverlessllm.rs   Write ServerlessLLM format
 //! ├── tensorstore.rs     Write TensorStore format
 //! └── mod.rs
@@ -23,16 +24,18 @@
 //! # Example Usage (Future)
 //!
 //! ```rust,ignore
-//! use tensor_store::writers::serverlessllm;
+//! use tensor_store::writers::ServerlessLlmWriter;
 //!
-//! // Write ServerlessLLM index
-//! serverlessllm::write_index("tensor_index.json", &tensors).await?;
-//!
-//! // Write partition data
-//! serverlessllm::write_partition("tensor.data_0", 0, &data).await?;
+//! let writer = ServerlessLlmWriter::new();
+//! writer.write_index("tensor_index.json", &tensors).await?;
+//! writer.write_partition("tensor.data_0", 0, &data).await?;
 //! ```
 
+pub mod safetensors;
 pub mod serverlessllm;
 pub mod tensorstore;
 
+pub use safetensors::SafeTensorsWriter;
+pub use serverlessllm::ServerlessLlmWriter;
 pub use std::io::Result as IoResult;
+pub use tensorstore::{TensorStoreIndexEntry, TensorStoreWriter};
