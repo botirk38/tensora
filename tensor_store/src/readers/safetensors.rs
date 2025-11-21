@@ -90,10 +90,6 @@ async fn load_bytes_parallel(path: &str, chunks: usize) -> crate::IoResult<Vec<u
     backends::async_io::load_parallel(path, chunks).await
 }
 
-async fn load_bytes_range(path: &str, offset: u64, len: usize) -> crate::IoResult<Vec<u8>> {
-    backends::io_uring::load_range(path, offset, len).await
-}
-
 /// Load tensor data using the best backend for the current platform and parse it.
 #[inline]
 pub async fn load(path: &str) -> Result<OwnedSafeTensors, SafeTensorError> {

@@ -6,7 +6,7 @@ use zeropool::BufferPool;
 static BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 fn get_buffer_pool() -> &'static BufferPool {
-    BUFFER_POOL.get_or_init(|| BufferPool::new())
+    BUFFER_POOL.get_or_init(BufferPool::new)
 }
 
 /// A Vec-like type that borrows memory from a slice but acts like Vec<u8> for tokio-uring

@@ -7,7 +7,7 @@ use zeropool::BufferPool;
 static BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 fn get_buffer_pool() -> &'static BufferPool {
-    BUFFER_POOL.get_or_init(|| BufferPool::new())
+    BUFFER_POOL.get_or_init(BufferPool::new)
 }
 
 /// Helper struct to safely pass buffer slices to async tasks
