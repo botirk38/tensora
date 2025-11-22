@@ -1,5 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
+use tensor_store::readers::safetensors;
 
 fn load_safetensors_sync(path: &str) -> std::io::Result<(Vec<u8>, usize)> {
     let data = tensor_store::readers::safetensors::load_sync(path)
@@ -16,9 +17,7 @@ fn bench_io_uring(c: &mut Criterion) {
     c.bench_function("io_uring_safetensors", |b| {
         b.iter(|| {
             tokio_uring::start(async {
-                let data = tensor_store::load_safetensors(black_box(test_file))
-                    .await
-                    .unwrap();
+                let data = safetensors::load(black_box(test_file)).await.unwrap();
                 let tensor_count = data.names().len();
                 black_box((data, tensor_count))
             })
@@ -29,7 +28,7 @@ fn bench_io_uring(c: &mut Criterion) {
     c.bench_function("io_uring_safetensors_parallel", |b| {
         b.iter(|| {
             tokio_uring::start(async {
-                let data = tensor_store::load_safetensors_parallel(black_box(test_file))
+                let data = safetensors::load_parallel(black_box(test_file), 4)
                     .await
                     .unwrap();
                 let tensor_count = data.names().len();
@@ -42,10 +41,9 @@ fn bench_io_uring(c: &mut Criterion) {
     c.bench_function("io_uring_safetensors_parallel_8_chunks", |b| {
         b.iter(|| {
             tokio_uring::start(async {
-                let data =
-                    tensor_store::load_safetensors_parallel_with_chunks(black_box(test_file), 8)
-                        .await
-                        .unwrap();
+                let data = safetensors::load_parallel(black_box(test_file), 8)
+                    .await
+                    .unwrap();
                 let tensor_count = data.names().len();
                 black_box((data, tensor_count))
             })
@@ -54,18 +52,16 @@ fn bench_io_uring(c: &mut Criterion) {
 
     // Prewarmed io_uring loading (pool caches populated)
     c.bench_function("io_uring_safetensors_prewarmed", |b| {
+        // Prewarm the buffer pool once before all iterations
+        tokio_uring::start(async {
+            for _ in 0..2 {
+                let _warmup = safetensors::load(test_file).await.unwrap();
+            }
+        });
+
         b.iter(|| {
             tokio_uring::start(async {
-                // Prewarm the buffer pool within each iteration
-                for _ in 0..2 {
-                    let _warmup = tensor_store::load_safetensors(black_box(test_file))
-                        .await
-                        .unwrap();
-                }
-
-                let data = tensor_store::load_safetensors(black_box(test_file))
-                    .await
-                    .unwrap();
+                let data = safetensors::load(black_box(test_file)).await.unwrap();
                 let tensor_count = data.names().len();
                 black_box((data, tensor_count))
             })
@@ -80,9 +76,7 @@ fn bench_tokio(c: &mut Criterion) {
 
     c.bench_function("tokio_safetensors", |b| {
         b.to_async(&rt).iter(|| async {
-            let data = tensor_store::load_safetensors(black_box(test_file))
-                .await
-                .unwrap();
+            let data = safetensors::load(black_box(test_file)).await.unwrap();
             let tensor_count = data.names().len();
             black_box((data, tensor_count))
         });
@@ -90,7 +84,7 @@ fn bench_tokio(c: &mut Criterion) {
 
     c.bench_function("tokio_safetensors_parallel", |b| {
         b.to_async(&rt).iter(|| async {
-            let data = tensor_store::load_safetensors_parallel(black_box(test_file))
+            let data = safetensors::load_parallel(black_box(test_file), 4)
                 .await
                 .unwrap();
             let tensor_count = data.names().len();
@@ -100,7 +94,7 @@ fn bench_tokio(c: &mut Criterion) {
 
     c.bench_function("tokio_safetensors_parallel_8_chunks", |b| {
         b.to_async(&rt).iter(|| async {
-            let data = tensor_store::load_safetensors_parallel_with_chunks(black_box(test_file), 8)
+            let data = safetensors::load_parallel(black_box(test_file), 8)
                 .await
                 .unwrap();
             let tensor_count = data.names().len();
@@ -109,17 +103,15 @@ fn bench_tokio(c: &mut Criterion) {
     });
 
     c.bench_function("tokio_safetensors_prewarmed", |b| {
-        b.to_async(&rt).iter(|| async {
-            // Prewarm the buffer pool within each iteration
+        // Prewarm the buffer pool once before all iterations
+        rt.block_on(async {
             for _ in 0..2 {
-                let _warmup = tensor_store::load_safetensors(black_box(test_file))
-                    .await
-                    .unwrap();
+                let _warmup = safetensors::load(test_file).await.unwrap();
             }
+        });
 
-            let data = tensor_store::load_safetensors(black_box(test_file))
-                .await
-                .unwrap();
+        b.to_async(&rt).iter(|| async {
+            let data = safetensors::load(black_box(test_file)).await.unwrap();
             let tensor_count = data.names().len();
             black_box((data, tensor_count))
         });
