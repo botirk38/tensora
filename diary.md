@@ -87,17 +87,37 @@
 - Established Week 6 go/no-go decision point for performance validation
 - Revised time estimates to be more realistic for competent engineer (300 hours → MVP in weeks 3-4, analysis weeks 5-7)
 
-- Replaced custom PinnedPool with external zeropool crate for better buffer management
-- Made tokio loader available on all platforms (previously Linux-only used io_uring)
-- Added comprehensive benchmark suite comparing pooled vs non-pooled variants:
-  - sync_safetensors (tokio loader, no pool)
-  - sync_safetensors_with_pool (tokio loader, with pool)
-  - io_uring_safetensors (io_uring, no pool)
-  - io_uring_safetensors_with_pool (io_uring, with pool)
-  - io_uring_safetensors_with_pool_pinned (io_uring, pinned memory pool)
-  - tokio_safetensors (async tokio, no pool)
-  - tokio_safetensors_with_pool (async tokio, with pool)
-  - tokio_safetensors_with_pool_pinned (async tokio, pinned memory pool)
-- Updated tokio dependency with io-util and rt-multi-thread features for proper async support
-- Removed custom buffer pool implementation in favor of battle-tested external crate
-- Key lesson: Don't reinvent the wheel when external crates already solve the problem well
+## 2025-11-10
+
+- Major architectural refactoring: reorganized project into modular structure
+- Migrated from loaders/ to backends/ architecture for better separation of concerns
+- Implemented mmap loader using OS's virtual memory system for efficient file access
+- Created comprehensive module structure:
+  - backends/ - Format-agnostic I/O implementations (async_io, io_uring, mmap)
+  - readers/ - Format-specific readers (SafeTensors, ServerlessLLM, TensorStore)
+  - writers/ - Format-specific writers (SafeTensors, ServerlessLLM, TensorStore)
+  - converters/ - High-level format conversion orchestration
+- Added detailed README documentation for readers, writers, and converters modules
+- Created SafeTensors to ServerlessLLM conversion plan (SAFETENSORS_TO_SERVERLESSLLM_PLAN.md)
+- Laid foundation for complete checkpoint format conversion workflow
+- Cleaned up SafeTensors reader API for better usability
+
+## 2025-11-21
+
+- Implemented complete ServerlessLLM format support (reader + writer)
+- Established writers interface with consistent API across all formats
+- Added comprehensive error handling infrastructure:
+  - readers/error.rs - Reader-specific error types
+  - writers/error.rs - Writer-specific error types
+  - traits.rs - Shared traits for readers and writers
+- Implemented SafeTensors writer with full functionality
+- Implemented TensorStore writer structure
+- Enhanced backends with write capabilities:
+  - async_io backend now supports writing
+  - io_uring backend now supports writing
+  - mmap backend enhanced with write operations
+- Completed SafeTensors to ServerlessLLM converter implementation
+- Added serde and serde_json dependencies for JSON metadata handling
+- Fixed clippy warnings for cleaner codebase
+- Updated safetensors dependency to latest version (0.4.8)
+- Key achievement: Project now has complete read-write cycle for all three formats
