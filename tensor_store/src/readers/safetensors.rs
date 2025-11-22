@@ -167,3 +167,90 @@ pub fn load_range_sync(
     let bytes = backends::sync::load_range(path.as_ref().to_str().unwrap(), offset, len)?;
     OwnedSafeTensors::from_bytes(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_load_parallel_zero_copy() {
+        // Test with the existing test file
+        let path = "test_model.safetensors";
+
+        tokio_uring::start(async {
+            // Load with parallel loading (zero-copy)
+            let data = load_parallel(path, 4).await.unwrap();
+
+            // Verify we can deserialize it
+            let tensors = data.tensors();
+            assert!(!tensors.names().is_empty());
+
+            // Load with single-threaded loading for comparison
+            let data_single = load(path).await.unwrap();
+
+            // Data should be identical
+            assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
+            assert_eq!(data.as_bytes(), data_single.as_bytes());
+
+            println!(
+                "Zero-copy parallel loading test passed! Loaded {} tensors",
+                tensors.names().len()
+            );
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn test_load_parallel_zero_copy() {
+        // Test with the existing test file
+        let path = "test_model.safetensors";
+
+        // Load with parallel loading (zero-copy)
+        let data = load_parallel(path, 4).await.unwrap();
+
+        // Verify we can deserialize it
+        let tensors = data.tensors();
+        assert!(!tensors.names().is_empty());
+
+        // Load with single-threaded loading for comparison
+        let data_single = load(path).await.unwrap();
+
+        // Data should be identical
+        assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
+        assert_eq!(data.as_bytes(), data_single.as_bytes());
+
+        println!(
+            "Zero-copy parallel loading test passed! Loaded {} tensors",
+            tensors.names().len()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_load_parallel_zero_copy_io_uring() {
+        // Test io_uring version specifically
+        let path = "test_model.safetensors";
+
+        tokio_uring::start(async {
+            // Load with parallel loading (zero-copy)
+            let data = load_parallel(path, 4).await.unwrap();
+
+            // Verify we can deserialize it
+            let tensors = data.tensors();
+            assert!(!tensors.names().is_empty());
+
+            // Load with single-threaded loading for comparison
+            let data_single = load(path).await.unwrap();
+
+            // Data should be identical
+            assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
+            assert_eq!(data.as_bytes(), data_single.as_bytes());
+
+            println!(
+                "Zero-copy parallel loading (io_uring) test passed! Loaded {} tensors",
+                tensors.names().len()
+            );
+        });
+    }
+}

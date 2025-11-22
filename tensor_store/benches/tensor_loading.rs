@@ -2,14 +2,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 fn load_safetensors_sync(path: &str) -> std::io::Result<(Vec<u8>, usize)> {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let data = tensor_store::readers::safetensors::load(path)
-            .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        let tensor_count = data.names().len();
-        Ok((data.into_bytes(), tensor_count))
-    })
+    let data = tensor_store::readers::safetensors::load_sync(path)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let tensor_count = data.names().len();
+    Ok((data.into_bytes(), tensor_count))
 }
 
 #[cfg(target_os = "linux")]
