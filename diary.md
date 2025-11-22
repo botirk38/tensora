@@ -1,22 +1,58 @@
 # Project Development Diary
 
+## 2025-11-22
+
+- Parallelized SafeTensors to ServerlessLLM converter for significant performance improvements:
+  - Implemented parallel loading using `load_parallel(input_path, 4)` instead of sequential loading
+  - Parallelized partition file writes using `futures::future::try_join_all` for concurrent I/O
+  - Removed unused dependencies (libc, parking_lot) and added futures crate
+  - Converter now leverages platform-optimized backends (io_uring on Linux, async_io elsewhere) for both read and write operations
+- Major architectural refactoring: introduced shared types module following DRY principle
+  - Created `types/` module to centralize type definitions used by both readers and writers
+  - Extracted `TensorEntry` (ServerlessLLM) and `IndexEntry` (TensorStore) into shared types
+  - Added `Serialize`/`Deserialize` derives for consistency across serialization operations
+  - Updated 11 files across readers, writers, and converters to use centralized types
+  - Maintained backward compatibility with re-exports in existing modules
+  - Key benefit: eliminates duplication and ensures reader/writer type consistency
+- Cleaned up codebase formatting and imports for better maintainability
+- All clippy warnings resolved, clean build achieved
+
+## 2025-11-21
+
+- Implemented complete ServerlessLLM format support (reader + writer)
+- Established writers interface with consistent API across all formats
+- Added comprehensive error handling infrastructure:
+  - readers/error.rs - Reader-specific error types
+  - writers/error.rs - Writer-specific error types
+  - traits.rs - Shared traits for readers and writers
+- Implemented SafeTensors writer with full functionality
+- Implemented TensorStore writer structure
+- Enhanced backends with write capabilities:
+  - async_io backend now supports writing
+  - io_uring backend now supports writing
+  - mmap backend enhanced with write operations
+- Completed SafeTensors to ServerlessLLM converter implementation
+- Added serde and serde_json dependencies for JSON metadata handling
+- Fixed clippy warnings for cleaner codebase
+- Updated safetensors dependency to latest version (0.4.8)
+- Key achievement: Project now has complete read-write cycle for all three formats
+
 ## 2025-11-10
 
 - Organized project into modular modules (backends, converts, readers, writers). This allows us to reuse and encapsulate logic.
 - Implemented mmap loader to use the OS's virtual memory system for efficient file access.
-
-## 2025-10-29
-
-- Implemented zero-copy parallel loading for both async_io and io_uring backends
-- Key innovation: Pre-allocate single final buffer, split into non-overlapping slices for parallel tasks
-- Created BufferSlice abstraction (async_io) and BorrowedVec (io_uring) for safe slice passing to async tasks
-- Achieved ~50% speedup for parallel loads by eliminating 523MB of memory copies
-- Added load_range() function to both backends for efficient byte-range loading (enables future sharded format support)
-- Refactored codebase to format-based organization:
-  - backends/ - Format-agnostic I/O implementations (async_io, io_uring)
-  - formats/ - Format-specific wrappers (safetensors)
-- Added comprehensive zero-copy tests for both Linux (io_uring) and portable (tokio) implementations
-- All tests passing, documentation generated successfully
+- Major architectural refactoring: reorganized project into modular structure
+- Migrated from loaders/ to backends/ architecture for better separation of concerns
+- Implemented mmap loader using OS's virtual memory system for efficient file access
+- Created comprehensive module structure:
+  - backends/ - Format-agnostic I/O implementations (async_io, io_uring, mmap)
+  - readers/ - Format-specific readers (SafeTensors, ServerlessLLM, TensorStore)
+  - writers/ - Format-specific writers (SafeTensors, ServerlessLLM, TensorStore)
+  - converters/ - High-level format conversion orchestration
+- Added detailed README documentation for readers, writers, and converters modules
+- Created SafeTensors to ServerlessLLM conversion plan (SAFETENSORS_TO_SERVERLESSLLM_PLAN.md)
+- Laid foundation for complete checkpoint format conversion workflow
+- Cleaned up SafeTensors reader API for better usability
 
 ## 2025-10-30
 
@@ -30,6 +66,19 @@
 - Planned 4-phase implementation: infrastructure, parser, orchestration, integration
 - Added writers module to lib.rs public API
 - All placeholder files created with comprehensive documentation
+
+## 2025-10-29
+
+- Implemented zero-copy parallel loading for both async_io and io_uring backends
+- Key innovation: Pre-allocate single final buffer, split into non-overlapping slices for parallel tasks
+- Created BufferSlice abstraction (async_io) and BorrowedVec (io_uring) for safe slice passing to async tasks
+- Achieved ~50% speedup for parallel loads by eliminating 523MB of memory copies
+- Added load_range() function to both backends for efficient byte-range loading (enables future sharded format support)
+- Refactored codebase to format-based organization:
+  - backends/ - Format-agnostic I/O implementations (async_io, io_uring)
+  - formats/ - Format-specific wrappers (safetensors)
+- Added comprehensive zero-copy tests for both Linux (io_uring) and portable (tokio) implementations
+- All tests passing, documentation generated successfully
 
 ## 2025-10-19
 
@@ -86,38 +135,3 @@
 - Updated implementation strategy to prioritize empirical testing over features
 - Established Week 6 go/no-go decision point for performance validation
 - Revised time estimates to be more realistic for competent engineer (300 hours → MVP in weeks 3-4, analysis weeks 5-7)
-
-## 2025-11-10
-
-- Major architectural refactoring: reorganized project into modular structure
-- Migrated from loaders/ to backends/ architecture for better separation of concerns
-- Implemented mmap loader using OS's virtual memory system for efficient file access
-- Created comprehensive module structure:
-  - backends/ - Format-agnostic I/O implementations (async_io, io_uring, mmap)
-  - readers/ - Format-specific readers (SafeTensors, ServerlessLLM, TensorStore)
-  - writers/ - Format-specific writers (SafeTensors, ServerlessLLM, TensorStore)
-  - converters/ - High-level format conversion orchestration
-- Added detailed README documentation for readers, writers, and converters modules
-- Created SafeTensors to ServerlessLLM conversion plan (SAFETENSORS_TO_SERVERLESSLLM_PLAN.md)
-- Laid foundation for complete checkpoint format conversion workflow
-- Cleaned up SafeTensors reader API for better usability
-
-## 2025-11-21
-
-- Implemented complete ServerlessLLM format support (reader + writer)
-- Established writers interface with consistent API across all formats
-- Added comprehensive error handling infrastructure:
-  - readers/error.rs - Reader-specific error types
-  - writers/error.rs - Writer-specific error types
-  - traits.rs - Shared traits for readers and writers
-- Implemented SafeTensors writer with full functionality
-- Implemented TensorStore writer structure
-- Enhanced backends with write capabilities:
-  - async_io backend now supports writing
-  - io_uring backend now supports writing
-  - mmap backend enhanced with write operations
-- Completed SafeTensors to ServerlessLLM converter implementation
-- Added serde and serde_json dependencies for JSON metadata handling
-- Fixed clippy warnings for cleaner codebase
-- Updated safetensors dependency to latest version (0.4.8)
-- Key achievement: Project now has complete read-write cycle for all three formats
