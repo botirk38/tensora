@@ -1,96 +1,115 @@
+use super::IoResult;
 use std::fs::File;
 use std::io::{Error, ErrorKind};
 use std::path::Path;
+use std::sync::Arc;
 
 use memmap2::MmapOptions;
 use region::page;
 
-use super::{IoResult, pooled_buffer::PooledBuffer};
+/// Memory-mapped file region (zero-copy, lazy)
+#[derive(Debug, Clone)]
+pub struct Mmap {
+    pub inner: Arc<memmap2::Mmap>,
+    pub start: usize, // offset within mmap where data starts
+    pub len: usize,   // length of actual data
+}
 
-#[inline]
-fn ensure_range(file_len: u64, offset: u64, len: usize) -> IoResult<()> {
+impl Mmap {
+    /// Get slice view of the mapped data
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.inner[self.start..self.start + self.len]
+    }
+
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl AsRef<[u8]> for Mmap {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for Mmap {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+/// Map entire file into memory
+pub fn map(path: impl AsRef<Path>) -> IoResult<Mmap> {
+    let file = File::open(path.as_ref())?;
+    let len = file.metadata()?.len();
+
+    let len_usize = usize::try_from(len)
+        .map_err(|_foo| Error::new(ErrorKind::InvalidInput, "file too large"))?;
+
+    if len_usize == 0 {
+        return Err(Error::new(ErrorKind::InvalidData, "cannot mmap empty file"));
+    }
+
+    let inner = unsafe { MmapOptions::new().map(&file)? };
+
+    Ok(Mmap {
+        inner: Arc::new(inner),
+        start: 0,
+        len: len_usize,
+    })
+}
+
+/// Map a byte range from file into memory
+pub fn map_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Mmap> {
+    if len == 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "cannot mmap empty range",
+        ));
+    }
+
+    let file = File::open(path.as_ref())?;
+    let file_len = file.metadata()?.len();
+
+    // Validate range
     let end = offset
         .checked_add(
             u64::try_from(len)
-                .map_err(|_e| Error::new(ErrorKind::InvalidInput, "length too large for u64"))?,
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, format!("len too large: {e}")))?,
         )
-        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range overflows u64"))?;
-
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range overflow"))?;
     if end > file_len {
         return Err(Error::new(
             ErrorKind::UnexpectedEof,
-            format!("range {offset}..{end} exceeds file length {file_len} bytes",),
+            "range exceeds file size",
         ));
     }
-    Ok(())
-}
 
-/// Load tensor data using a read-only memory map.
-///
-/// This backend maps the full file and copies the requested bytes into
-/// a `PooledBuffer`. The mapping ensures the kernel performs the heavy lifting
-/// which can be faster than standard buffered reads for large files.
-/// Load tensor data using memory mapping (blocking)
-#[inline]
-pub fn load_blocking(path: impl AsRef<Path>) -> IoResult<Vec<u8>> {
-    let path_ref = path.as_ref();
-    let file = File::open(path_ref)?;
-    let metadata = file.metadata()?;
-    let file_len = usize::try_from(metadata.len())
-        .map_err(|_e| Error::new(ErrorKind::InvalidInput, "file too large"))?;
-
-    if file_len == 0 {
-        return Ok(PooledBuffer::with_capacity(0).into_vec());
-    }
-
-    let mmap = unsafe { MmapOptions::new().map(&file)? };
-    let mut buf = PooledBuffer::with_capacity(file_len);
-    buf.as_mut_slice().copy_from_slice(&mmap[..]);
-    buf.truncate(file_len);
-    Ok(buf.into_vec())
-}
-
-/// Load a specific range from a tensor file using a partial memory map.
-#[inline]
-pub fn load_range_blocking(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
-    if len == 0 {
-        return Ok(PooledBuffer::with_capacity(0).into_vec());
-    }
-
-    let path_ref = path.as_ref();
-    let file = File::open(path_ref)?;
-    let metadata = file.metadata()?;
-    ensure_range(metadata.len(), offset, len)?;
-
+    // Calculate page-aligned mapping
     let page_size = u64::try_from(page::size()).unwrap_or(4096);
-    let aligned_offset = offset
-        .checked_div(page_size)
-        .unwrap_or(0)
-        .checked_mul(page_size)
-        .unwrap_or(0);
-    let offset_delta = usize::try_from(offset.saturating_sub(aligned_offset))
+    let aligned_offset = (offset / page_size) * page_size;
+    let start = usize::try_from(offset - aligned_offset)
         .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
-    let map_len = len
-        .checked_add(offset_delta)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range length overflow"))?;
+    let map_len = len + start;
 
-    let mmap = unsafe {
+    let inner = unsafe {
         MmapOptions::new()
             .offset(aligned_offset)
             .len(map_len)
             .map(&file)?
     };
 
-    let start = offset_delta;
-    let end = start
-        .checked_add(len)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range end overflow"))?;
-    let slice = mmap
-        .get(start..end)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "invalid slice range"))?;
-
-    let mut buf = PooledBuffer::with_capacity(len);
-    buf.as_mut_slice().copy_from_slice(slice);
-    buf.truncate(len);
-    Ok(buf.into_vec())
+    Ok(Mmap {
+        inner: Arc::new(inner),
+        start,
+        len,
+    })
 }

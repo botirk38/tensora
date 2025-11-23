@@ -1,4 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use safetensors::SafeTensors;
 use std::hint::black_box;
 use tensor_store::readers::safetensors;
 
@@ -40,7 +41,7 @@ fn bench_io_uring(c: &mut Criterion) {
                     let data = safetensors::load_parallel(black_box(test_file), num_cores)
                         .await
                         .unwrap();
-                    let tensor_count = data.names().len();
+                    let tensor_count = data.tensors().names().len();
                     black_box((data, tensor_count))
                 })
             });
@@ -60,6 +61,17 @@ fn bench_io_uring(c: &mut Criterion) {
             tokio_uring::start(async {
                 let data = safetensors::load(black_box(test_file)).await.unwrap();
                 let tensor_count = data.names().len();
+                black_box((data, tensor_count))
+            })
+        });
+    });
+
+    // Mmap-backed loading (lazy)
+    c.bench_function("io_uring_safetensors_mmap", |b| {
+        b.iter(|| {
+            tokio_uring::start(async {
+                let data = safetensors::load_mmap(black_box(test_file)).await.unwrap();
+                let tensor_count = data.tensors().names().len();
                 black_box((data, tensor_count))
             })
         });
@@ -131,10 +143,47 @@ fn bench_sync_safetensors(c: &mut Criterion) {
     });
 }
 
+fn bench_mmap_safetensors(c: &mut Criterion) {
+    let test_file = "test_model.safetensors";
+
+    c.bench_function("mmap_safetensors", |b| {
+        b.iter(|| {
+            let data = safetensors::load_mmap_sync(black_box(test_file)).unwrap();
+            let tensor_count = data.tensors().names().len();
+            black_box((data, tensor_count))
+        });
+    });
+}
+
+fn bench_original_safetensors(c: &mut Criterion) {
+    let test_file = "test_model.safetensors";
+
+    c.bench_function("original_safetensors", |b| {
+        b.iter(|| {
+            let bytes = std::fs::read(black_box(test_file)).unwrap();
+            let data = SafeTensors::deserialize(&bytes).unwrap();
+            let tensor_count = data.names().len();
+            black_box((tensor_count,))
+        });
+    });
+}
+
 #[cfg(target_os = "linux")]
-criterion_group!(benches, bench_io_uring, bench_sync_safetensors);
+criterion_group!(
+    benches,
+    bench_io_uring,
+    bench_sync_safetensors,
+    bench_mmap_safetensors,
+    bench_original_safetensors
+);
 
 #[cfg(not(target_os = "linux"))]
-criterion_group!(benches, bench_tokio, bench_sync_safetensors);
+criterion_group!(
+    benches,
+    bench_tokio,
+    bench_sync_safetensors,
+    bench_mmap_safetensors,
+    bench_original_safetensors
+);
 
 criterion_main!(benches);

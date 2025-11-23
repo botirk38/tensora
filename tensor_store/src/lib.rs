@@ -20,8 +20,10 @@ pub use readers::traits::{AsyncReader, SyncReader, TensorMetadata};
 pub use writers::traits::{AsyncWriter, SyncWriter};
 
 // Reader types
-pub use readers::safetensors::OwnedSafeTensors;
-pub use readers::serverlessllm::ServerlessLLMIndex;
+pub use readers::safetensors::{SafeTensors, SafeTensorsMmap};
+pub use readers::serverlessllm::{
+    ServerlessLLM, ServerlessLLMIndex, ServerlessLLMMmap, Tensor, TensorMmap,
+};
 
 // Writer types
 pub use writers::safetensors::SafeTensorsWriter;

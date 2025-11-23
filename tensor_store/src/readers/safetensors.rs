@@ -1,14 +1,19 @@
 //! `SafeTensors` format reader.
 //!
-//! This module re-exports types from the safetensors crate for convenience.
+//! This module provides readers for the SafeTensors format, offering both owned and mmap-backed storage.
 //! All parsing is handled by the safetensors library.
+//!
+//! # Types
+//!
+//! - `SafeTensorsOwned`: Owned reader with buffer-backed storage (eager loading).
+//! - `SafeTensorsMmap`: Mmap-backed reader with lazy loading.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
 //! use tensor_store::readers::safetensors;
 //!
-//! // Load and parse SafeTensors file
+//! // Load and parse SafeTensors file (owned)
 //! let tensors = safetensors::load("model.safetensors").await?;
 //!
 //! // Access tensors
@@ -16,27 +21,42 @@
 //!     let view = tensors.tensor(name)?;
 //!     println!("{}: {:?} ({})", name, view.shape(), view.dtype());
 //! }
+//!
+//! // Load with mmap (Linux only, lazy)
+//! let tensors_mmap = safetensors::load_mmap("model.safetensors").await?;
+//! let tensors = tensors_mmap.tensors(); // Access parsed structure
 //! ```
 
 use crate::backends;
 use crate::readers::error::{ReaderError, ReaderResult};
 use crate::readers::traits::{AsyncReader, SyncReader, TensorMetadata};
 pub use safetensors::SafeTensorError;
-pub use safetensors::tensor::{Dtype, SafeTensors, TensorView};
+pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as Tensor};
 use std::ops::Deref;
 use std::path::Path;
 
-/// `SafeTensors` data plus the owned backing buffer.
+/// SafeTensors reader with mmap-backed storage (lazy loading).
 ///
-/// The buffer is kept alive for as long as the parsed [`SafeTensors`] lives,
-/// ensuring the borrowed tensor views remain valid.
+/// This reader memory-maps the file and parses the SafeTensors header lazily.
+/// Tensor data is accessed directly from the memory map without copying.
+/// Available on all platforms that support memory mapping.
 #[non_exhaustive]
-pub struct OwnedSafeTensors {
+pub struct SafeTensorsMmap {
+    mmap: backends::mmap::Mmap,
+    tensors: SafeTensors<'static>,
+}
+
+/// Owned SafeTensors reader with buffer-backed storage.
+///
+/// This reader loads the entire file into memory and owns the data.
+/// Provides fast access to all tensors with eager parsing.
+#[non_exhaustive]
+pub struct SafeTensorsOwned {
     buffer: Box<[u8]>,
     tensors: SafeTensors<'static>,
 }
 
-impl OwnedSafeTensors {
+impl SafeTensorsOwned {
     /// Creates an owned `SafeTensors` from raw bytes.
     ///
     /// # Errors
@@ -78,7 +98,7 @@ impl OwnedSafeTensors {
     }
 }
 
-impl Clone for OwnedSafeTensors {
+impl Clone for SafeTensorsOwned {
     fn clone(&self) -> Self {
         // We can safely clone by copying the buffer and re-parsing
         Self::from_bytes(self.buffer.to_vec())
@@ -86,7 +106,7 @@ impl Clone for OwnedSafeTensors {
     }
 }
 
-impl Deref for OwnedSafeTensors {
+impl Deref for SafeTensorsOwned {
     type Target = SafeTensors<'static>;
 
     #[inline]
@@ -95,23 +115,41 @@ impl Deref for OwnedSafeTensors {
     }
 }
 
-impl AsRef<SafeTensors<'static>> for OwnedSafeTensors {
+impl SafeTensorsMmap {
+    /// Creates an mmap-backed `SafeTensors` from a memory-mapped file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the mapped data cannot be parsed as `SafeTensors` format.
     #[inline]
-    fn as_ref(&self) -> &SafeTensors<'static> {
+    pub fn from_mmap(mmap: backends::mmap::Mmap) -> ReaderResult<Self> {
+        let slice: &[u8] = mmap.as_slice();
+
+        // SAFETY: The slice points into the mmap, which we store inside the struct.
+        // Drop order is `tensors` first, then `mmap`, so the data lives for the
+        // entire lifetime of the SafeTensorsMmap object.
+        let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
+        let tensors = SafeTensors::deserialize(static_slice)?;
+
+        Ok(Self { mmap, tensors })
+    }
+
+    /// Access the parsed `SafeTensors` structure.
+    #[inline]
+    #[must_use]
+    pub const fn tensors(&self) -> &SafeTensors<'static> {
         &self.tensors
     }
-}
 
-impl TryFrom<Vec<u8>> for OwnedSafeTensors {
-    type Error = ReaderError;
-
+    /// Access the underlying memory-mapped data.
     #[inline]
-    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::from_bytes(bytes)
+    #[must_use]
+    pub const fn mmap(&self) -> &backends::mmap::Mmap {
+        &self.mmap
     }
 }
 
-impl TensorMetadata for OwnedSafeTensors {
+impl TensorMetadata for SafeTensorsMmap {
     #[inline]
     fn len(&self) -> usize {
         self.tensors.len()
@@ -128,7 +166,59 @@ impl TensorMetadata for OwnedSafeTensors {
     }
 }
 
-impl AsyncReader for OwnedSafeTensors {
+impl AsyncReader for SafeTensorsMmap {
+    type Output = Self;
+
+    #[inline]
+    async fn load(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
+        let path_str = path.as_ref().to_str().ok_or_else(|| {
+            ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
+        })?;
+        let mmap = backends::mmap::map(path_str)?;
+        Self::from_mmap(mmap)
+    }
+}
+
+impl SyncReader for SafeTensorsMmap {
+    type Output = Self;
+
+    #[inline]
+    fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
+        let path_str = path.as_ref().to_str().ok_or_else(|| {
+            ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
+        })?;
+        let mmap = backends::mmap::map(path_str)?;
+        Self::from_mmap(mmap)
+    }
+}
+
+impl TryFrom<Vec<u8>> for SafeTensorsOwned {
+    type Error = ReaderError;
+
+    #[inline]
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::from_bytes(bytes)
+    }
+}
+
+impl TensorMetadata for SafeTensorsOwned {
+    #[inline]
+    fn len(&self) -> usize {
+        self.tensors.len()
+    }
+
+    #[inline]
+    fn contains(&self, name: &str) -> bool {
+        self.tensors.names().into_iter().any(|n| n == name)
+    }
+
+    #[inline]
+    fn tensor_names(&self) -> Vec<&str> {
+        self.tensors.names()
+    }
+}
+
+impl AsyncReader for SafeTensorsOwned {
     type Output = Self;
 
     #[inline]
@@ -141,7 +231,7 @@ impl AsyncReader for OwnedSafeTensors {
     }
 }
 
-impl SyncReader for OwnedSafeTensors {
+impl SyncReader for SafeTensorsOwned {
     type Output = Self;
 
     #[inline]
@@ -155,44 +245,68 @@ impl SyncReader for OwnedSafeTensors {
 }
 
 /// Load tensor data using the best backend for the current platform and parse it.
+///
+/// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
-pub async fn load(path: impl AsRef<Path>) -> ReaderResult<OwnedSafeTensors> {
-    OwnedSafeTensors::load(path).await
+pub async fn load(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsOwned> {
+    SafeTensorsOwned::load(path).await
 }
 
 /// Load tensor data in parallel chunks and parse it.
+///
+/// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
 pub async fn load_parallel(
     path: impl AsRef<Path>,
     chunks: usize,
-) -> ReaderResult<OwnedSafeTensors> {
+) -> ReaderResult<SafeTensorsOwned> {
     let path_str = path
         .as_ref()
         .to_str()
         .ok_or_else(|| ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned()))?;
     let bytes = backends::load_parallel(path_str, chunks).await?;
-    OwnedSafeTensors::from_bytes(bytes)
+    SafeTensorsOwned::from_bytes(bytes)
 }
 
 /// Synchronous load using mmap (Linux) or `std::fs` (other platforms).
+///
+/// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
-pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<OwnedSafeTensors> {
-    OwnedSafeTensors::load_sync(path)
+pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsOwned> {
+    SafeTensorsOwned::load_sync(path)
 }
 
 /// Synchronous ranged load using mmap (Linux) or `std::fs` (other platforms).
+///
+/// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
 pub fn load_range_sync(
     path: impl AsRef<Path>,
     offset: u64,
     len: usize,
-) -> ReaderResult<OwnedSafeTensors> {
+) -> ReaderResult<SafeTensorsOwned> {
     let path_str = path
         .as_ref()
         .to_str()
         .ok_or_else(|| ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned()))?;
     let bytes = backends::sync::load_range(path_str, offset, len)?;
-    OwnedSafeTensors::from_bytes(bytes)
+    SafeTensorsOwned::from_bytes(bytes)
+}
+
+/// Load tensor data using memory mapping (lazy loading).
+///
+/// Returns a `SafeTensorsMmap` with memory-mapped tensors.
+#[inline]
+pub async fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
+    SafeTensorsMmap::load(path).await
+}
+
+/// Load tensor data synchronously using memory mapping (lazy loading).
+///
+/// Returns a `SafeTensorsMmap` with memory-mapped tensors.
+#[inline]
+pub fn load_mmap_sync(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
+    SafeTensorsMmap::load_sync(path)
 }
 
 #[cfg(test)]

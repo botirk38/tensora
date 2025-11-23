@@ -17,7 +17,7 @@
 //!
 //! Typically accessed via `backends::load()` on non-Linux platforms, not used directly.
 
-use super::{IoResult, buffer_slice::BufferSlice, pooled_buffer::PooledBuffer};
+use super::{IoResult, buffer_slice::BufferSlice, get_buffer_pool};
 use std::path::Path;
 #[allow(unused_imports)]
 use tokio::fs::File as TokioFile;
@@ -41,7 +41,7 @@ pub async fn load<P: AsRef<Path>>(path: P) -> IoResult<Vec<u8>> {
         .map_err(|_e| std::io::Error::new(std::io::ErrorKind::InvalidInput, "file too large"))?;
 
     // Use pooled buffer for optimization
-    let mut buf = PooledBuffer::with_capacity(file_size);
+    let mut buf = get_buffer_pool().get(file_size);
     file.read_exact(buf.as_mut_slice()).await?;
     buf.truncate(file_size);
     Ok(buf.into_vec())
@@ -67,7 +67,7 @@ pub async fn load_parallel<P: AsRef<Path>>(path: P, chunks: usize) -> IoResult<V
 
     // Pre-allocate final pooled buffer - this is the ONLY allocation
     // (zero-copy: tasks write directly into non-overlapping buffer slices)
-    let mut final_buf = PooledBuffer::with_capacity(file_size);
+    let mut final_buf = get_buffer_pool().get(file_size);
 
     // SAFETY: We split final_buf into non-overlapping mutable slices.
     // Each slice is passed to exactly one task via BufferSlice.
@@ -141,7 +141,7 @@ pub async fn load_parallel<P: AsRef<Path>>(path: P, chunks: usize) -> IoResult<V
 
     // All data is now in final_buf, set correct length
     final_buf.truncate(file_size);
-    Ok(final_buf.into_vec())
+    Ok(final_buf.into_inner())
 }
 
 /// Load a specific byte range from a file asynchronously.
@@ -149,7 +149,7 @@ pub async fn load_parallel<P: AsRef<Path>>(path: P, chunks: usize) -> IoResult<V
 pub async fn load_range<P: AsRef<Path>>(path: P, offset: u64, len: usize) -> IoResult<Vec<u8>> {
     let mut file = TokioFile::open(path).await?;
     file.seek(SeekFrom::Start(offset)).await?;
-    let mut buf = PooledBuffer::with_capacity(len);
+    let mut buf = get_buffer_pool().get(len);
     file.read_exact(buf.as_mut_slice()).await?;
     buf.truncate(len);
     Ok(buf.into_vec())

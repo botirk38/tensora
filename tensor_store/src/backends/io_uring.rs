@@ -17,11 +17,7 @@
 //!
 //! Typically accessed via `backends::load()` on Linux platforms, not used directly.
 
-use super::{
-    IoResult,
-    buffer_slice::BufferSlice,
-    pooled_buffer::{self, PooledBuffer},
-};
+use super::{IoResult, buffer_slice::BufferSlice, get_buffer_pool};
 use std::path::Path;
 use tokio_uring::fs::File as UringFile;
 
@@ -41,7 +37,7 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
         usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
 
     // Get buffer from pool
-    let pool = pooled_buffer::get_buffer_pool();
+    let pool = get_buffer_pool();
     let buf = pool.get(file_size);
 
     let (res, returned_buf) = file.read_at(buf, 0).await;
@@ -57,9 +53,8 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
 
     file.close().await?;
 
-    // Create pooled buffer that will return the buffer to pool when dropped
-    let pooled_buf = PooledBuffer::from_buffer(returned_buf);
-    Ok(pooled_buf.into_vec())
+    // Buffer will be automatically returned to pool when dropped
+    Ok(returned_buf.into_vec())
 }
 
 /// Load tensor data in parallel chunks using `io_uring` with true zero-copy
@@ -80,7 +75,7 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
     let chunk_size = div_ceil(file_size, chunks);
 
     // Pre-allocate final pooled buffer - this is the ONLY allocation
-    let mut final_buf = PooledBuffer::with_capacity(file_size);
+    let mut final_buf = get_buffer_pool().get(file_size);
 
     // SAFETY: We split final_buf into non-overlapping mutable slices.
     // Each slice is passed to exactly one task via BufferSlice.
@@ -171,7 +166,7 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
 
     // All data is now in final_buf, set correct length
     final_buf.truncate(file_size);
-    Ok(final_buf.into_vec())
+    Ok(final_buf.into_inner())
 }
 
 /// Load a specific byte range from a file using `io_uring`.
@@ -181,9 +176,9 @@ pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoRe
     let file = UringFile::open(path_ref).await?;
 
     // Get buffer from pool (buffer pool optimization for reduced allocations)
-    let pool = pooled_buffer::get_buffer_pool();
+    let pool = get_buffer_pool();
     let buf = pool.get(len);
-    let (res, read_buf) = file.read_at(buf, offset).await;
+    let (res, mut read_buf) = file.read_at(buf, offset).await;
     let n = res?;
 
     if n != len {
@@ -196,10 +191,9 @@ pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoRe
 
     file.close().await?;
 
-    // Create pooled buffer
-    let mut pooled_buf = PooledBuffer::from_buffer(read_buf);
-    pooled_buf.truncate(n);
-    Ok(pooled_buf.into_vec())
+    // Buffer will be automatically returned to pool when dropped
+    read_buf.truncate(n);
+    Ok(read_buf.into_inner())
 }
 
 /// Load multiple byte ranges from potentially different files using `io_uring` batching.
@@ -265,7 +259,7 @@ pub async fn load_range_batch(
         // Uses pooled buffers for efficient memory management
         let mut read_futures = Vec::with_capacity(file_reqs.len());
         for (_idx, offset, len) in &file_reqs {
-            let buf = pooled_buffer::get_buffer_pool().get(*len);
+            let buf = get_buffer_pool().get(*len);
             let read_future = file.read_at(buf, *offset);
             read_futures.push(read_future);
         }
@@ -275,7 +269,7 @@ pub async fn load_range_batch(
 
         // Process results and check for errors
         let mut processed_results = Vec::with_capacity(file_reqs.len());
-        for (i, (res, read_buf)) in file_results.into_iter().enumerate() {
+        for (i, (res, mut read_buf)) in file_results.into_iter().enumerate() {
             let n = res?;
             if n != file_reqs[i].2 {
                 return Err(std::io::Error::new(
@@ -283,10 +277,9 @@ pub async fn load_range_batch(
                     format!("Expected to read {} bytes, but read {}", file_reqs[i].2, n),
                 ));
             }
-            // Create pooled buffer
-            let mut pooled_buf = PooledBuffer::from_buffer(read_buf);
-            pooled_buf.truncate(n);
-            processed_results.push(pooled_buf.into_vec());
+            // Buffer will be automatically returned to pool when dropped
+            read_buf.truncate(n);
+            processed_results.push(read_buf.into_inner());
         }
 
         // Store results in the correct positions

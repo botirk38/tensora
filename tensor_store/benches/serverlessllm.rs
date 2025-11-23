@@ -83,6 +83,48 @@ fn bench_tokio_serverlessllm(c: &mut Criterion) {
             }
         });
     });
+
+    // === TOKIO SERVERLESSLLM MMAP ALL TENSORS ===
+    // Measures async mmap loading performance
+    c.bench_function("tokio_serverlessllm_mmap_all_tensors", |b| {
+        b.iter(|| {
+            #[cfg(target_os = "linux")]
+            {
+                tokio_uring::start(async {
+                    let model = serverlessllm::load_mmap(black_box(serverlessllm_dir))
+                        .await
+                        .unwrap();
+                    let tensor_count = model.len();
+
+                    let mut total_bytes = 0;
+                    for name in model.tensor_names() {
+                        let tensor = model.tensor(name).unwrap();
+                        total_bytes += tensor.data().len();
+                    }
+
+                    black_box((total_bytes, tensor_count))
+                })
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let model = serverlessllm::load_mmap(black_box(serverlessllm_dir))
+                        .await
+                        .unwrap();
+                    let tensor_count = model.len();
+
+                    let mut total_bytes = 0;
+                    for name in model.tensor_names() {
+                        let tensor = model.tensor(name).unwrap();
+                        total_bytes += tensor.data().len();
+                    }
+
+                    black_box((total_bytes, tensor_count))
+                })
+            }
+        });
+    });
 }
 
 fn bench_sync_serverlessllm(c: &mut Criterion) {
@@ -104,6 +146,40 @@ fn bench_sync_serverlessllm(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_tokio_serverlessllm, bench_sync_serverlessllm);
+fn bench_mmap_serverlessllm(c: &mut Criterion) {
+    let serverlessllm_dir = "test_model_serverlessllm";
+
+    // ServerlessLLM mmap loading (lazy, load all tensors)
+    c.bench_function("mmap_serverlessllm_all_tensors", |b| {
+        b.iter(|| {
+            let model = serverlessllm::load_mmap_sync(black_box(serverlessllm_dir)).unwrap();
+            let tensor_count = model.len();
+
+            let mut total_bytes = 0;
+            for name in model.tensor_names() {
+                let tensor = model.tensor(name).unwrap();
+                total_bytes += tensor.data().len();
+            }
+
+            black_box((total_bytes, tensor_count))
+        });
+    });
+}
+
+#[cfg(target_os = "linux")]
+criterion_group!(
+    benches,
+    bench_tokio_serverlessllm,
+    bench_sync_serverlessllm,
+    bench_mmap_serverlessllm
+);
+
+#[cfg(not(target_os = "linux"))]
+criterion_group!(
+    benches,
+    bench_tokio_serverlessllm,
+    bench_sync_serverlessllm,
+    bench_mmap_serverlessllm
+);
 
 criterion_main!(benches);
