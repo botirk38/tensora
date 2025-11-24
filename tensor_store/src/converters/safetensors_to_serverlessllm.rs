@@ -43,8 +43,22 @@ pub async fn convert_safetensors_to_serverlessllm(
         ));
     }
 
+    // Calculate optimal chunk count for parallel loading
+    // Use thread-per-core by default, but ensure chunks stay under 2GB (isize::MAX limitation)
+    const MAX_CHUNK_SIZE: usize = 2_000_000_000; // ~2GB, safely under isize::MAX (2,147,483,647)
+    let file_size = usize::try_from(tokio::fs::metadata(input_path).await?.len())
+        .map_err(|_e| WriterError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "file too large"
+        )))?;
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let min_chunks_for_size = file_size.div_ceil(MAX_CHUNK_SIZE);
+    let chunks = num_cpus.max(min_chunks_for_size);
+
     // Use parallel loading for better I/O performance
-    let owned = crate::readers::safetensors::load_parallel(input_path, 4)
+    let owned = crate::readers::safetensors::load_parallel(input_path, chunks)
         .await
         .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
     let tensors = owned.tensors();

@@ -48,6 +48,26 @@ impl ProfileMode {
     }
 }
 
+fn get_fixture() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let fixture_index = args.iter().position(|arg| arg == "--fixture");
+    fixture_index.map_or_else(|| "large".to_string(), |idx| if idx + 1 < args.len() {
+            args[idx + 1].clone()
+        } else {
+            "large".to_string()
+        })
+}
+
+fn get_profile_mode() -> Result<ProfileMode, String> {
+    let args: Vec<String> = std::env::args().collect();
+    let profile_index = args.iter().position(|arg| arg == "--profile");
+    profile_index.map_or_else(|| Err("Missing --profile argument".to_string()), |idx| if idx + 1 < args.len() {
+            ProfileMode::from_str(&args[idx + 1])
+        } else {
+            Err("Missing profile mode after --profile".to_string())
+        })
+}
+
 async fn profile_async(test_file: &str) {
     println!("🔥 Profiling async safetensors reader...");
 
@@ -127,45 +147,36 @@ fn profile_sync(test_file: &str) {
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 3 || args[1] != "--profile" {
-        eprintln!("Usage: {} --profile <mode>", args[0]);
-        eprintln!("Modes: async, sync");
-        eprintln!("\nRequires test_model.safetensors in current directory");
-        std::process::exit(1);
-    }
-
-    let mode = ProfileMode::from_str(&args[2]).map_err(|e| {
+    let fixture = get_fixture();
+    let mode = get_profile_mode().map_err(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     })?;
 
-    let test_file = "test_model.safetensors";
+    let test_file = format!("tests/fixtures/{}/tiny.safetensors", fixture);
 
     // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
+    if !std::path::Path::new(&test_file).exists() {
         eprintln!(
-            "❌ Test file '{}' not found in current directory",
+            "❌ Test file '{}' not found",
             test_file
         );
-        eprintln!("Please ensure test_model.safetensors exists for profiling");
+        eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }
 
     println!("🚀 Starting safetensors reader profiling");
     println!("  Mode: {:?}", mode);
+    println!("  Fixture: {}", fixture);
     println!("  Test file: {}", test_file);
     println!();
-
-    // Use minimal queue size for profiling to avoid memory conflicts with perf/flamegraph
     match tokio_uring::start(async {
         match mode {
             ProfileMode::Async => {
-                profile_async(test_file).await;
+                profile_async(&test_file).await;
             }
             ProfileMode::Sync => {
-                profile_sync(test_file);
+                profile_sync(&test_file);
             }
         }
 
@@ -192,45 +203,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 3 || args[1] != "--profile" {
-        eprintln!("Usage: {} --profile <mode>", args[0]);
-        eprintln!("Modes: async, sync");
-        eprintln!("\nRequires test_model.safetensors in current directory");
-        std::process::exit(1);
-    }
-
-    let mode = ProfileMode::from_str(&args[2]).map_err(|e| {
+    let fixture = get_fixture();
+    let mode = get_profile_mode().map_err(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     })?;
 
-    let test_file = "test_model.safetensors";
+    let test_file = format!("tests/fixtures/{}/tiny.safetensors", fixture);
 
     // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
+    if !std::path::Path::new(&test_file).exists() {
         eprintln!(
-            "❌ Test file '{}' not found in current directory",
+            "❌ Test file '{}' not found",
             test_file
         );
-        eprintln!("Please ensure test_model.safetensors exists for profiling");
+        eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }
 
     println!("🚀 Starting safetensors reader profiling");
     println!("  Mode: {:?}", mode);
+    println!("  Fixture: {}", fixture);
     println!("  Test file: {}", test_file);
     println!();
 
-    let rt = tokio::runtime::Runtime::new()?;
+    // Use minimal queue size for profiling to avoid memory conflicts with perf/flamegraph
     rt.block_on(async {
         match mode {
             ProfileMode::Async => {
-                profile_async(test_file).await;
+                profile_async(&test_file).await;
             }
             ProfileMode::Sync => {
-                profile_sync(test_file);
+                profile_sync(&test_file);
             }
         }
 

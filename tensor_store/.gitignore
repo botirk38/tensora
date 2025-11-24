@@ -1,6 +1,6 @@
 # Rust
 /target/
-**/*.rs.bk
+/**/*.rs.bk
 *.pdb
 Cargo.lock
 
@@ -10,8 +10,6 @@ Cargo.lock
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
 
@@ -26,6 +24,6 @@ perf.data*
 *.dylib
 *.dll
 *.a
-*.safetensors
-test_model_serverlessllm/
+
+fixtures/**
 *.svg

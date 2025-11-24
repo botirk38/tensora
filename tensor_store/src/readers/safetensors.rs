@@ -22,9 +22,12 @@
 //!     println!("{}: {:?} ({})", name, view.shape(), view.dtype());
 //! }
 //!
-//! // Load with mmap (Linux only, lazy)
-//! let tensors_mmap = safetensors::load_mmap("model.safetensors").await?;
+//! // Load with mmap (cross platform lazy loading)
+//! let tensors_mmap = safetensors::load_mmap("model.safetensors");
 //! let tensors = tensors_mmap.tensors(); // Access parsed structure
+//!
+//! let tensors_sync = safetensors::load_sync("model.safetensors")?;
+//! let tensors = tensors_sync.tensors(); // Access parsed structure
 //! ```
 
 use crate::backends;
@@ -166,19 +169,6 @@ impl TensorMetadata for SafeTensorsMmap {
     }
 }
 
-impl AsyncReader for SafeTensorsMmap {
-    type Output = Self;
-
-    #[inline]
-    async fn load(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let path_str = path.as_ref().to_str().ok_or_else(|| {
-            ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
-        })?;
-        let mmap = backends::mmap::map(path_str)?;
-        Self::from_mmap(mmap)
-    }
-}
-
 impl SyncReader for SafeTensorsMmap {
     type Output = Self;
 
@@ -293,19 +283,11 @@ pub fn load_range_sync(
     SafeTensorsOwned::from_bytes(bytes)
 }
 
-/// Load tensor data using memory mapping (lazy loading).
-///
-/// Returns a `SafeTensorsMmap` with memory-mapped tensors.
-#[inline]
-pub async fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
-    SafeTensorsMmap::load(path).await
-}
-
 /// Load tensor data synchronously using memory mapping (lazy loading).
 ///
 /// Returns a `SafeTensorsMmap` with memory-mapped tensors.
 #[inline]
-pub fn load_mmap_sync(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
+pub fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
     SafeTensorsMmap::load_sync(path)
 }
 

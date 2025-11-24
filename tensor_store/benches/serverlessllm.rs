@@ -32,154 +32,137 @@
 //!
 //! ## Test Data
 //!
-//! Benchmarks expect a `test_model_serverlessllm/` directory containing:
+//! Benchmarks expect a `model_serverlessllm/` directory containing:
 //! - `tensor_index.json` - ServerlessLLM index file
 //! - `tensor.data_0`, `tensor.data_1`, ... - Partitioned tensor data files
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::path::PathBuf;
 use tensor_store::readers::serverlessllm;
 use tensor_store::readers::traits::TensorMetadata;
 
-fn bench_tokio_serverlessllm(c: &mut Criterion) {
-    let serverlessllm_dir = "test_model_serverlessllm";
+fn discover_fixtures() -> Vec<(String, PathBuf)> {
+    let fixtures_dir = std::path::Path::new("fixtures");
+    let mut fixtures = Vec::new();
 
-    // === TOKIO SERVERLESSLLM ALL TENSORS ===
-    // Measures async loading performance
-    c.bench_function("tokio_serverlessllm_all_tensors", |b| {
-        b.iter(|| {
-            #[cfg(target_os = "linux")]
-            {
-                tokio_uring::start(async {
-                    let model = serverlessllm::load(black_box(serverlessllm_dir))
-                        .await
-                        .unwrap();
-                    let tensor_count = model.len();
-
-                    let mut total_bytes = 0;
-                    for (_name, tensor) in &model {
-                        total_bytes += tensor.data().len();
+    if let Ok(entries) = std::fs::read_dir(fixtures_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let model_dir = entry.path().join("model_serverlessllm");
+                    if model_dir.exists() && model_dir.is_dir() {
+                        let model_name = entry.file_name().to_string_lossy().to_string();
+                        fixtures.push((model_name, model_dir));
                     }
-
-                    black_box((total_bytes, tensor_count))
-                })
+                }
             }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let model = serverlessllm::load(black_box(serverlessllm_dir))
-                        .await
-                        .unwrap();
-                    let tensor_count = model.len();
+        }
+    }
 
-                    let mut total_bytes = 0;
-                    for (_name, tensor) in &model {
-                        total_bytes += tensor.data().len();
-                    }
-
-                    black_box((total_bytes, tensor_count))
-                })
-            }
-        });
-    });
-
-    // === TOKIO SERVERLESSLLM MMAP ALL TENSORS ===
-    // Measures async mmap loading performance
-    c.bench_function("tokio_serverlessllm_mmap_all_tensors", |b| {
-        b.iter(|| {
-            #[cfg(target_os = "linux")]
-            {
-                tokio_uring::start(async {
-                    let model = serverlessllm::load_mmap(black_box(serverlessllm_dir))
-                        .await
-                        .unwrap();
-                    let tensor_count = model.len();
-
-                    let mut total_bytes = 0;
-                    for name in model.tensor_names() {
-                        let tensor = model.tensor(name).unwrap();
-                        total_bytes += tensor.data().len();
-                    }
-
-                    black_box((total_bytes, tensor_count))
-                })
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let model = serverlessllm::load_mmap(black_box(serverlessllm_dir))
-                        .await
-                        .unwrap();
-                    let tensor_count = model.len();
-
-                    let mut total_bytes = 0;
-                    for name in model.tensor_names() {
-                        let tensor = model.tensor(name).unwrap();
-                        total_bytes += tensor.data().len();
-                    }
-
-                    black_box((total_bytes, tensor_count))
-                })
-            }
-        });
-    });
+    // Sort by name for consistent ordering
+    fixtures.sort_by(|a, b| a.0.cmp(&b.0));
+    fixtures
 }
 
-fn bench_sync_serverlessllm(c: &mut Criterion) {
-    let serverlessllm_dir = "test_model_serverlessllm";
+fn bench_tokio_serverlessllm_load(c: &mut Criterion) {
+    let fixtures = discover_fixtures();
 
-    // ServerlessLLM sync loading (load all tensors)
-    c.bench_function("sync_serverlessllm_all_tensors", |b| {
-        b.iter(|| {
-            let model = serverlessllm::load_sync(black_box(serverlessllm_dir)).unwrap();
-            let tensor_count = model.len();
+    for (model_name, dir) in &fixtures {
+        let dir_str = dir.to_str().unwrap();
+        c.bench_function(&format!("tokio_serverlessllm_load_{}", model_name), |b| {
+            b.iter(|| {
+                #[cfg(target_os = "linux")]
+                {
+                    tokio_uring::start(async {
+                        let model = serverlessllm::load(black_box(dir_str)).unwrap();
+                        let tensor_count = model.len();
 
-            let mut total_bytes = 0;
-            for (_name, tensor) in &model {
-                total_bytes += tensor.data().len();
-            }
+                        let mut total_bytes = 0;
+                        for (_name, tensor) in &model {
+                            total_bytes += tensor.data().len();
+                        }
 
-            black_box((total_bytes, tensor_count))
+                        black_box((total_bytes, tensor_count))
+                    })
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        let model = serverlessllm::load(black_box(dir_str)).unwrap();
+                        let tensor_count = model.len();
+
+                        let mut total_bytes = 0;
+                        for (_name, tensor) in &model {
+                            total_bytes += tensor.data().len();
+                        }
+
+                        black_box((total_bytes, tensor_count))
+                    })
+                }
+            });
         });
-    });
+    }
 }
 
-fn bench_mmap_serverlessllm(c: &mut Criterion) {
-    let serverlessllm_dir = "test_model_serverlessllm";
+fn bench_sync_serverlessllm_load(c: &mut Criterion) {
+    let fixtures = discover_fixtures();
 
-    // ServerlessLLM mmap loading (lazy, load all tensors)
-    c.bench_function("mmap_serverlessllm_all_tensors", |b| {
-        b.iter(|| {
-            let model = serverlessllm::load_mmap_sync(black_box(serverlessllm_dir)).unwrap();
-            let tensor_count = model.len();
+    for (model_name, dir) in &fixtures {
+        let dir_str = dir.to_str().unwrap();
+        c.bench_function(&format!("sync_serverlessllm_load_{}", model_name), |b| {
+            b.iter(|| {
+                let model = serverlessllm::load(black_box(dir_str)).unwrap();
+                let tensor_count = model.len();
 
-            let mut total_bytes = 0;
-            for name in model.tensor_names() {
-                let tensor = model.tensor(name).unwrap();
-                total_bytes += tensor.data().len();
-            }
+                let mut total_bytes = 0;
+                for (_name, tensor) in &model {
+                    total_bytes += tensor.data().len();
+                }
 
-            black_box((total_bytes, tensor_count))
+                black_box((total_bytes, tensor_count))
+            });
         });
-    });
+    }
+}
+
+fn bench_mmap_serverlessllm_load(c: &mut Criterion) {
+    let fixtures = discover_fixtures();
+
+    for (model_name, dir) in &fixtures {
+        let dir_str = dir.to_str().unwrap();
+        c.bench_function(&format!("mmap_serverlessllm_load_{}", model_name), |b| {
+            b.iter(|| {
+                let model = serverlessllm::load_mmap(black_box(dir_str)).unwrap();
+                let tensor_count = model.len();
+
+                let mut total_bytes = 0;
+                for name in model.tensor_names() {
+                    let tensor = model.tensor(name).unwrap();
+                    total_bytes += tensor.data().len();
+                }
+
+                black_box((total_bytes, tensor_count))
+            });
+        });
+    }
 }
 
 #[cfg(target_os = "linux")]
 criterion_group!(
     benches,
-    bench_tokio_serverlessllm,
-    bench_sync_serverlessllm,
-    bench_mmap_serverlessllm
+    bench_tokio_serverlessllm_load,
+    bench_sync_serverlessllm_load,
+    bench_mmap_serverlessllm_load
 );
 
 #[cfg(not(target_os = "linux"))]
 criterion_group!(
     benches,
-    bench_tokio_serverlessllm,
-    bench_sync_serverlessllm,
-    bench_mmap_serverlessllm
+    bench_tokio_serverlessllm_load,
+    bench_sync_serverlessllm_load,
+    bench_mmap_serverlessllm_load
 );
 
 criterion_main!(benches);

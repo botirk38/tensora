@@ -713,41 +713,6 @@ pub struct ServerlessLLM {
 impl ServerlessLLM {
     /// Loads a ServerlessLLM model from directory with eager loading.
     ///
-    /// This loads the index file and all tensor data into memory for fast access.
-    ///
-    /// # Arguments
-    ///
-    /// * `directory` - Directory containing tensor_index.json and tensor.data_* files
-    ///
-    /// # Returns
-    ///
-    /// An `ServerlessLLM` with all tensors loaded and ready for access.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the index file can't be parsed or tensor data can't be loaded.
-    pub async fn from_directory(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let dir_path = directory.as_ref();
-        let index_path = dir_path.join("tensor_index.json");
-        let data_path = dir_path.join("tensor.data");
-
-        let index = ServerlessLLMIndex::load(&index_path).await?;
-
-        // Load all tensors
-        let tensor_data = index.load_all_tensors_batch(&data_path).await?;
-
-        // Convert to Tensor structs
-        let tensors = tensor_data
-            .into_iter()
-            .map(|(name, data)| {
-                let entry = index.get(&name).unwrap().clone();
-                (name, Tensor::new(data, entry))
-            })
-            .collect();
-
-        Ok(Self { tensors })
-    }
-
     /// Loads a ServerlessLLM model from directory synchronously with eager loading.
     ///
     /// This loads the index file and all tensor data into memory for fast access.
@@ -759,7 +724,7 @@ impl ServerlessLLM {
     /// # Returns
     ///
     /// An `ServerlessLLM` with all tensors loaded and ready for access.
-    pub fn from_directory_sync(directory: impl AsRef<Path>) -> ReaderResult<Self> {
+    pub fn from_directory(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let dir_path = directory.as_ref();
         let index_path = dir_path.join("tensor_index.json");
         let data_path = dir_path.join("tensor.data");
@@ -828,23 +793,7 @@ pub fn parse_index_sync(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMInd
 ///
 /// An `ServerlessLLM` with all tensors loaded and ready for access.
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// use tensor_store::readers::serverlessllm;
-///
-/// let model = serverlessllm::load("path/to/model").await?;
-/// let weights = model.tensor("layer.0.weight").unwrap();
-/// println!("Shape: {:?}", weights.shape());
-/// ```
-#[inline]
-pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
-    ServerlessLLM::from_directory(directory).await
-}
-
 /// Load a ServerlessLLM model with eager loading (sync).
-///
-/// This is the synchronous version of `load()`.
 ///
 /// # Arguments
 ///
@@ -854,8 +803,8 @@ pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
 ///
 /// An `ServerlessLLM` with all tensors loaded and ready for access.
 #[inline]
-pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
-    ServerlessLLM::from_directory_sync(directory)
+pub fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
+    ServerlessLLM::from_directory(directory)
 }
 
 /// Load a ServerlessLLM model with mmap-based lazy loading (cross-platform, async).
@@ -871,14 +820,6 @@ pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
 ///
 /// A `ServerlessLLMMmap` with all partition files memory-mapped.
 ///
-/// # Errors
-///
-/// Returns an error if the index file can't be parsed or partition files can't be mapped.
-#[inline]
-pub async fn load_mmap(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLMMmap> {
-    ServerlessLLMMmap::from_directory(directory).await
-}
-
 /// Load a ServerlessLLM model with mmap-based lazy loading (cross-platform, sync).
 ///
 /// This memory-maps all partition files for zero-copy tensor access.
@@ -896,8 +837,8 @@ pub async fn load_mmap(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLL
 ///
 /// Returns an error if the index file can't be parsed or partition files can't be mapped.
 #[inline]
-pub fn load_mmap_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLMMmap> {
-    ServerlessLLMMmap::from_directory_sync(directory)
+pub fn load_mmap(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLMMmap> {
+    ServerlessLLMMmap::from_directory(directory)
 }
 
 pub struct ServerlessLLMMmap {
@@ -908,39 +849,6 @@ pub struct ServerlessLLMMmap {
 }
 
 impl ServerlessLLMMmap {
-    /// Loads a ServerlessLLM model from directory with mmap-based lazy loading.
-    ///
-    /// This loads the index file and memory-maps all partition files for zero-copy access.
-    ///
-    /// # Arguments
-    ///
-    /// * `directory` - Directory containing tensor_index.json and tensor.data_* files
-    ///
-    /// # Returns
-    ///
-    /// A `ServerlessLLMMmap` with all partition files memory-mapped.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the index file can't be parsed or partition files can't be mapped.
-    pub async fn from_directory(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let dir_path = directory.as_ref();
-        let index_path = dir_path.join("tensor_index.json");
-        let data_path = dir_path.join("tensor.data");
-
-        let index = ServerlessLLMIndex::load(&index_path).await?;
-        let partition_ids = index.partition_ids();
-
-        let mut partitions = HashMap::with_capacity(partition_ids.len());
-        for partition_id in partition_ids {
-            let partition_path = format!("{}_{}", data_path.display(), partition_id);
-            let mmap = backends::mmap::map(&partition_path)?;
-            partitions.insert(partition_id, mmap);
-        }
-
-        Ok(Self { index, partitions })
-    }
-
     /// Loads a ServerlessLLM model from directory synchronously with mmap-based lazy loading.
     ///
     /// This loads the index file and memory-maps all partition files for zero-copy access.
@@ -952,7 +860,7 @@ impl ServerlessLLMMmap {
     /// # Returns
     ///
     /// A `ServerlessLLMMmap` with all partition files memory-mapped.
-    pub fn from_directory_sync(directory: impl AsRef<Path>) -> ReaderResult<Self> {
+    pub fn from_directory(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let dir_path = directory.as_ref();
         let index_path = dir_path.join("tensor_index.json");
         let data_path = dir_path.join("tensor.data");
@@ -1195,7 +1103,7 @@ mod tests {
             assert_eq!(all_data.len(), tensor_names.len());
 
             // Test ServerlessLLM
-            let owned = ServerlessLLM::from_directory(dir).await.unwrap();
+            let owned = ServerlessLLM::from_directory(dir).unwrap();
             assert_eq!(owned.len(), tensor_names.len());
 
             // Test tensor access
@@ -1220,18 +1128,18 @@ mod tests {
         // Load first few tensors in batch
         let batch_names: Vec<&str> = tensor_names.iter().take(3).cloned().collect();
         let batch_data = index
-            .load_tensors_batch_sync(&dir.join("tensor.data"), &batch_names)
+            .load_tensors_batch_sync(dir.join("tensor.data"), &batch_names)
             .unwrap();
         assert_eq!(batch_data.len(), batch_names.len());
 
         // Load all tensors in batch
         let all_data = index
-            .load_all_tensors_batch_sync(&dir.join("tensor.data"))
+            .load_all_tensors_batch_sync(dir.join("tensor.data"))
             .unwrap();
         assert_eq!(all_data.len(), tensor_names.len());
 
         // Test ServerlessLLM
-        let owned = ServerlessLLM::from_directory_sync(dir).unwrap();
+        let owned = ServerlessLLM::from_directory(dir).unwrap();
         assert_eq!(owned.len(), tensor_names.len());
 
         // Test tensor access

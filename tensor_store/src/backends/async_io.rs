@@ -65,6 +65,23 @@ pub async fn load_parallel<P: AsRef<Path>>(path: P, chunks: usize) -> IoResult<V
 
     let chunk_size = div_ceil(file_size, chunks);
 
+    // Validate chunk size doesn't exceed Vec capacity limit (isize::MAX)
+    // This is a Rust safety requirement: Vec capacity must fit in isize
+    let max_capacity = usize::try_from(isize::MAX)
+        .expect("isize::MAX should always fit in usize on the same platform");
+    if chunk_size > max_capacity {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Chunk size ({} bytes) exceeds maximum Vec capacity ({} bytes). \
+                 Increase chunks to at least {} to proceed.",
+                chunk_size,
+                max_capacity,
+                file_size.div_ceil(max_capacity)
+            ),
+        ));
+    }
+
     // Pre-allocate final pooled buffer - this is the ONLY allocation
     // (zero-copy: tasks write directly into non-overlapping buffer slices)
     let mut final_buf = get_buffer_pool().get(file_size);

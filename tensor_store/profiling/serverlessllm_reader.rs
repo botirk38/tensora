@@ -51,22 +51,40 @@ impl ProfileMode {
     }
 }
 
+fn get_fixture() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let fixture_index = args.iter().position(|arg| arg == "--fixture");
+    fixture_index.map_or_else(|| "large".to_string(), |idx| if idx + 1 < args.len() {
+            args[idx + 1].clone()
+        } else {
+            "large".to_string()
+        })
+}
+
+fn get_profile_mode() -> Result<ProfileMode, String> {
+    let args: Vec<String> = std::env::args().collect();
+    let profile_index = args.iter().position(|arg| arg == "--profile");
+    profile_index.map_or_else(|| Err("Missing --profile argument".to_string()), |idx| if idx + 1 < args.len() {
+            ProfileMode::from_str(&args[idx + 1])
+        } else {
+            Err("Missing profile mode after --profile".to_string())
+        })
+}
+
 async fn profile_async(serverlessllm_dir: &str) {
     println!("🔥 Profiling async serverlessllm reader...");
 
     // Warmup phase - populate buffer pools and caches
     println!("  Warming up...");
     for i in 0..3 {
-        let _warmup = serverlessllm::load(serverlessllm_dir).await.unwrap();
+        let _warmup = serverlessllm::load(serverlessllm_dir).unwrap();
         println!("    Warmup iteration {} complete", i + 1);
     }
 
     // Profiling phase - single iteration to avoid memory accumulation
     println!("  Starting profiling...");
     let start = Instant::now();
-    let model = serverlessllm::load(black_box(serverlessllm_dir))
-        .await
-        .unwrap();
+    let model = serverlessllm::load(black_box(serverlessllm_dir)).unwrap();
     let load_time = start.elapsed();
 
     let tensor_count = model.len();
@@ -92,14 +110,14 @@ fn profile_sync(serverlessllm_dir: &str) {
     // Warmup phase
     println!("  Warming up...");
     for i in 0..3 {
-        let _warmup = serverlessllm::load_sync(serverlessllm_dir).unwrap();
+        let _warmup = serverlessllm::load(serverlessllm_dir).unwrap();
         println!("    Warmup iteration {} complete", i + 1);
     }
 
     // Profiling phase
     println!("  Starting profiling...");
     let start = Instant::now();
-    let model = serverlessllm::load_sync(black_box(serverlessllm_dir)).unwrap();
+    let model = serverlessllm::load(black_box(serverlessllm_dir)).unwrap();
     let load_time = start.elapsed();
 
     let tensor_count = model.len();
@@ -128,37 +146,27 @@ fn profile_sync(serverlessllm_dir: &str) {
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 3 || args[1] != "--profile" {
-        eprintln!("Usage: {} --profile <mode>", args[0]);
-        eprintln!("Modes: async, sync");
-        eprintln!("\nRequires test_model_serverlessllm/ directory with:");
-        eprintln!("  - tensor_index.json");
-        eprintln!("  - tensor.data_0, tensor.data_1, ...");
-        std::process::exit(1);
-    }
-
-    let mode = ProfileMode::from_str(&args[2]).map_err(|e| {
+    let fixture = get_fixture();
+    let mode = get_profile_mode().map_err(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     })?;
 
-    let serverlessllm_dir = "test_model_serverlessllm";
+    let serverlessllm_dir = format!("tests/fixtures/{}/tiny_serverlessllm", fixture);
 
     // Check if test directory exists
-    if !std::path::Path::new(serverlessllm_dir).exists() {
+    if !std::path::Path::new(&serverlessllm_dir).exists() {
         eprintln!(
-            "❌ Test directory '{}' not found in current directory",
+            "❌ Test directory '{}' not found",
             serverlessllm_dir
         );
-        eprintln!("Please ensure test_model_serverlessllm/ exists for profiling");
-        eprintln!("Directory should contain tensor_index.json and tensor.data_* files");
+        eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }
 
     println!("🚀 Starting serverlessllm reader profiling");
     println!("  Mode: {:?}", mode);
+    println!("  Fixture: {}", fixture);
     println!("  Test directory: {}", serverlessllm_dir);
     println!();
 
@@ -168,10 +176,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match builder.start(async {
         match mode {
             ProfileMode::Async => {
-                profile_async(serverlessllm_dir).await;
+                profile_async(&serverlessllm_dir).await;
             }
             ProfileMode::Sync => {
-                profile_sync(serverlessllm_dir);
+                profile_sync(&serverlessllm_dir);
             }
         }
 
@@ -198,48 +206,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 3 || args[1] != "--profile" {
-        eprintln!("Usage: {} --profile <mode>", args[0]);
-        eprintln!("Modes: async, sync");
-        eprintln!("\nRequires test_model_serverlessllm/ directory with:");
-        eprintln!("  - tensor_index.json");
-        eprintln!("  - tensor.data_0, tensor.data_1, ...");
-        std::process::exit(1);
-    }
-
-    let mode = ProfileMode::from_str(&args[2]).map_err(|e| {
+    let fixture = get_fixture();
+    let mode = get_profile_mode().map_err(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     })?;
 
-    let serverlessllm_dir = "test_model_serverlessllm";
+    let serverlessllm_dir = format!("tests/fixtures/{}/tiny_serverlessllm", fixture);
 
     // Check if test directory exists
-    if !std::path::Path::new(serverlessllm_dir).exists() {
+    if !std::path::Path::new(&serverlessllm_dir).exists() {
         eprintln!(
-            "❌ Test directory '{}' not found in current directory",
+            "❌ Test directory '{}' not found",
             serverlessllm_dir
         );
-        eprintln!("Please ensure test_model_serverlessllm/ exists for profiling");
-        eprintln!("Directory should contain tensor_index.json and tensor.data_* files");
+        eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }
 
     println!("🚀 Starting serverlessllm reader profiling");
     println!("  Mode: {:?}", mode);
+    println!("  Fixture: {}", fixture);
     println!("  Test directory: {}", serverlessllm_dir);
     println!();
-
-    let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         match mode {
             ProfileMode::Async => {
-                profile_async(serverlessllm_dir).await;
+                profile_async(&serverlessllm_dir).await;
             }
             ProfileMode::Sync => {
-                profile_sync(serverlessllm_dir);
+                profile_sync(&serverlessllm_dir);
             }
         }
 

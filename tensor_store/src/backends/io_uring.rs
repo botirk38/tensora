@@ -28,13 +28,32 @@ const fn div_ceil(a: usize, b: usize) -> usize {
 }
 
 /// Load tensor data using `io_uring` zero-copy I/O
+///
+/// For files larger than 512MB, automatically uses parallel chunked reading
+/// to work around io_uring single-read size limitations.
 #[inline]
 pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     let path_buf = path.as_ref().to_path_buf();
-    let file = UringFile::open(&path_buf).await?;
     let metadata = std::fs::metadata(&path_buf)?;
     let file_size =
         usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
+
+    // io_uring read_at has practical limits on single-read size (typically ~700MB).
+    // For larger files, automatically use parallel chunked reading.
+    const MAX_SINGLE_READ: usize = 512 * 1024 * 1024; // 512MB threshold
+
+    if file_size > MAX_SINGLE_READ {
+        // Calculate optimal number of chunks:
+        // - Prefer one chunk per CPU core for maximum parallelism
+        // - But ensure each chunk doesn't exceed MAX_SINGLE_READ
+        let num_cpus = num_cpus::get();
+        let min_chunks_for_size = (file_size + MAX_SINGLE_READ - 1) / MAX_SINGLE_READ;
+        let chunks = std::cmp::max(num_cpus, min_chunks_for_size);
+        return load_parallel(path_buf, chunks).await;
+    }
+
+    // Small file - use single read
+    let file = UringFile::open(&path_buf).await?;
 
     // Get buffer from pool
     let pool = get_buffer_pool();
@@ -54,7 +73,7 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     file.close().await?;
 
     // Buffer will be automatically returned to pool when dropped
-    Ok(returned_buf.into_vec())
+    Ok(returned_buf.into_inner())
 }
 
 /// Load tensor data in parallel chunks using `io_uring` with true zero-copy
@@ -73,6 +92,23 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
         usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
 
     let chunk_size = div_ceil(file_size, chunks);
+
+    // Validate chunk size doesn't exceed Vec capacity limit (isize::MAX)
+    // This is a Rust safety requirement: Vec capacity must fit in isize
+    let max_capacity = usize::try_from(isize::MAX)
+        .expect("isize::MAX should always fit in usize on the same platform");
+    if chunk_size > max_capacity {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Chunk size ({} bytes) exceeds maximum Vec capacity ({} bytes). \
+                 Increase chunks to at least {} to proceed.",
+                chunk_size,
+                max_capacity,
+                file_size.div_ceil(max_capacity)
+            ),
+        ));
+    }
 
     // Pre-allocate final pooled buffer - this is the ONLY allocation
     let mut final_buf = get_buffer_pool().get(file_size);
