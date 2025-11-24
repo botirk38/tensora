@@ -82,13 +82,13 @@ pub use async_io::load_range;
 ///
 /// Uses `io_uring` on Linux, tokio async I/O elsewhere.
 #[cfg(target_os = "linux")]
-pub use io_uring::load_range_batch;
+pub use io_uring::load_batch;
 
 /// Load multiple byte ranges from files asynchronously.
 ///
 /// Uses tokio async I/O (fallback for non-Linux).
 #[cfg(not(target_os = "linux"))]
-pub use async_io::load_range_batch;
+pub use async_io::load_batch;
 
 /// Write entire buffer to file asynchronously.
 ///

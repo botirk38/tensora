@@ -28,6 +28,10 @@ path = "profiling/safetensors_reader.rs"
 name = "serverlessllm_reader"
 path = "profiling/serverlessllm_reader.rs"
 
+[[bin]]
+name = "profile"
+path = "src/bin/profile/main.rs"
+
 
 [dependencies]
 futures = "0.3"
@@ -57,9 +61,6 @@ criterion = { version = "0.7", features = ["async_tokio"] }
 
 
 [profile.release]
-codegen-units = 1
-lto = "thin"
-panic = "abort"
 
 
 [profile.bench]

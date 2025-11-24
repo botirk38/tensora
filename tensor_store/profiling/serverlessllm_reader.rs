@@ -54,21 +54,31 @@ impl ProfileMode {
 fn get_fixture() -> String {
     let args: Vec<String> = std::env::args().collect();
     let fixture_index = args.iter().position(|arg| arg == "--fixture");
-    fixture_index.map_or_else(|| "large".to_string(), |idx| if idx + 1 < args.len() {
-            args[idx + 1].clone()
-        } else {
-            "large".to_string()
-        })
+    fixture_index.map_or_else(
+        || "large".to_string(),
+        |idx| {
+            if idx + 1 < args.len() {
+                args[idx + 1].clone()
+            } else {
+                "large".to_string()
+            }
+        },
+    )
 }
 
 fn get_profile_mode() -> Result<ProfileMode, String> {
     let args: Vec<String> = std::env::args().collect();
     let profile_index = args.iter().position(|arg| arg == "--profile");
-    profile_index.map_or_else(|| Err("Missing --profile argument".to_string()), |idx| if idx + 1 < args.len() {
-            ProfileMode::from_str(&args[idx + 1])
-        } else {
-            Err("Missing profile mode after --profile".to_string())
-        })
+    profile_index.map_or_else(
+        || Err("Missing --profile argument".to_string()),
+        |idx| {
+            if idx + 1 < args.len() {
+                ProfileMode::from_str(&args[idx + 1])
+            } else {
+                Err("Missing profile mode after --profile".to_string())
+            }
+        },
+    )
 }
 
 async fn profile_async(serverlessllm_dir: &str) {
@@ -156,10 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if test directory exists
     if !std::path::Path::new(&serverlessllm_dir).exists() {
-        eprintln!(
-            "❌ Test directory '{}' not found",
-            serverlessllm_dir
-        );
+        eprintln!("❌ Test directory '{}' not found", serverlessllm_dir);
         eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }
@@ -216,10 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if test directory exists
     if !std::path::Path::new(&serverlessllm_dir).exists() {
-        eprintln!(
-            "❌ Test directory '{}' not found",
-            serverlessllm_dir
-        );
+        eprintln!("❌ Test directory '{}' not found", serverlessllm_dir);
         eprintln!("Please ensure the fixture exists");
         std::process::exit(1);
     }

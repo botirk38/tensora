@@ -281,7 +281,7 @@ impl ServerlessLLMIndex {
             }
 
             // Execute batched I/O operation
-            let batch_results = backends::load_range_batch(&batch_requests)
+            let batch_results = backends::load_batch(&batch_requests)
                 .await
                 .map_err(ReaderError::from)?;
 

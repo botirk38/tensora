@@ -1,33 +1,29 @@
-//! io_uring-based async I/O backend for Linux.
+//! io_uring-based async I/O backend for Linux
 //!
-//! This backend leverages Linux's `io_uring` interface for maximum performance.
-//! It provides zero-copy operations and efficient parallel I/O for large files.
-//!
-//! # Platform Support
-//!
-//! This module is only available on Linux (requires kernel 5.1+).
-//!
-//! # Performance Characteristics
-//!
-//! - **Zero-copy**: Direct kernel-to-userspace transfers
-//! - **Parallel I/O**: True concurrent reads via `io_uring` submission queue
-//! - **Buffer pooling**: Reuses memory allocations across operations
-//!
-//! # Usage
-//!
-//! Typically accessed via `backends::load()` on Linux platforms, not used directly.
+//! Uses tokio-uring for high-performance async file operations with true zero-copy.
+//! - Uses buffer pools to minimize allocations
+//! - Efficient parallel chunked reads for large files
+//! - Proper io_uring batching - all operations submitted together
 
-use super::{IoResult, buffer_slice::BufferSlice, get_buffer_pool};
+use super::{IoResult, get_buffer_pool};
 use std::path::Path;
 use tokio_uring::fs::File as UringFile;
 
-/// Ceiling division: (a + b - 1) / b
-#[inline]
-const fn div_ceil(a: usize, b: usize) -> usize {
-    a.div_ceil(b)
-}
-
-/// Load tensor data using `io_uring` zero-copy I/O
+/// Load an entire file using `io_uring`.
+///
+/// Uses pooled buffers to minimize allocations and provides zero-copy reads.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to load
+///
+/// # Returns
+///
+/// Returns the file contents as a `Vec<u8>`.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or read.
 ///
 /// For files larger than 512MB, automatically uses parallel chunked reading
 /// to work around io_uring single-read size limitations.
@@ -47,7 +43,7 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
         // - Prefer one chunk per CPU core for maximum parallelism
         // - But ensure each chunk doesn't exceed MAX_SINGLE_READ
         let num_cpus = num_cpus::get();
-        let min_chunks_for_size = (file_size + MAX_SINGLE_READ - 1) / MAX_SINGLE_READ;
+        let min_chunks_for_size = file_size.div_ceil(MAX_SINGLE_READ);
         let chunks = std::cmp::max(num_cpus, min_chunks_for_size);
         return load_parallel(path_buf, chunks).await;
     }
@@ -76,7 +72,23 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     Ok(returned_buf.into_inner())
 }
 
-/// Load tensor data in parallel chunks using `io_uring` with true zero-copy
+/// Load tensor data in parallel chunks using `io_uring` with batched operations.
+///
+/// Opens the file once and submits all chunk reads to io_uring in a single batch,
+/// allowing the kernel to handle them concurrently.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to load
+/// * `chunks` - Number of chunks to split the file into
+///
+/// # Returns
+///
+/// Returns the file contents as a `Vec<u8>`.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened, read, or if chunk size exceeds limits.
 #[inline]
 pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Vec<u8>> {
     if chunks == 0 {
@@ -91,10 +103,9 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
     let file_size =
         usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
 
-    let chunk_size = div_ceil(file_size, chunks);
+    let chunk_size = file_size.div_ceil(chunks);
 
     // Validate chunk size doesn't exceed Vec capacity limit (isize::MAX)
-    // This is a Rust safety requirement: Vec capacity must fit in isize
     let max_capacity = usize::try_from(isize::MAX)
         .expect("isize::MAX should always fit in usize on the same platform");
     if chunk_size > max_capacity {
@@ -113,11 +124,13 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
     // Pre-allocate final pooled buffer - this is the ONLY allocation
     let mut final_buf = get_buffer_pool().get(file_size);
 
+    // Open file ONCE for all operations - key difference from old implementation
+    let file = UringFile::open(path_ref).await?;
+
     // SAFETY: We split final_buf into non-overlapping mutable slices.
-    // Each slice is passed to exactly one task via BufferSlice.
-    // The buffer remains valid until all tasks complete (we await all futures).
-    // No other code accesses final_buf until all futures are done.
-    let mut futures = Vec::with_capacity(chunks);
+    // Each slice is passed to exactly one read operation.
+    // The buffer remains valid until all operations complete (we await all futures).
+    let mut read_futures = Vec::with_capacity(chunks);
 
     for i in 0..chunks {
         let start = i.checked_mul(chunk_size).ok_or_else(|| {
@@ -146,6 +159,10 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
             break;
         }
 
+        let offset = u64::try_from(start).map_err(|_e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large")
+        })?;
+
         // Create non-overlapping mutable slice
         let chunk_slice = final_buf
             .as_mut_slice()
@@ -154,58 +171,62 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid chunk range")
             })?;
 
-        // SAFETY: This slice is unique to this future and won't be accessed elsewhere
-        let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
+        // SAFETY: This slice is unique to this read operation and won't be accessed elsewhere.
+        // We create a Vec from the raw parts to satisfy read_at's interface,
+        // but the data is written directly to the pre-allocated buffer slice (ZERO COPY!)
+        let slice_ptr = chunk_slice.as_mut_ptr();
+        let slice_len = chunk_slice.len();
+        let vec = unsafe { Vec::from_raw_parts(slice_ptr, 0, slice_len) };
 
-        let path_ref_clone = path_ref.to_path_buf();
-        let future = async move {
-            let file_clone = UringFile::open(&path_ref_clone).await?;
-            let offset = u64::try_from(start).map_err(|_e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large")
-            })?;
+        // Submit read operation - all will be batched by io_uring
+        let read_future = file.read_at(vec, offset);
+        read_futures.push((read_future, actual_chunk_size));
+    }
 
-            // SAFETY: We're the only future with access to this BufferSlice.
-            // We create a Vec from the raw parts to satisfy read_at's interface,
-            // but the data is written directly to the pre-allocated buffer slice (ZERO COPY!)
-            let slice = unsafe { buffer_slice.as_mut_slice() };
-            let vec = unsafe { Vec::from_raw_parts(slice.as_mut_ptr(), 0, slice.len()) };
-            let (res, returned_vec) = file_clone.read_at(vec, offset).await;
-            let n = res?;
+    // Wait for all read operations to complete concurrently
+    // io_uring handles these in parallel at the kernel level
+    let results =
+        futures::future::join_all(read_futures.into_iter().map(|(fut, expected)| async move {
+            let (res, returned_vec) = fut.await;
+            (res, returned_vec, expected)
+        }))
+        .await;
 
-            if n != actual_chunk_size {
+    // Check for errors and validate read sizes
+    for (res, returned_vec, expected_size) in results {
+        // Check for I/O errors
+        let n = match res {
+            Ok(n) => n,
+            Err(e) => {
                 // Don't drop returned_vec to avoid double-free
                 std::mem::forget(returned_vec);
-                file_clone.close().await?;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    format!("Expected to read {actual_chunk_size} bytes, but read {n}"),
-                ));
+                return Err(e);
             }
-
-            // Don't drop returned_vec, data is in slice
-            std::mem::forget(returned_vec);
-
-            file_clone.close().await?;
-            IoResult::Ok(())
         };
 
-        futures.push(future);
+        // Validate read size
+        if n != expected_size {
+            // Don't drop returned_vec to avoid double-free
+            std::mem::forget(returned_vec);
+            file.close().await?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("Expected to read {expected_size} bytes, but read {n}"),
+            ));
+        }
+
+        // Don't drop returned_vec - data is in final_buf slice
+        std::mem::forget(returned_vec);
     }
 
-    // Wait for all futures to complete concurrently
-    let results = futures::future::join_all(futures).await;
+    file.close().await?;
 
-    // Check for errors
-    for result in results {
-        result?;
-    }
-
-    // All data is now in final_buf, set correct length
-    final_buf.truncate(file_size);
     Ok(final_buf.into_inner())
 }
 
 /// Load a specific byte range from a file using `io_uring`.
+///
+/// Uses pooled buffers to minimize allocations.
 #[inline]
 pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
     let path_ref = path.as_ref();
@@ -214,7 +235,8 @@ pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoRe
     // Get buffer from pool (buffer pool optimization for reduced allocations)
     let pool = get_buffer_pool();
     let buf = pool.get(len);
-    let (res, mut read_buf) = file.read_at(buf, offset).await;
+
+    let (res, mut returned_buf) = file.read_at(buf, offset).await;
     let n = res?;
 
     if n != len {
@@ -228,31 +250,27 @@ pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoRe
     file.close().await?;
 
     // Buffer will be automatically returned to pool when dropped
-    read_buf.truncate(n);
-    Ok(read_buf.into_inner())
+    returned_buf.truncate(n);
+    Ok(returned_buf.into_inner())
 }
 
-/// Load multiple byte ranges from potentially different files using `io_uring` batching.
+/// Load multiple file ranges in a single batched operation.
 ///
-/// This function groups requests by file path, opens each file once, and submits
-/// all read operations to the io_uring submission queue before awaiting any completions.
-/// This provides true parallel I/O with multiple in-flight operations.
+/// All reads are submitted to io_uring concurrently for maximum throughput.
 ///
 /// # Arguments
 ///
-/// * `requests` - A slice of (path, offset, len) tuples specifying what to read
+/// * `requests` - Slice of (path, offset, length) tuples
 ///
 /// # Returns
 ///
-/// A vector of `Vec<u8>` in the same order as the input requests.
+/// Returns a vector of byte vectors, one per request, in the same order.
 ///
 /// # Errors
 ///
-/// Returns an error if any file cannot be opened or if any read operation fails.
+/// Returns an error if any file cannot be opened or read.
 #[inline]
-pub async fn load_range_batch(
-    requests: &[(impl AsRef<Path> + Send + Sync, u64, usize)],
-) -> IoResult<Vec<Vec<u8>>> {
+pub async fn load_batch(requests: &[(impl AsRef<Path>, u64, usize)]) -> IoResult<Vec<Vec<u8>>> {
     use std::collections::HashMap;
 
     if requests.is_empty() {

@@ -75,22 +75,25 @@ fn bench_io_uring_prewarmed(c: &mut Criterion) {
 
     for (model_name, path) in &fixtures {
         let path_str = path.to_str().unwrap();
-        c.bench_function(&format!("io_uring_safetensors_prewarmed_{}", model_name), |b| {
-            // Prewarm the buffer pool once before all iterations
-            tokio_uring::start(async {
-                for _ in 0..2 {
-                    let _warmup = safetensors::load(path_str).await.unwrap();
-                }
-            });
-
-            b.iter(|| {
+        c.bench_function(
+            &format!("io_uring_safetensors_prewarmed_{}", model_name),
+            |b| {
+                // Prewarm the buffer pool once before all iterations
                 tokio_uring::start(async {
-                    let data = safetensors::load(black_box(path_str)).await.unwrap();
-                    let tensor_count = data.names().len();
-                    black_box((data, tensor_count))
-                })
-            });
-        });
+                    for _ in 0..2 {
+                        let _warmup = safetensors::load(path_str).await.unwrap();
+                    }
+                });
+
+                b.iter(|| {
+                    tokio_uring::start(async {
+                        let data = safetensors::load(black_box(path_str)).await.unwrap();
+                        let tensor_count = data.names().len();
+                        black_box((data, tensor_count))
+                    })
+                });
+            },
+        );
     }
 }
 
@@ -118,15 +121,18 @@ fn bench_tokio_parallel(c: &mut Criterion) {
 
     for (model_name, path) in &fixtures {
         let path_str = path.to_str().unwrap();
-        c.bench_function(&format!("tokio_safetensors_parallel_4_{}", model_name), |b| {
-            b.to_async(&rt).iter(|| async {
-                let data = safetensors::load_parallel(black_box(path_str), 4)
-                    .await
-                    .unwrap();
-                let tensor_count = data.names().len();
-                black_box((data, tensor_count))
-            });
-        });
+        c.bench_function(
+            &format!("tokio_safetensors_parallel_4_{}", model_name),
+            |b| {
+                b.to_async(&rt).iter(|| async {
+                    let data = safetensors::load_parallel(black_box(path_str), 4)
+                        .await
+                        .unwrap();
+                    let tensor_count = data.names().len();
+                    black_box((data, tensor_count))
+                });
+            },
+        );
     }
 }
 
@@ -137,20 +143,23 @@ fn bench_tokio_prewarmed(c: &mut Criterion) {
 
     for (model_name, path) in &fixtures {
         let path_str = path.to_str().unwrap();
-        c.bench_function(&format!("tokio_safetensors_prewarmed_{}", model_name), |b| {
-            // Prewarm the buffer pool once before all iterations
-            rt.block_on(async {
-                for _ in 0..2 {
-                    let _warmup = safetensors::load(path_str).await.unwrap();
-                }
-            });
+        c.bench_function(
+            &format!("tokio_safetensors_prewarmed_{}", model_name),
+            |b| {
+                // Prewarm the buffer pool once before all iterations
+                rt.block_on(async {
+                    for _ in 0..2 {
+                        let _warmup = safetensors::load(path_str).await.unwrap();
+                    }
+                });
 
-            b.to_async(&rt).iter(|| async {
-                let data = safetensors::load(black_box(path_str)).await.unwrap();
-                let tensor_count = data.names().len();
-                black_box((data, tensor_count))
-            });
-        });
+                b.to_async(&rt).iter(|| async {
+                    let data = safetensors::load(black_box(path_str)).await.unwrap();
+                    let tensor_count = data.names().len();
+                    black_box((data, tensor_count))
+                });
+            },
+        );
     }
 }
 

@@ -46,11 +46,13 @@ pub async fn convert_safetensors_to_serverlessllm(
     // Calculate optimal chunk count for parallel loading
     // Use thread-per-core by default, but ensure chunks stay under 2GB (isize::MAX limitation)
     const MAX_CHUNK_SIZE: usize = 2_000_000_000; // ~2GB, safely under isize::MAX (2,147,483,647)
-    let file_size = usize::try_from(tokio::fs::metadata(input_path).await?.len())
-        .map_err(|_e| WriterError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "file too large"
-        )))?;
+    let file_size =
+        usize::try_from(tokio::fs::metadata(input_path).await?.len()).map_err(|_e| {
+            WriterError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "file too large",
+            ))
+        })?;
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
