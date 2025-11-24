@@ -42,6 +42,23 @@ use std::path::PathBuf;
 use tensor_store::readers::serverlessllm;
 use tensor_store::readers::traits::TensorMetadata;
 
+/// Touch one byte per page so mmap benches pay the page fault cost.
+fn touch_pages(data: &[u8]) -> u8 {
+    const PAGE: usize = 4096;
+    if data.is_empty() {
+        return 0;
+    }
+
+    let mut idx = 0;
+    let mut checksum = 0u8;
+    while idx < data.len() {
+        checksum ^= data[idx];
+        idx += PAGE;
+    }
+
+    checksum ^ data[data.len() - 1]
+}
+
 fn discover_fixtures() -> Vec<(String, PathBuf)> {
     let fixtures_dir = std::path::Path::new("fixtures");
     let mut fixtures = Vec::new();
@@ -135,15 +152,19 @@ fn bench_mmap_serverlessllm_load(c: &mut Criterion) {
         c.bench_function(&format!("mmap_serverlessllm_load_{}", model_name), |b| {
             b.iter(|| {
                 let model = serverlessllm::load_mmap(black_box(dir_str)).unwrap();
-                let tensor_count = model.len();
+                let tensor_names = model.tensor_names();
+                let tensor_count = tensor_names.len();
 
                 let mut total_bytes = 0;
-                for name in model.tensor_names() {
+                let mut checksum = 0u8;
+                for name in tensor_names {
                     let tensor = model.tensor(name).unwrap();
-                    total_bytes += tensor.data().len();
+                    let data = tensor.data();
+                    total_bytes += data.len();
+                    checksum ^= touch_pages(data);
                 }
 
-                black_box((total_bytes, tensor_count))
+                black_box((total_bytes, tensor_count, checksum))
             });
         });
     }

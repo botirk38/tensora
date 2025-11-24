@@ -4,6 +4,23 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use tensor_store::readers::safetensors;
 
+/// Touch one byte per page to ensure mmap benches trigger page faults.
+fn touch_pages(data: &[u8]) -> u8 {
+    const PAGE: usize = 4096;
+    if data.is_empty() {
+        return 0;
+    }
+
+    let mut idx = 0;
+    let mut checksum = 0u8;
+    while idx < data.len() {
+        checksum ^= data[idx];
+        idx += PAGE;
+    }
+
+    checksum ^ data[data.len() - 1]
+}
+
 fn discover_fixtures() -> Vec<(String, PathBuf)> {
     let fixtures_dir = std::path::Path::new("fixtures");
     let mut fixtures = Vec::new();
@@ -186,8 +203,18 @@ fn bench_mmap_safetensors(c: &mut Criterion) {
         c.bench_function(&format!("mmap_safetensors_load_{}", model_name), |b| {
             b.iter(|| {
                 let data = safetensors::load_mmap(black_box(path_str)).unwrap();
-                let tensor_count = data.tensors().names().len();
-                black_box((data, tensor_count))
+                let tensors = data.tensors();
+                let names = tensors.names();
+                let tensor_count = names.len();
+
+                let mut checksum = 0u8;
+                for name in names {
+                    let tensor = tensors.tensor(name).unwrap();
+                    let bytes = tensor.data();
+                    checksum ^= touch_pages(bytes.as_ref());
+                }
+
+                black_box((data, tensor_count, checksum))
             });
         });
     }

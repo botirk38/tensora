@@ -34,14 +34,37 @@ pub mod sync_io;
 pub use std::io::Result as IoResult;
 use zeropool::BufferPool;
 
+// Tuned for ML checkpoint loading (matches zeropool's profiling example).
+const CHECKPOINT_NUM_SHARDS: usize = 8;
+const CHECKPOINT_TLS_CACHE_SIZE: usize = 4;
+const CHECKPOINT_MAX_BUFFERS_PER_SHARD: usize = 32;
+const CHECKPOINT_MIN_BUFFER_SIZE: usize = 1024 * 1024; // 1MB minimum (drop tiny buffers)
 /// Global buffer pool for tensor data.
 /// Uses BufferPool for efficient buffer management.
 static BUFFER_POOL: std::sync::OnceLock<BufferPool> = std::sync::OnceLock::new();
 
+/// Build a buffer pool tuned for checkpoint loading workloads.
+///
+/// Settings mirror zeropool's ML checkpoint loader profile:
+/// - Enough shards to reduce contention while keeping cache locality
+/// - Modest TLS cache to keep metadata + weight buffers hot per thread
+/// - Larger shard capacity to absorb bursty tensor allocations
+/// - 1MB minimum buffer size to avoid polluting the pool with tiny buffers
+fn build_buffer_pool() -> BufferPool {
+    BufferPool::builder()
+        .num_shards(CHECKPOINT_NUM_SHARDS)
+        .tls_cache_size(CHECKPOINT_TLS_CACHE_SIZE)
+        .max_buffers_per_shard(CHECKPOINT_MAX_BUFFERS_PER_SHARD)
+        .min_buffer_size(CHECKPOINT_MIN_BUFFER_SIZE)
+        // Pin memory to avoid page faults during high-throughput checkpoint reads.
+        .pinned_memory(true)
+        .build()
+}
+
 /// Get the global buffer pool instance.
 #[inline]
 pub fn get_buffer_pool() -> &'static BufferPool {
-    BUFFER_POOL.get_or_init(BufferPool::new)
+    BUFFER_POOL.get_or_init(build_buffer_pool)
 }
 
 // ============================================================================
