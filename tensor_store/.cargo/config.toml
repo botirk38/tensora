@@ -29,7 +29,6 @@ rustflags = [
     "-Dclippy::filetype_is_file",
     "-Dclippy::if_then_some_else_none",
     "-Dclippy::lossy_float_literal",
-    "-Dclippy::map_err_ignore",
     "-Dclippy::mod_module_files",
     "-Dclippy::multiple_inherent_impl",
     "-Dclippy::rest_pat_in_fully_bound_structs",

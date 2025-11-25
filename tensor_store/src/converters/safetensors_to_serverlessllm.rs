@@ -129,7 +129,7 @@ pub async fn convert_safetensors_to_serverlessllm(
         .enumerate()
         .map(|(id, data)| {
             let part_path = out_dir.join(format!("tensor.data_{id}"));
-            async move { writer.write_partition(&part_path, &data).await }
+            async move { writer.write_partition(&part_path, data).await }
         })
         .collect();
 

@@ -36,7 +36,7 @@
 //! // ServerlessLLM format
 //! let writer = ServerlessLlmWriter::new();
 //! writer.write_index("tensor_index.json", &tensors).await?;
-//! writer.write_partition("tensor.data_0", &data).await?;
+//! writer.write_partition("tensor.data_0", data).await?;
 //!
 //! // SafeTensors format
 //! let writer = SafeTensorsWriter::new();

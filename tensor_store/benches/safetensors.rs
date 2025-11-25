@@ -27,13 +27,13 @@ fn discover_fixtures() -> Vec<(String, PathBuf)> {
 
     if let Ok(entries) = std::fs::read_dir(fixtures_dir) {
         for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_dir() {
-                    let model_path = entry.path().join("model.safetensors");
-                    if model_path.exists() {
-                        let model_name = entry.file_name().to_string_lossy().to_string();
-                        fixtures.push((model_name, model_path));
-                    }
+            if let Ok(file_type) = entry.file_type()
+                && file_type.is_dir()
+            {
+                let model_path = entry.path().join("model.safetensors");
+                if model_path.exists() {
+                    let model_name = entry.file_name().to_string_lossy().to_string();
+                    fixtures.push((model_name, model_path));
                 }
             }
         }
@@ -86,34 +86,6 @@ fn bench_io_uring_parallel_n_chunks(c: &mut Criterion) {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn bench_io_uring_prewarmed(c: &mut Criterion) {
-    let fixtures = discover_fixtures();
-
-    for (model_name, path) in &fixtures {
-        let path_str = path.to_str().unwrap();
-        c.bench_function(
-            &format!("io_uring_safetensors_prewarmed_{}", model_name),
-            |b| {
-                // Prewarm the buffer pool once before all iterations
-                tokio_uring::start(async {
-                    for _ in 0..2 {
-                        let _warmup = safetensors::load(path_str).await.unwrap();
-                    }
-                });
-
-                b.iter(|| {
-                    tokio_uring::start(async {
-                        let data = safetensors::load(black_box(path_str)).await.unwrap();
-                        let tensor_count = data.names().len();
-                        black_box((data, tensor_count))
-                    })
-                });
-            },
-        );
-    }
-}
-
 #[cfg(not(target_os = "linux"))]
 fn bench_tokio_load(c: &mut Criterion) {
     let fixtures = discover_fixtures();
@@ -153,33 +125,6 @@ fn bench_tokio_parallel(c: &mut Criterion) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn bench_tokio_prewarmed(c: &mut Criterion) {
-    let fixtures = discover_fixtures();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-
-    for (model_name, path) in &fixtures {
-        let path_str = path.to_str().unwrap();
-        c.bench_function(
-            &format!("tokio_safetensors_prewarmed_{}", model_name),
-            |b| {
-                // Prewarm the buffer pool once before all iterations
-                rt.block_on(async {
-                    for _ in 0..2 {
-                        let _warmup = safetensors::load(path_str).await.unwrap();
-                    }
-                });
-
-                b.to_async(&rt).iter(|| async {
-                    let data = safetensors::load(black_box(path_str)).await.unwrap();
-                    let tensor_count = data.names().len();
-                    black_box((data, tensor_count))
-                });
-            },
-        );
-    }
-}
-
 fn bench_sync_safetensors(c: &mut Criterion) {
     let fixtures = discover_fixtures();
 
@@ -211,7 +156,7 @@ fn bench_mmap_safetensors(c: &mut Criterion) {
                 for name in names {
                     let tensor = tensors.tensor(name).unwrap();
                     let bytes = tensor.data();
-                    checksum ^= touch_pages(bytes.as_ref());
+                    checksum ^= touch_pages(bytes);
                 }
 
                 black_box((data, tensor_count, checksum))
@@ -241,7 +186,6 @@ criterion_group!(
     benches,
     bench_io_uring_load,
     bench_io_uring_parallel_n_chunks,
-    bench_io_uring_prewarmed,
     bench_sync_safetensors,
     bench_mmap_safetensors,
     bench_original_safetensors
@@ -252,7 +196,6 @@ criterion_group!(
     benches,
     bench_tokio_load,
     bench_tokio_parallel,
-    bench_tokio_prewarmed,
     bench_sync_safetensors,
     bench_mmap_safetensors,
     bench_original_safetensors

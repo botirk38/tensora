@@ -25,11 +25,11 @@
 //! // Async usage
 //! let writer = ServerlessLlmWriter::new();
 //! writer.write_index("tensor_index.json", &tensors).await?;
-//! writer.write_partition("tensor.data_0", 0, &data).await?;
+//! writer.write_partition("tensor.data_0", data).await?;
 //!
 //! // Sync usage
 //! writer.write_index_sync("tensor_index.json", &tensors)?;
-//! writer.write_partition_sync("tensor.data_0", 0, &data)?;
+//! writer.write_partition_sync("tensor.data_0", &data)?;
 //! ```
 
 use crate::backends;
@@ -85,7 +85,7 @@ impl ServerlessLlmWriter {
     pub async fn write_partition(
         &self,
         output_path: impl AsRef<Path>,
-        data: &[u8],
+        data: impl Into<Vec<u8>>,
     ) -> WriterResult<()> {
         write_partition(output_path, data).await
     }
@@ -197,13 +197,9 @@ pub async fn write_index(
     ensure_parent_dir_async(path).await?;
 
     let json = serialize_index(tensors)?;
-    backends::write_all(
-        path.to_str()
-            .ok_or_else(|| WriterError::Path("Invalid UTF-8 in path".to_owned()))?,
-        &json,
-    )
-    .await
-    .map_err(WriterError::from)
+    backends::write_all(path, json)
+        .await
+        .map_err(WriterError::from)
 }
 
 /// Write partition file (`tensor.data_N`) asynchronously.
@@ -219,16 +215,16 @@ pub async fn write_index(
 /// - Parent directory cannot be created
 /// - File cannot be written
 #[inline]
-pub async fn write_partition(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
+pub async fn write_partition(
+    output_path: impl AsRef<Path>,
+    data: impl Into<Vec<u8>>,
+) -> WriterResult<()> {
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
-    backends::write_all(
-        path.to_str()
-            .ok_or_else(|| WriterError::Path("Invalid UTF-8 in path".to_owned()))?,
-        data,
-    )
-    .await
-    .map_err(WriterError::from)
+    let bytes = data.into();
+    backends::write_all(path, bytes)
+        .await
+        .map_err(WriterError::from)
 }
 
 /// Write `tensor_index.json` synchronously.

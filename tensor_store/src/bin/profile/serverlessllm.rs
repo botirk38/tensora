@@ -98,7 +98,7 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
         );
         tokio_uring::start(async {
             for _ in 0..iterations {
-                let model = serverlessllm::load(&dir_str)?;
+                let model = serverlessllm::load(&dir_str).await?;
                 let tensor_count = model.len();
                 let mut total_bytes = 0;
                 for (_name, tensor) in &model {
@@ -132,7 +132,7 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
         );
         rt.block_on(async {
             for _ in 0..iterations {
-                let model = serverlessllm::load(&dir_str)?;
+                let model = serverlessllm::load(&dir_str).await?;
                 let tensor_count = model.len();
                 let mut total_bytes = 0;
                 for (_name, tensor) in &model {
@@ -157,7 +157,7 @@ fn sync_load(config: &ProfileConfig) -> ProfileResult {
             fixture
         );
         for _ in 0..iterations {
-            let model = serverlessllm::load(&dir)?;
+            let model = serverlessllm::load_sync(&dir)?;
             let tensor_count = model.len();
             let mut total_bytes = 0;
             for (_name, tensor) in &model {

@@ -7,11 +7,15 @@
 //!    - Measures complete end-to-end model loading
 //!    - Use this for realistic performance expectations on Linux
 //!
-//! 2. `tokio_serverlessllm_all_tensors` - Async loading with tokio
-//!    - Measures asynchronous I/O performance
-//!    - Use this for comparison with sync versions
+//! 2. `io_uring_serverlessllm_load_{model}` - Async loading with io_uring (Linux only)
+//!    - Measures asynchronous I/O performance with io_uring
+//!    - Use this for high-performance async loading on Linux
 //!
-//! 3. `sync_serverlessllm_all_tensors` - Synchronous loading baseline
+//! 3. `tokio_serverlessllm_load_{model}` - Async loading with tokio (non-Linux)
+//!    - Measures asynchronous I/O performance with tokio
+//!    - Use this for async loading on non-Linux platforms
+//!
+//! 4. `sync_serverlessllm_all_tensors` - Synchronous loading baseline
 //!    - Measures synchronous I/O performance
 //!    - Use this for comparison with async versions
 //!
@@ -23,11 +27,14 @@
 //! # Profile cold start performance (Linux with io_uring)
 //! cargo flamegraph --bench serverlessllm -- --bench cold_start_realistic_e2e
 //!
-//! # Profile tokio async loading
-//! cargo flamegraph --bench serverlessllm -- --bench tokio_serverlessllm_all_tensors
+//! # Profile io_uring async loading (Linux only)
+//! cargo flamegraph --bench serverlessllm -- --bench io_uring_serverlessllm_load_{model}
+//!
+//! # Profile tokio async loading (non-Linux)
+//! cargo flamegraph --bench serverlessllm -- --bench tokio_serverlessllm_load_{model}
 //!
 //! # Profile sync loading
-//! cargo flamegraph --bench serverlessllm -- --bench sync_serverlessllm_all_tensors
+//! cargo flamegraph --bench serverlessllm -- --bench sync_serverlessllm_load_{model}
 //! ```
 //!
 //! ## Test Data
@@ -65,13 +72,13 @@ fn discover_fixtures() -> Vec<(String, PathBuf)> {
 
     if let Ok(entries) = std::fs::read_dir(fixtures_dir) {
         for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_dir() {
-                    let model_dir = entry.path().join("model_serverlessllm");
-                    if model_dir.exists() && model_dir.is_dir() {
-                        let model_name = entry.file_name().to_string_lossy().to_string();
-                        fixtures.push((model_name, model_dir));
-                    }
+            if let Ok(file_type) = entry.file_type()
+                && file_type.is_dir()
+            {
+                let model_dir = entry.path().join("model_serverlessllm");
+                if model_dir.exists() && model_dir.is_dir() {
+                    let model_name = entry.file_name().to_string_lossy().to_string();
+                    fixtures.push((model_name, model_dir));
                 }
             }
         }
@@ -82,6 +89,34 @@ fn discover_fixtures() -> Vec<(String, PathBuf)> {
     fixtures
 }
 
+#[cfg(target_os = "linux")]
+fn bench_io_uring_serverlessllm_load(c: &mut Criterion) {
+    let fixtures = discover_fixtures();
+
+    for (model_name, dir) in &fixtures {
+        let dir_str = dir.to_str().unwrap();
+        c.bench_function(
+            &format!("io_uring_serverlessllm_load_{}", model_name),
+            |b| {
+                b.iter(|| {
+                    tokio_uring::start(async {
+                        let model = serverlessllm::load(black_box(dir_str)).await.unwrap();
+                        let tensor_count = model.len();
+
+                        let mut total_bytes = 0;
+                        for (_name, tensor) in &model {
+                            total_bytes += tensor.data().len();
+                        }
+
+                        black_box((total_bytes, tensor_count))
+                    })
+                });
+            },
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn bench_tokio_serverlessllm_load(c: &mut Criterion) {
     let fixtures = discover_fixtures();
 
@@ -89,35 +124,18 @@ fn bench_tokio_serverlessllm_load(c: &mut Criterion) {
         let dir_str = dir.to_str().unwrap();
         c.bench_function(&format!("tokio_serverlessllm_load_{}", model_name), |b| {
             b.iter(|| {
-                #[cfg(target_os = "linux")]
-                {
-                    tokio_uring::start(async {
-                        let model = serverlessllm::load(black_box(dir_str)).unwrap();
-                        let tensor_count = model.len();
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let model = serverlessllm::load(black_box(dir_str)).await.unwrap();
+                    let tensor_count = model.len();
 
-                        let mut total_bytes = 0;
-                        for (_name, tensor) in &model {
-                            total_bytes += tensor.data().len();
-                        }
+                    let mut total_bytes = 0;
+                    for (_name, tensor) in &model {
+                        total_bytes += tensor.data().len();
+                    }
 
-                        black_box((total_bytes, tensor_count))
-                    })
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        let model = serverlessllm::load(black_box(dir_str)).unwrap();
-                        let tensor_count = model.len();
-
-                        let mut total_bytes = 0;
-                        for (_name, tensor) in &model {
-                            total_bytes += tensor.data().len();
-                        }
-
-                        black_box((total_bytes, tensor_count))
-                    })
-                }
+                    black_box((total_bytes, tensor_count))
+                })
             });
         });
     }
@@ -130,7 +148,7 @@ fn bench_sync_serverlessllm_load(c: &mut Criterion) {
         let dir_str = dir.to_str().unwrap();
         c.bench_function(&format!("sync_serverlessllm_load_{}", model_name), |b| {
             b.iter(|| {
-                let model = serverlessllm::load(black_box(dir_str)).unwrap();
+                let model = serverlessllm::load_sync(black_box(dir_str)).unwrap();
                 let tensor_count = model.len();
 
                 let mut total_bytes = 0;
@@ -173,7 +191,7 @@ fn bench_mmap_serverlessllm_load(c: &mut Criterion) {
 #[cfg(target_os = "linux")]
 criterion_group!(
     benches,
-    bench_tokio_serverlessllm_load,
+    bench_io_uring_serverlessllm_load,
     bench_sync_serverlessllm_load,
     bench_mmap_serverlessllm_load
 );

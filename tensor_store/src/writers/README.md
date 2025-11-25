@@ -87,7 +87,7 @@ writer.write_index(output_path, &serverlessllm_tensors).await?;
 // 3. Write partition files as needed
 for (partition_id, data) in partitions {
     let partition_path = format!("tensor.data_{}", partition_id);
-    writer.write_partition(&partition_path, partition_id, &data).await?;
+    writer.write_partition(&partition_path, data).await?;
 }
 ```
 

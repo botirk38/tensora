@@ -18,7 +18,7 @@
 //! // Async operations (default, recommended)
 //! let data = backends::load("model.safetensors").await?;
 //! let data = backends::load_parallel("model.safetensors", 4).await?;
-//! backends::write_all("output.bin", &data).await?;
+//! backends::write_all("output.bin", data).await?;
 //!
 //! // Sync operations (for blocking contexts)
 //! let data = backends::sync::load("model.safetensors")?;
@@ -26,9 +26,11 @@
 //! ```
 
 pub mod async_io;
+pub mod batch;
 pub mod buffer_slice;
 pub mod io_uring;
 pub mod mmap;
+pub mod odirect;
 pub mod sync_io;
 
 pub use std::io::Result as IoResult;
@@ -116,13 +118,15 @@ pub use async_io::load_batch;
 /// Write entire buffer to file asynchronously.
 ///
 /// Uses `io_uring` on Linux, tokio async I/O elsewhere.
+/// Write entire buffer to file asynchronously.
 #[cfg(target_os = "linux")]
 pub use io_uring::write_all;
 
+/// Write entire buffer to file asynchronously (tokio fallback).
 #[cfg(not(target_os = "linux"))]
 pub use async_io::write_all;
 
 /// Synchronous blocking I/O
 pub mod sync {
-    pub use super::sync_io::{load, load_range};
+    pub use super::sync_io::{load, load_range, load_range_batch, write_all};
 }

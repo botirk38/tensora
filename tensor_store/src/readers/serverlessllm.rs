@@ -24,8 +24,14 @@
 //! ```rust,ignore
 //! use tensor_store::readers::serverlessllm;
 //!
-//! // Load entire model with eager loading
+//! // Load entire model with eager loading (async)
 //! let model = serverlessllm::load("model_dir/").await?;
+//!
+//! // Or synchronously
+//! let model = serverlessllm::load_sync("model_dir/")?;
+//!
+//! // Lazy mmap loading (sync)
+//! let model_mmap = serverlessllm::load_mmap("model_dir/")?;
 //! println!("Loaded {} tensors", model.len());
 //!
 //! // Access tensors by name
@@ -44,7 +50,11 @@
 //!
 //! ```rust,ignore
 //! // Parse index file
+//! // Async API
 //! let index = serverlessllm::parse_index("model/tensor_index.json").await?;
+//!
+//! // Sync API
+//! let index = serverlessllm::parse_index_sync("model/tensor_index.json")?;
 //!
 //! // Load individual tensors
 //! let weight = index.load_tensor("model/tensor.data", "layer.0.weight").await?;
@@ -57,9 +67,12 @@ use crate::backends;
 use crate::readers::error::{ReaderError, ReaderResult};
 use crate::readers::traits::{AsyncReader, SyncReader, TensorMetadata};
 use crate::types::serverlessllm::TensorEntry;
+use futures::future;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
+use tokio_uring::fs::statx;
 
 /// Parsed `ServerlessLLM` index
 #[derive(Debug, Default)]
@@ -149,10 +162,12 @@ impl ServerlessLLMIndex {
             ReaderError::ServerlessLlm(format!("tensor '{tensor_name}' not found in index"))
         })?;
 
-        let partition_path = format!("{}_{}", base_path.as_ref().display(), entry.partition_id);
+        let base_path_str = base_path.as_ref().to_string_lossy();
+        let partition_path = format!("{}_{}", base_path_str, entry.partition_id);
 
         // Validate partition file before loading
-        self.validate_single_partition(&partition_path, entry)?;
+        self.validate_single_partition_async(&partition_path, entry)
+            .await?;
 
         let data = backends::load_range(
             &partition_path,
@@ -198,7 +213,8 @@ impl ServerlessLLMIndex {
             ReaderError::ServerlessLlm(format!("tensor '{tensor_name}' not found in index"))
         })?;
 
-        let partition_path = format!("{}_{}", base_path.as_ref().display(), entry.partition_id);
+        let base_path_str = base_path.as_ref().to_string_lossy();
+        let partition_path = format!("{}_{}", base_path_str, entry.partition_id);
 
         // Validate partition file before loading
         self.validate_single_partition(&partition_path, entry)?;
@@ -261,37 +277,194 @@ impl ServerlessLLMIndex {
                 .push((name.clone(), entry));
         }
 
-        // Process each partition file with batched I/O
-        let mut tensors = HashMap::with_capacity(tensor_names.len());
+        // Build paths and stat partitions concurrently (non-blocking)
+        let partition_paths: StdHashMap<usize, String> = partition_requests
+            .keys()
+            .map(|&partition_id| (partition_id, format!("{}_{}", base_path_str, partition_id)))
+            .collect();
 
-        for (partition_id, partition_entries) in partition_requests {
-            let partition_path = format!("{}_{}", base_path_str, partition_id);
+        let partition_sizes_vec = future::try_join_all(partition_paths.iter().map(
+            |(partition_id, path)| async move {
+                let size = stat_partition_size(path).await?;
+                ReaderResult::Ok((*partition_id, size))
+            },
+        ))
+        .await?;
 
-            // Validate all partition files first
-            for (_name, entry) in &partition_entries {
-                self.validate_single_partition(&partition_path, entry)?;
-            }
+        let partition_sizes: StdHashMap<usize, u64> = partition_sizes_vec.into_iter().collect();
 
-            // Prepare batch requests for this partition
-            let mut batch_requests = Vec::with_capacity(partition_entries.len());
-            for (_name, entry) in &partition_entries {
-                let len = usize::try_from(entry.size)
-                    .map_err(|e| ReaderError::ServerlessLlm(format!("size too large: {e}")))?;
-                batch_requests.push((&partition_path, entry.offset, len));
-            }
-
-            // Execute batched I/O operation
-            let batch_results = backends::load_batch(&batch_requests)
-                .await
-                .map_err(ReaderError::from)?;
-
-            // Map results back to tensor names
-            for ((name, _entry), data) in partition_entries.into_iter().zip(batch_results) {
-                tensors.insert(name, data);
+        if let Ok(mut cache) = self.partition_cache.lock() {
+            for (partition_id, size) in &partition_sizes {
+                cache.insert(*partition_id, *size);
             }
         }
 
-        Ok(tensors)
+        let mut batch_requests = Vec::with_capacity(entries.len());
+        let mut names = Vec::with_capacity(entries.len());
+
+        for (name, entry) in &entries {
+            let required_size = entry
+                .offset
+                .checked_add(entry.size)
+                .ok_or_else(|| ReaderError::ServerlessLlm("offset + size overflow".to_owned()))?;
+
+            let partition_path = partition_paths.get(&entry.partition_id).ok_or_else(|| {
+                ReaderError::ServerlessLlm(format!(
+                    "partition {} missing path resolution",
+                    entry.partition_id
+                ))
+            })?;
+
+            let actual_size = *partition_sizes.get(&entry.partition_id).ok_or_else(|| {
+                ReaderError::ServerlessLlm(format!(
+                    "partition file '{}' not found or inaccessible",
+                    partition_path
+                ))
+            })?;
+
+            if actual_size < required_size {
+                return Err(ReaderError::ServerlessLlm(format!(
+                    "partition file '{}' is too small: has {actual_size} bytes, needs at least {required_size} bytes for tensor at offset {} size {}",
+                    partition_path, entry.offset, entry.size
+                )));
+            }
+
+            let len = usize::try_from(entry.size)
+                .map_err(|e| ReaderError::ServerlessLlm(format!("size too large: {e}")))?;
+
+            batch_requests.push((partition_path.as_str(), entry.offset, len));
+            names.push(name.clone());
+        }
+
+        let batch_results = backends::load_batch(&batch_requests)
+            .await
+            .map_err(ReaderError::from)?;
+
+        // Convert results to owned Vec<u8> for API compatibility
+        let mut result = HashMap::with_capacity(names.len());
+        for (name, (buf, offset, len)) in names.into_iter().zip(batch_results) {
+            let data = if offset == 0 && len == buf.len() {
+                buf
+            } else {
+                buf[offset..offset + len].to_vec()
+            };
+            result.insert(name, data);
+        }
+
+        Ok(result)
+    }
+
+    /// Loads multiple tensors concurrently using io_uring batching (zero-copy).
+    ///
+    /// This method loads tensors in parallel, leveraging io_uring's kernel-level
+    /// batching for optimal performance when loading multiple tensors.
+    /// Returns shared buffers with offset/length metadata for zero-copy access.
+    ///
+    /// # Arguments
+    ///
+    /// * `base_path` - Base path (without the partition suffix)
+    /// * `tensor_names` - Names of tensors to load
+    ///
+    /// # Returns
+    ///
+    /// A HashMap mapping tensor names to (shared_buffer, offset, length) tuples.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any tensor is not found or if I/O errors occur.
+    /// All tensors are validated before loading begins.
+    pub async fn load_tensors_batch_zero_copy(
+        &self,
+        base_path: impl AsRef<Path>,
+        tensor_names: &[&str],
+    ) -> ReaderResult<HashMap<String, (Vec<u8>, usize, usize)>> {
+        use std::collections::HashMap as StdHashMap;
+
+        // Validate all tensors exist first
+        let mut entries = Vec::with_capacity(tensor_names.len());
+        for &name in tensor_names {
+            let entry = self.tensors.get(name).ok_or_else(|| {
+                ReaderError::ServerlessLlm(format!("tensor '{name}' not found in index"))
+            })?;
+            entries.push((name.to_string(), entry));
+        }
+
+        // Group requests by partition file for true io_uring batching
+        let mut partition_requests: StdHashMap<usize, Vec<(String, &TensorEntry)>> =
+            StdHashMap::new();
+        let base_path_str = base_path.as_ref().to_string_lossy();
+
+        for (name, entry) in &entries {
+            partition_requests
+                .entry(entry.partition_id)
+                .or_default()
+                .push((name.clone(), entry));
+        }
+
+        // Build paths and stat partitions concurrently (non-blocking)
+        let partition_paths: StdHashMap<usize, String> = partition_requests
+            .keys()
+            .map(|&partition_id| (partition_id, format!("{}_{}", base_path_str, partition_id)))
+            .collect();
+
+        let partition_sizes_vec = future::try_join_all(partition_paths.iter().map(
+            |(partition_id, path)| async move {
+                let size = stat_partition_size(path).await?;
+                ReaderResult::Ok((*partition_id, size))
+            },
+        ))
+        .await?;
+
+        let partition_sizes: StdHashMap<usize, u64> = partition_sizes_vec.into_iter().collect();
+
+        if let Ok(mut cache) = self.partition_cache.lock() {
+            for (partition_id, size) in &partition_sizes {
+                cache.insert(*partition_id, *size);
+            }
+        }
+
+        let mut batch_requests = Vec::with_capacity(entries.len());
+        let mut names = Vec::with_capacity(entries.len());
+
+        for (name, entry) in &entries {
+            let required_size = entry
+                .offset
+                .checked_add(entry.size)
+                .ok_or_else(|| ReaderError::ServerlessLlm("offset + size overflow".to_owned()))?;
+
+            let partition_path = partition_paths.get(&entry.partition_id).ok_or_else(|| {
+                ReaderError::ServerlessLlm(format!(
+                    "partition {} missing path resolution",
+                    entry.partition_id
+                ))
+            })?;
+
+            let actual_size = *partition_sizes.get(&entry.partition_id).ok_or_else(|| {
+                ReaderError::ServerlessLlm(format!(
+                    "partition file '{}' not found or inaccessible",
+                    partition_path
+                ))
+            })?;
+
+            if actual_size < required_size {
+                return Err(ReaderError::ServerlessLlm(format!(
+                    "partition file '{}' is too small: has {actual_size} bytes, needs at least {required_size} bytes for tensor at offset {} size {}",
+                    partition_path, entry.offset, entry.size
+                )));
+            }
+
+            let len = usize::try_from(entry.size)
+                .map_err(|e| ReaderError::ServerlessLlm(format!("size too large: {e}")))?;
+
+            batch_requests.push((partition_path.as_str(), entry.offset, len));
+            names.push(name.clone());
+        }
+
+        let batch_results = backends::load_batch(&batch_requests)
+            .await
+            .map_err(ReaderError::from)?;
+
+        Ok(names.into_iter().zip(batch_results).collect())
     }
 
     /// Loads all tensors concurrently using io_uring batching.
@@ -354,6 +527,48 @@ impl ServerlessLLMIndex {
     ) -> ReaderResult<HashMap<String, Vec<u8>>> {
         let tensor_names: Vec<&str> = self.tensors.keys().map(|s| s.as_str()).collect();
         self.load_tensors_batch_sync(base_path, &tensor_names)
+    }
+
+    async fn validate_single_partition_async(
+        &self,
+        partition_path: &str,
+        entry: &TensorEntry,
+    ) -> ReaderResult<()> {
+        let required_size = entry
+            .offset
+            .checked_add(entry.size)
+            .ok_or_else(|| ReaderError::ServerlessLlm("offset + size overflow".to_owned()))?;
+
+        // Fast path: check cached size if present
+        if let Some(cached_size) = self
+            .partition_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&entry.partition_id).copied())
+        {
+            if cached_size < required_size {
+                return Err(ReaderError::ServerlessLlm(format!(
+                    "partition file '{partition_path}' is too small: has {cached_size} bytes, needs at least {required_size} bytes for tensor at offset {} size {} (cached)",
+                    entry.offset, entry.size
+                )));
+            }
+            return Ok(());
+        }
+
+        let actual_size = stat_partition_size(partition_path).await?;
+
+        if let Ok(mut cache) = self.partition_cache.lock() {
+            cache.insert(entry.partition_id, actual_size);
+        }
+
+        if actual_size < required_size {
+            return Err(ReaderError::ServerlessLlm(format!(
+                "partition file '{partition_path}' is too small: has {actual_size} bytes, needs at least {required_size} bytes for tensor at offset {} size {}",
+                entry.offset, entry.size
+            )));
+        }
+
+        Ok(())
     }
     fn validate_single_partition(
         &self,
@@ -432,7 +647,8 @@ impl ServerlessLLMIndex {
         let mut missing_partitions = Vec::new();
 
         for partition_id in partition_ids {
-            let partition_path = format!("{}_{}", base_path.as_ref().display(), partition_id);
+            let partition_path =
+                format!("{}_{}", base_path.as_ref().to_string_lossy(), partition_id);
             if !std::path::Path::new(&partition_path).exists() {
                 missing_partitions.push(partition_id);
             }
@@ -473,7 +689,8 @@ impl ServerlessLLMIndex {
         let mut errors = Vec::new();
 
         for (partition_id, expected_size) in partition_sizes {
-            let partition_path = format!("{}_{}", base_path.as_ref().display(), partition_id);
+            let partition_path =
+                format!("{}_{}", base_path.as_ref().to_string_lossy(), partition_id);
             match std::fs::metadata(&partition_path) {
                 Ok(metadata) => {
                     let actual_size = metadata.len();
@@ -526,6 +743,18 @@ impl ServerlessLLMIndex {
         ids.sort_unstable();
         ids
     }
+}
+
+#[cfg(target_os = "linux")]
+async fn stat_partition_size(path: &str) -> ReaderResult<u64> {
+    let stat = statx(path).await.map_err(ReaderError::from)?;
+    Ok(stat.stx_size)
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn stat_partition_size(path: &str) -> ReaderResult<u64> {
+    let meta = tokio::fs::metadata(path).await.map_err(ReaderError::from)?;
+    Ok(meta.len())
 }
 
 impl<'a> IntoIterator for &'a ServerlessLLMIndex {
@@ -639,35 +868,67 @@ impl TensorMmap {
 }
 
 /// Owned tensor with data loaded into memory.
+///
+/// This struct now supports zero-copy access by holding a reference to shared buffers
+/// with offset/length metadata instead of copying data for each tensor.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Tensor {
-    /// Raw tensor data
+    /// Owned buffer containing tensor data
     data: Vec<u8>,
+    /// Offset into the shared buffer where this tensor's data starts
+    offset: usize,
+    /// Length of this tensor's data in bytes
+    len: usize,
     /// Tensor metadata
     entry: TensorEntry,
 }
 
 impl Tensor {
-    /// Creates a new Tensor from data and metadata.
+    /// Creates a new Tensor from buffer data and metadata.
     #[inline]
     #[must_use]
-    pub const fn new(data: Vec<u8>, entry: TensorEntry) -> Self {
-        Self { data, entry }
+    pub const fn new(data: Vec<u8>, offset: usize, len: usize, entry: TensorEntry) -> Self {
+        Self {
+            data,
+            offset,
+            len,
+            entry,
+        }
     }
 
-    /// Returns the raw tensor data.
+    /// Creates a new Tensor from owned data (for backward compatibility).
+    #[inline]
+    #[must_use]
+    pub const fn from_owned(data: Vec<u8>, entry: TensorEntry) -> Self {
+        let len = data.len();
+        Self {
+            data,
+            offset: 0,
+            len,
+            entry,
+        }
+    }
+
+    /// Returns the raw tensor data as a slice (zero-copy).
     #[inline]
     #[must_use]
     pub fn data(&self) -> &[u8] {
-        &self.data
+        &self.data[self.offset..self.offset + self.len]
     }
 
     /// Consumes the view and returns the raw tensor data.
+    ///
+    /// If this tensor covers the entire buffer, returns the owned Vec<u8>.
+    /// Otherwise, returns a copy of the slice.
     #[inline]
     #[must_use]
     pub fn into_data(self) -> Vec<u8> {
-        self.data
+        if self.offset == 0 && self.len == self.data.len() {
+            self.data
+        } else {
+            self.data[self.offset..self.offset + self.len].to_vec()
+        }
     }
 
     /// Returns the tensor's data type.
@@ -711,6 +972,41 @@ pub struct ServerlessLLM {
 }
 
 impl ServerlessLLM {
+    /// Loads a ServerlessLLM model from directory asynchronously with eager loading.
+    ///
+    /// This loads the index file and all tensor data into memory for fast access.
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - Directory containing tensor_index.json and tensor.data_* files
+    ///
+    /// # Returns
+    ///
+    /// An `ServerlessLLM` with all tensors loaded and ready for access.
+    pub async fn from_directory_async(directory: impl AsRef<Path>) -> ReaderResult<Self> {
+        let dir_path = directory.as_ref();
+        let index_path = dir_path.join("tensor_index.json");
+        let data_path = dir_path.join("tensor.data");
+
+        let index = ServerlessLLMIndex::load(&index_path).await?;
+
+        // Load all tensors using async batching with zero-copy
+        let tensor_names: Vec<&str> = index.tensors.keys().map(|s| s.as_str()).collect();
+        let tensor_data = index
+            .load_tensors_batch_zero_copy(&data_path, &tensor_names)
+            .await?;
+
+        let tensors = tensor_data
+            .into_iter()
+            .map(|(name, (buf, offset, len))| {
+                let entry = index.get(&name).unwrap().clone();
+                (name, Tensor::new(buf, offset, len, entry))
+            })
+            .collect();
+
+        Ok(Self { tensors })
+    }
+
     /// Loads a ServerlessLLM model from directory with eager loading.
     ///
     /// Loads a ServerlessLLM model from directory synchronously with eager loading.
@@ -734,12 +1030,12 @@ impl ServerlessLLM {
         // Load all tensors
         let tensor_data = index.load_all_tensors_batch_sync(&data_path)?;
 
-        // Convert to Tensor structs
+        // Convert to Tensor structs with zero-copy support
         let tensors = tensor_data
             .into_iter()
             .map(|(name, data)| {
                 let entry = index.get(&name).unwrap().clone();
-                (name, Tensor::new(data, entry))
+                (name, Tensor::from_owned(data, entry))
             })
             .collect();
 
@@ -792,7 +1088,11 @@ pub fn parse_index_sync(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMInd
 /// # Returns
 ///
 /// An `ServerlessLLM` with all tensors loaded and ready for access.
-///
+#[inline]
+pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
+    ServerlessLLM::from_directory_async(directory).await
+}
+
 /// Load a ServerlessLLM model with eager loading (sync).
 ///
 /// # Arguments
@@ -803,27 +1103,14 @@ pub fn parse_index_sync(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMInd
 ///
 /// An `ServerlessLLM` with all tensors loaded and ready for access.
 #[inline]
-pub fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
+pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
     ServerlessLLM::from_directory(directory)
 }
 
-/// Load a ServerlessLLM model with mmap-based lazy loading (cross-platform, async).
+/// Load a ServerlessLLM model with mmap-based lazy loading (sync).
 ///
-/// This memory-maps all partition files for zero-copy tensor access.
-/// Tensor data is loaded lazily on first access.
-///
-/// # Arguments
-///
-/// * `directory` - Directory containing tensor_index.json and tensor.data_* files
-///
-/// # Returns
-///
-/// A `ServerlessLLMMmap` with all partition files memory-mapped.
-///
-/// Load a ServerlessLLM model with mmap-based lazy loading (cross-platform, sync).
-///
-/// This memory-maps all partition files for zero-copy tensor access.
-/// Tensor data is loaded lazily on first access.
+/// This memory-maps all partition files for zero-copy tensor access. Tensor data
+/// is loaded lazily on first access.
 ///
 /// # Arguments
 ///
@@ -1067,90 +1354,4 @@ fn to_i64_vec(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Vec<
         })?);
     }
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn test_batch_loading() {
-        tokio_uring::start(async {
-            let dir = Path::new("test_model_serverlessllm");
-
-            // Test batch loading via index
-            let index = ServerlessLLMIndex::load(dir.join("tensor_index.json"))
-                .await
-                .unwrap();
-            let tensor_names = index.tensor_names();
-            assert!(!tensor_names.is_empty());
-
-            // Load first few tensors in batch
-            let batch_names: Vec<&str> = tensor_names.iter().take(3).cloned().collect();
-            let batch_data = index
-                .load_tensors_batch(&dir.join("tensor.data"), &batch_names)
-                .await
-                .unwrap();
-            assert_eq!(batch_data.len(), batch_names.len());
-
-            // Load all tensors in batch
-            let all_data = index
-                .load_all_tensors_batch(&dir.join("tensor.data"))
-                .await
-                .unwrap();
-            assert_eq!(all_data.len(), tensor_names.len());
-
-            // Test ServerlessLLM
-            let owned = ServerlessLLM::from_directory(dir).unwrap();
-            assert_eq!(owned.len(), tensor_names.len());
-
-            // Test tensor access
-            for name in &tensor_names {
-                let tensor = owned.tensor(name).unwrap();
-                assert!(!tensor.data().is_empty());
-            }
-
-            println!("Batch loading test passed! Loaded {} tensors", owned.len());
-        });
-    }
-
-    #[test]
-    fn test_batch_loading_sync() {
-        let dir = Path::new("test_model_serverlessllm");
-
-        // Test batch loading via index
-        let index = ServerlessLLMIndex::load_sync(dir.join("tensor_index.json")).unwrap();
-        let tensor_names = index.tensor_names();
-        assert!(!tensor_names.is_empty());
-
-        // Load first few tensors in batch
-        let batch_names: Vec<&str> = tensor_names.iter().take(3).cloned().collect();
-        let batch_data = index
-            .load_tensors_batch_sync(dir.join("tensor.data"), &batch_names)
-            .unwrap();
-        assert_eq!(batch_data.len(), batch_names.len());
-
-        // Load all tensors in batch
-        let all_data = index
-            .load_all_tensors_batch_sync(dir.join("tensor.data"))
-            .unwrap();
-        assert_eq!(all_data.len(), tensor_names.len());
-
-        // Test ServerlessLLM
-        let owned = ServerlessLLM::from_directory(dir).unwrap();
-        assert_eq!(owned.len(), tensor_names.len());
-
-        // Test tensor access
-        for name in &tensor_names {
-            let tensor = owned.tensor(name).unwrap();
-            assert!(!tensor.data().is_empty());
-        }
-
-        println!(
-            "Sync batch loading test passed! Loaded {} tensors",
-            owned.len()
-        );
-    }
 }

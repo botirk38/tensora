@@ -5,90 +5,196 @@
 //! - Efficient parallel chunked reads for large files
 //! - Proper io_uring batching - all operations submitted together
 
-use super::{IoResult, get_buffer_pool};
+use super::odirect::{
+    BLOCK_SIZE, OwnedAlignedBuffer, align_to_block, alloc_aligned, can_use_direct_read,
+    can_use_direct_write, is_block_aligned, open_direct_read_io_uring, open_direct_write_io_uring,
+};
+use super::{
+    IoResult,
+    batch::{IndexedRequest, flatten_results, group_requests_by_file},
+    get_buffer_pool,
+};
 use std::path::Path;
 use tokio_uring::fs::File as UringFile;
 
+/// Maximum size for a single io_uring read operation.
+/// Files larger than this automatically use parallel chunked reading.
+const MAX_SINGLE_READ: usize = 512 * 1024 * 1024; // 512MB
+
+// ---------------------------------------------------------------------------
+// Alignment helpers
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn statx_file_size(stat: libc::statx) -> IoResult<usize> {
+    let size = stat.stx_size;
+    usize::try_from(size).map_err(|_| std::io::Error::other("File too large"))
+}
+
+#[inline]
+fn allow_direct_fallback(err: &std::io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Validation helpers (pure functions)
+// ---------------------------------------------------------------------------
+
+/// Validates that the expected number of bytes were read.
+#[inline]
+fn validate_read_count(actual: usize, expected: usize) -> IoResult<()> {
+    if actual < expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            format!("Expected to read {expected} bytes, but read {actual}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that chunk size doesn't exceed Vec capacity limits.
+fn validate_chunk_size(chunk_size: usize, file_size: usize) -> IoResult<()> {
+    let max_capacity = usize::try_from(isize::MAX)
+        .expect("isize::MAX should always fit in usize on the same platform");
+    if chunk_size > max_capacity {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Chunk size ({chunk_size} bytes) exceeds maximum Vec capacity ({max_capacity} bytes). \
+                 Increase chunks to at least {} to proceed.",
+                file_size.div_ceil(max_capacity)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Helper for checked arithmetic operations with consistent error messages.
+#[inline]
+fn checked_arithmetic<T>(result: Option<T>, operation: &str) -> IoResult<T> {
+    result.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("chunk calculation {operation}"),
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+struct ChunkRequest {
+    start: usize,
+    len: usize,
+    padded_len: usize,
+    offset: u64,
+}
+
+fn build_chunk_requests(
+    file_size: usize,
+    chunk_size: usize,
+    chunks: usize,
+) -> IoResult<Vec<ChunkRequest>> {
+    (0..chunks)
+        .map(|i| {
+            let start = checked_arithmetic(i.checked_mul(chunk_size), "overflow")?;
+
+            if start >= file_size {
+                return Ok(None);
+            }
+
+            let end = std::cmp::min(
+                checked_arithmetic(start.checked_add(chunk_size), "overflow")?,
+                file_size,
+            );
+            let len = checked_arithmetic(end.checked_sub(start), "underflow")?;
+
+            if len == 0 {
+                return Ok(None);
+            }
+
+            let offset = u64::try_from(start).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large")
+            })?;
+            let padded_len = align_to_block(len);
+
+            Ok(Some(ChunkRequest {
+                start,
+                len,
+                padded_len,
+                offset,
+            }))
+        })
+        .take_while(|result| matches!(result, Ok(Some(_)) | Err(_)))
+        .map(|result| {
+            result.and_then(|opt| {
+                opt.ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "unexpected None in chunk request",
+                    )
+                })
+            })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Public read operations
+// ---------------------------------------------------------------------------
+
 /// Load an entire file using `io_uring`.
-///
-/// Uses pooled buffers to minimize allocations and provides zero-copy reads.
-///
-/// # Arguments
-///
-/// * `path` - Path to the file to load
-///
-/// # Returns
-///
-/// Returns the file contents as a `Vec<u8>`.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be opened or read.
-///
-/// For files larger than 512MB, automatically uses parallel chunked reading
-/// to work around io_uring single-read size limitations.
 #[inline]
 pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     let path_buf = path.as_ref().to_path_buf();
-    let metadata = std::fs::metadata(&path_buf)?;
-    let file_size =
-        usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
+    let stat = tokio_uring::fs::statx(&path_buf).await?;
+    let file_size = statx_file_size(stat)?;
 
-    // io_uring read_at has practical limits on single-read size (typically ~700MB).
-    // For larger files, automatically use parallel chunked reading.
-    const MAX_SINGLE_READ: usize = 512 * 1024 * 1024; // 512MB threshold
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
 
     if file_size > MAX_SINGLE_READ {
-        // Calculate optimal number of chunks:
-        // - Prefer one chunk per CPU core for maximum parallelism
-        // - But ensure each chunk doesn't exceed MAX_SINGLE_READ
         let num_cpus = num_cpus::get();
         let min_chunks_for_size = file_size.div_ceil(MAX_SINGLE_READ);
         let chunks = std::cmp::max(num_cpus, min_chunks_for_size);
         return load_parallel(path_buf, chunks).await;
     }
 
-    // Small file - use single read
-    let file = UringFile::open(&path_buf).await?;
+    let padded = align_to_block(file_size);
 
-    // Get buffer from pool
-    let pool = get_buffer_pool();
-    let buf = pool.get(file_size);
+    if can_use_direct_read(file_size, file_size) {
+        match open_direct_read_io_uring(&path_buf).await {
+            Ok(file) => {
+                let buffer = OwnedAlignedBuffer::new(padded)?;
+                let chunk = buffer.slice(0, padded)?;
 
-    let (res, returned_buf) = file.read_at(buf, 0).await;
-    let n = res?;
+                let (res, returned_chunk) = file.read_at(chunk, 0).await;
+                let n = res?;
 
-    if n != file_size {
-        file.close().await?;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            format!("Expected to read {file_size} bytes, but read {n}"),
-        ));
+                validate_read_count(n, file_size)?;
+                drop(returned_chunk);
+                file.close().await?;
+                return buffer.into_vec(file_size);
+            }
+            Err(err) if allow_direct_fallback(&err) => {}
+            Err(err) => return Err(err),
+        }
     }
 
-    file.close().await?;
+    let file = UringFile::open(&path_buf).await?;
+    let pooled = get_buffer_pool().get(file_size);
+    let (res, mut buf) = file.read_at(pooled, 0).await;
+    let n = res?;
 
-    // Buffer will be automatically returned to pool when dropped
-    Ok(returned_buf.into_inner())
+    validate_read_count(n, file_size)?;
+    buf.truncate(file_size);
+    file.close().await?;
+    Ok(buf.into_vec())
 }
 
 /// Load tensor data in parallel chunks using `io_uring` with batched operations.
-///
-/// Opens the file once and submits all chunk reads to io_uring in a single batch,
-/// allowing the kernel to handle them concurrently.
-///
-/// # Arguments
-///
-/// * `path` - Path to the file to load
-/// * `chunks` - Number of chunks to split the file into
-///
-/// # Returns
-///
-/// Returns the file contents as a `Vec<u8>`.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be opened, read, or if chunk size exceeds limits.
 #[inline]
 pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Vec<u8>> {
     if chunks == 0 {
@@ -99,279 +205,266 @@ pub async fn load_parallel(path: impl AsRef<Path>, chunks: usize) -> IoResult<Ve
     }
 
     let path_ref = path.as_ref();
-    let metadata = std::fs::metadata(path_ref)?;
-    let file_size =
-        usize::try_from(metadata.len()).map_err(|_e| std::io::Error::other("File too large"))?;
-
-    let chunk_size = file_size.div_ceil(chunks);
-
-    // Validate chunk size doesn't exceed Vec capacity limit (isize::MAX)
-    let max_capacity = usize::try_from(isize::MAX)
-        .expect("isize::MAX should always fit in usize on the same platform");
-    if chunk_size > max_capacity {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "Chunk size ({} bytes) exceeds maximum Vec capacity ({} bytes). \
-                 Increase chunks to at least {} to proceed.",
-                chunk_size,
-                max_capacity,
-                file_size.div_ceil(max_capacity)
-            ),
-        ));
+    let stat = tokio_uring::fs::statx(path_ref).await?;
+    let file_size = statx_file_size(stat)?;
+    if file_size == 0 {
+        return Ok(Vec::new());
     }
 
-    // Pre-allocate final pooled buffer - this is the ONLY allocation
-    let mut final_buf = get_buffer_pool().get(file_size);
+    let chunk_size = align_to_block(file_size.div_ceil(chunks));
+    validate_chunk_size(chunk_size, file_size)?;
 
-    // Open file ONCE for all operations - key difference from old implementation
-    let file = UringFile::open(path_ref).await?;
+    let requests = build_chunk_requests(file_size, chunk_size, chunks)?;
 
-    // SAFETY: We split final_buf into non-overlapping mutable slices.
-    // Each slice is passed to exactly one read operation.
-    // The buffer remains valid until all operations complete (we await all futures).
-    let mut read_futures = Vec::with_capacity(chunks);
+    let required_capacity = requests
+        .iter()
+        .map(|r| r.start.saturating_add(r.padded_len))
+        .max()
+        .unwrap_or(file_size);
+    let buffer = OwnedAlignedBuffer::new(align_to_block(required_capacity))?;
 
-    for i in 0..chunks {
-        let start = i.checked_mul(chunk_size).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "chunk calculation overflow",
-            )
-        })?;
-        let end = std::cmp::min(
-            start.checked_add(chunk_size).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "chunk calculation overflow",
-                )
-            })?,
-            file_size,
-        );
-        let actual_chunk_size = end.checked_sub(start).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "chunk calculation underflow",
-            )
-        })?;
+    if can_use_direct_read(file_size, chunk_size) {
+        match open_direct_read_io_uring(path_ref).await {
+            Ok(file) => {
+                let file_ref = &file;
+                let read_futures = requests
+                    .iter()
+                    .map(|req| {
+                        let ChunkRequest {
+                            start,
+                            len: actual_chunk_size,
+                            padded_len,
+                            offset,
+                        } = *req;
+                        let chunk = buffer.slice(start, padded_len)?;
+                        Ok(async move {
+                            let (res, _chunk) = file_ref.read_at(chunk, offset).await;
+                            let n = res?;
+                            validate_read_count(n, actual_chunk_size)?;
+                            IoResult::Ok(())
+                        })
+                    })
+                    .collect::<IoResult<Vec<_>>>()?;
 
-        if actual_chunk_size == 0 {
-            break;
-        }
+                let results = futures::future::join_all(read_futures).await;
+                for res in results {
+                    res?;
+                }
 
-        let offset = u64::try_from(start).map_err(|_e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large")
-        })?;
-
-        // Create non-overlapping mutable slice
-        let chunk_slice = final_buf
-            .as_mut_slice()
-            .get_mut(start..end)
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid chunk range")
-            })?;
-
-        // SAFETY: This slice is unique to this read operation and won't be accessed elsewhere.
-        // We create a Vec from the raw parts to satisfy read_at's interface,
-        // but the data is written directly to the pre-allocated buffer slice (ZERO COPY!)
-        let slice_ptr = chunk_slice.as_mut_ptr();
-        let slice_len = chunk_slice.len();
-        let vec = unsafe { Vec::from_raw_parts(slice_ptr, 0, slice_len) };
-
-        // Submit read operation - all will be batched by io_uring
-        let read_future = file.read_at(vec, offset);
-        read_futures.push((read_future, actual_chunk_size));
-    }
-
-    // Wait for all read operations to complete concurrently
-    // io_uring handles these in parallel at the kernel level
-    let results =
-        futures::future::join_all(read_futures.into_iter().map(|(fut, expected)| async move {
-            let (res, returned_vec) = fut.await;
-            (res, returned_vec, expected)
-        }))
-        .await;
-
-    // Check for errors and validate read sizes
-    for (res, returned_vec, expected_size) in results {
-        // Check for I/O errors
-        let n = match res {
-            Ok(n) => n,
-            Err(e) => {
-                // Don't drop returned_vec to avoid double-free
-                std::mem::forget(returned_vec);
-                return Err(e);
+                file.close().await?;
+                return buffer.into_vec(file_size);
             }
-        };
-
-        // Validate read size
-        if n != expected_size {
-            // Don't drop returned_vec to avoid double-free
-            std::mem::forget(returned_vec);
-            file.close().await?;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                format!("Expected to read {expected_size} bytes, but read {n}"),
-            ));
+            Err(err) if allow_direct_fallback(&err) => {}
+            Err(err) => return Err(err),
         }
+    }
 
-        // Don't drop returned_vec - data is in final_buf slice
-        std::mem::forget(returned_vec);
+    let file = UringFile::open(path_ref).await?;
+    let file_ref = &file;
+
+    let read_futures = requests
+        .iter()
+        .map(|req| {
+            let ChunkRequest {
+                start,
+                len: actual_chunk_size,
+                padded_len,
+                offset,
+            } = *req;
+            let chunk = buffer.slice(start, padded_len)?;
+            Ok(async move {
+                let (res, _chunk) = file_ref.read_at(chunk, offset).await;
+                let n = res?;
+                validate_read_count(n, actual_chunk_size)?;
+                IoResult::Ok(())
+            })
+        })
+        .collect::<IoResult<Vec<_>>>()?;
+
+    let results = futures::future::join_all(read_futures).await;
+    for res in results {
+        res?;
     }
 
     file.close().await?;
-
-    Ok(final_buf.into_inner())
+    buffer.into_vec(file_size)
 }
 
 /// Load a specific byte range from a file using `io_uring`.
-///
-/// Uses pooled buffers to minimize allocations.
 #[inline]
 pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
-    let path_ref = path.as_ref();
-    let file = UringFile::open(path_ref).await?;
-
-    // Get buffer from pool (buffer pool optimization for reduced allocations)
-    let pool = get_buffer_pool();
-    let buf = pool.get(len);
-
-    let (res, mut returned_buf) = file.read_at(buf, offset).await;
-    let n = res?;
-
-    if n != len {
-        file.close().await?;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            format!("Expected to read {len} bytes, but read {n}"),
-        ));
+    if len == 0 {
+        return Ok(Vec::new());
     }
 
-    file.close().await?;
+    if is_block_aligned(offset, len) {
+        match open_direct_read_io_uring(path.as_ref()).await {
+            Ok(file) => {
+                let padded = align_to_block(len);
+                let buffer = OwnedAlignedBuffer::new(padded)?;
+                let chunk = buffer.slice(0, padded)?;
 
-    // Buffer will be automatically returned to pool when dropped
-    returned_buf.truncate(n);
-    Ok(returned_buf.into_inner())
+                let (res, returned_chunk) = file.read_at(chunk, offset).await;
+                let n = res?;
+                validate_read_count(n, len)?;
+                drop(returned_chunk);
+                file.close().await?;
+                return buffer.into_vec(len);
+            }
+            Err(err) if allow_direct_fallback(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    let file = UringFile::open(path.as_ref()).await?;
+    let pooled = get_buffer_pool().get(len);
+    let (res, mut buf) = file.read_at(pooled, offset).await;
+    let n = res?;
+    validate_read_count(n, len)?;
+    buf.truncate(len);
+    file.close().await?;
+    Ok(buf.into_vec())
 }
 
-/// Load multiple file ranges in a single batched operation.
-///
-/// All reads are submitted to io_uring concurrently for maximum throughput.
-///
-/// # Arguments
-///
-/// * `requests` - Slice of (path, offset, length) tuples
-///
-/// # Returns
-///
-/// Returns a vector of byte vectors, one per request, in the same order.
-///
-/// # Errors
-///
-/// Returns an error if any file cannot be opened or read.
-#[inline]
-pub async fn load_batch(requests: &[(impl AsRef<Path>, u64, usize)]) -> IoResult<Vec<Vec<u8>>> {
-    use std::collections::HashMap;
+/// Helpers for batched range reads.
+async fn read_request_direct(
+    file: &UringFile,
+    req: &IndexedRequest,
+) -> IoResult<(usize, Vec<u8>, usize, usize)> {
+    let padded = align_to_block(req.len);
+    let buffer = OwnedAlignedBuffer::new(padded)?;
+    let chunk = buffer.slice(0, padded)?;
 
+    let (res, returned_chunk) = file.read_at(chunk, req.offset).await;
+    let n = res?;
+    validate_read_count(n, req.len)?;
+    drop(returned_chunk);
+    let full = buffer.into_vec(req.len)?;
+    Ok((req.idx, full, 0, req.len))
+}
+
+async fn read_request_buffered(
+    file: &UringFile,
+    req: &IndexedRequest,
+) -> IoResult<(usize, Vec<u8>, usize, usize)> {
+    let pooled = get_buffer_pool().get(req.len);
+    let (res, mut read_buf) = file.read_at(pooled, req.offset).await;
+    let n = res?;
+    validate_read_count(n, req.len)?;
+    read_buf.truncate(req.len);
+    Ok((req.idx, read_buf.into_vec(), 0, req.len))
+}
+
+async fn process_file_batch(
+    path: &Path,
+    requests: Vec<IndexedRequest>,
+) -> IoResult<Vec<(usize, Vec<u8>, usize, usize)>> {
     if requests.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Group requests by file path to minimize file opens
-    let mut file_requests: HashMap<std::path::PathBuf, Vec<(usize, u64, usize)>> = HashMap::new();
+    let all_aligned = requests
+        .iter()
+        .all(|req| is_block_aligned(req.offset, req.len));
+    let (file, use_direct) = if all_aligned {
+        match open_direct_read_io_uring(path).await {
+            Ok(file) => (file, true),
+            Err(err) if allow_direct_fallback(&err) => (UringFile::open(path).await?, false),
+            Err(err) => return Err(err),
+        }
+    } else {
+        (UringFile::open(path).await?, false)
+    };
+    let file_ref = &file;
 
-    for (idx, (path, offset, len)) in requests.iter().enumerate() {
-        let path_buf = path.as_ref().to_path_buf();
-        file_requests
-            .entry(path_buf)
-            .or_default()
-            .push((idx, *offset, *len));
-    }
-
-    // Pre-allocate result vector
-    let mut results = vec![None; requests.len()];
-
-    // Open all files in parallel first
-    let mut file_handles = Vec::with_capacity(file_requests.len());
-    let mut open_futures = Vec::with_capacity(file_requests.len());
-
-    for path in file_requests.keys() {
-        let open_future = UringFile::open(path);
-        open_futures.push(open_future);
-    }
-
-    let opened_files = futures::future::join_all(open_futures).await;
-    for result in opened_files {
-        file_handles.push(result?);
-    }
-
-    // Process each file with true parallel I/O batching
-    for (file_idx, (_path, file_reqs)) in file_requests.into_iter().enumerate() {
-        let file = &file_handles[file_idx];
-
-        // Submit all read operations concurrently to io_uring submission queue
-        // Uses pooled buffers for efficient memory management
-        let mut read_futures = Vec::with_capacity(file_reqs.len());
-        for (_idx, offset, len) in &file_reqs {
-            let buf = get_buffer_pool().get(*len);
-            let read_future = file.read_at(buf, *offset);
-            read_futures.push(read_future);
+    let read_futures = requests.into_iter().map(|req| async move {
+        if req.len == 0 {
+            return Ok((req.idx, Vec::new(), 0, 0));
         }
 
-        // Wait for all operations to complete in parallel using join_all
-        let file_results = futures::future::join_all(read_futures).await;
-
-        // Process results and check for errors
-        let mut processed_results = Vec::with_capacity(file_reqs.len());
-        for (i, (res, mut read_buf)) in file_results.into_iter().enumerate() {
-            let n = res?;
-            if n != file_reqs[i].2 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    format!("Expected to read {} bytes, but read {}", file_reqs[i].2, n),
-                ));
-            }
-            // Buffer will be automatically returned to pool when dropped
-            read_buf.truncate(n);
-            processed_results.push(read_buf.into_inner());
+        if use_direct {
+            read_request_direct(file_ref, &req).await
+        } else {
+            read_request_buffered(file_ref, &req).await
         }
+    });
 
-        // Store results in the correct positions
-        for ((idx, _offset, _len), data) in file_reqs.into_iter().zip(processed_results) {
-            results[idx] = Some(data);
-        }
-    }
-
-    // Close all files
-    for file in file_handles {
-        file.close().await?;
-    }
-
-    // Convert results to Vec, maintaining order
-    let final_results: Vec<Vec<u8>> = results
+    let results: IoResult<Vec<_>> = futures::future::join_all(read_futures)
+        .await
         .into_iter()
-        .map(|opt| opt.expect("All batch requests should have been processed"))
         .collect();
 
-    Ok(final_results)
+    file.close().await?;
+    results
 }
+
+/// Load multiple file ranges in a single batched operation.
+#[inline]
+pub async fn load_batch(
+    requests: &[(impl AsRef<Path>, u64, usize)],
+) -> IoResult<Vec<(Vec<u8>, usize, usize)>> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let file_requests = group_requests_by_file(requests);
+
+    let batch_results: Vec<Vec<super::batch::BatchResult>> = futures::future::join_all(
+        file_requests
+            .into_iter()
+            .map(|(path, file_reqs)| async move { process_file_batch(&path, file_reqs).await }),
+    )
+    .await
+    .into_iter()
+    .collect::<IoResult<Vec<_>>>()?;
+
+    Ok(flatten_results(batch_results))
+}
+
+// ---------------------------------------------------------------------------
+// Public write operations
+// ---------------------------------------------------------------------------
 
 /// Write an entire buffer to a file, creating or truncating it first.
 #[inline]
-pub async fn write_all(path: impl AsRef<Path>, data: &[u8]) -> IoResult<()> {
+pub async fn write_all(path: impl AsRef<Path>, data: Vec<u8>) -> IoResult<()> {
     let path_ref = path.as_ref();
-    let file = UringFile::create(path_ref).await?;
-    let (res, buf) = file.write_at(data.to_vec(), 0).submit().await;
-    let n = res?;
-    if n != data.len() {
-        file.close().await?;
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::WriteZero,
-            format!("expected to write {} bytes, wrote {}", data.len(), n),
-        ));
+    if data.is_empty() {
+        let file = open_direct_write_io_uring(path_ref).await?;
+        file.sync_all().await?;
+        return file.close().await;
     }
-    // Keep buf alive until write completes; then drop.
-    drop(buf);
-    file.sync_all().await?;
-    file.close().await
+
+    let len = data.len();
+
+    let write_with_file = |file: UringFile, buf: Vec<u8>, expected_len: usize| async move {
+        let (res, written_buf) = file.write_at(buf, 0).submit().await;
+        let n = res?;
+        drop(written_buf);
+        if n < expected_len {
+            file.close().await?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!("expected to write {} bytes, wrote {}", expected_len, n),
+            ));
+        }
+        file.sync_all().await?;
+        file.close().await
+    };
+
+    if !can_use_direct_write(len) {
+        let file = UringFile::create(path_ref).await?;
+        return write_with_file(file, data, len).await;
+    }
+
+    let aligned_data = if data.as_ptr().align_offset(BLOCK_SIZE) == 0 {
+        data
+    } else {
+        let mut buf = alloc_aligned(len)?;
+        buf.extend_from_slice(&data);
+        buf
+    };
+
+    let file = open_direct_write_io_uring(path_ref).await?;
+    write_with_file(file, aligned_data, len).await
 }

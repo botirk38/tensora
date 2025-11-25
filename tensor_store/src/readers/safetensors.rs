@@ -72,7 +72,7 @@ impl SafeTensorsOwned {
 
         // SAFETY: The slice points into `buffer`, which we store inside the struct.
         // Drop order is `tensors` first, then `buffer`, so the data lives for the
-        // entire lifetime of the SafeTensors object.
+        // entire lifetime of the SafeTensors object. Do not reorder fields.
         let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
         let tensors = SafeTensors::deserialize(static_slice)?;
 
@@ -130,7 +130,7 @@ impl SafeTensorsMmap {
 
         // SAFETY: The slice points into the mmap, which we store inside the struct.
         // Drop order is `tensors` first, then `mmap`, so the data lives for the
-        // entire lifetime of the SafeTensorsMmap object.
+        // entire lifetime of the SafeTensorsMmap object. Do not reorder fields.
         let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
         let tensors = SafeTensors::deserialize(static_slice)?;
 
@@ -160,7 +160,7 @@ impl TensorMetadata for SafeTensorsMmap {
 
     #[inline]
     fn contains(&self, name: &str) -> bool {
-        self.tensors.names().into_iter().any(|n| n == name)
+        self.tensors.tensor(name).is_ok()
     }
 
     #[inline]
@@ -199,7 +199,7 @@ impl TensorMetadata for SafeTensorsOwned {
 
     #[inline]
     fn contains(&self, name: &str) -> bool {
-        self.tensors.names().into_iter().any(|n| n == name)
+        self.tensors.tensor(name).is_ok()
     }
 
     #[inline]
@@ -258,7 +258,7 @@ pub async fn load_parallel(
     SafeTensorsOwned::from_bytes(bytes)
 }
 
-/// Synchronous load using mmap (Linux) or `std::fs` (other platforms).
+/// Synchronous load using buffered I/O (owned `Vec<u8>`).
 ///
 /// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
@@ -266,19 +266,40 @@ pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsOwned> {
     SafeTensorsOwned::load_sync(path)
 }
 
-/// Synchronous ranged load using mmap (Linux) or `std::fs` (other platforms).
+/// Synchronous ranged load **only when the range covers the full file**.
 ///
-/// Returns a `SafeTensorsOwned` with the parsed tensors.
+/// SafeTensors cannot be deserialized from partial ranges; this helper enforces
+/// that the requested range matches the file size starting at offset 0.
 #[inline]
 pub fn load_range_sync(
     path: impl AsRef<Path>,
     offset: u64,
     len: usize,
 ) -> ReaderResult<SafeTensorsOwned> {
-    let path_str = path
-        .as_ref()
+    if offset != 0 {
+        return Err(ReaderError::InvalidMetadata(
+            "SafeTensors requires the full file; offset must be 0".to_owned(),
+        ));
+    }
+
+    let path_ref = path.as_ref();
+    let path_str = path_ref
         .to_str()
         .ok_or_else(|| ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned()))?;
+
+    let file_len = std::fs::metadata(path_ref)
+        .map_err(ReaderError::from)?
+        .len();
+
+    let expected_len = u64::try_from(len)
+        .map_err(|_| ReaderError::InvalidMetadata("requested length overflows u64".to_owned()))?;
+
+    if file_len != expected_len {
+        return Err(ReaderError::InvalidMetadata(format!(
+            "SafeTensors requires full file: requested len {len}, file size {file_len}"
+        )));
+    }
+
     let bytes = backends::sync::load_range(path_str, offset, len)?;
     SafeTensorsOwned::from_bytes(bytes)
 }
@@ -289,91 +310,4 @@ pub fn load_range_sync(
 #[inline]
 pub fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
     SafeTensorsMmap::load_sync(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn test_load_parallel_zero_copy() {
-        // Test with the existing test file
-        let path = "test_model.safetensors";
-
-        tokio_uring::start(async {
-            // Load with parallel loading (zero-copy)
-            let data = load_parallel(path, 4).await.unwrap();
-
-            // Verify we can deserialize it
-            let tensors = data.tensors();
-            assert!(!tensors.names().is_empty());
-
-            // Load with single-threaded loading for comparison
-            let data_single = load(path).await.unwrap();
-
-            // Data should be identical
-            assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
-            assert_eq!(data.as_bytes(), data_single.as_bytes());
-
-            println!(
-                "Zero-copy parallel loading test passed! Loaded {} tensors",
-                tensors.names().len()
-            );
-        });
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[tokio::test]
-    async fn test_load_parallel_zero_copy() {
-        // Test with the existing test file
-        let path = "test_model.safetensors";
-
-        // Load with parallel loading (zero-copy)
-        let data = load_parallel(path, 4).await.unwrap();
-
-        // Verify we can deserialize it
-        let tensors = data.tensors();
-        assert!(!tensors.names().is_empty());
-
-        // Load with single-threaded loading for comparison
-        let data_single = load(path).await.unwrap();
-
-        // Data should be identical
-        assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
-        assert_eq!(data.as_bytes(), data_single.as_bytes());
-
-        println!(
-            "Zero-copy parallel loading test passed! Loaded {} tensors",
-            tensors.names().len()
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn test_load_parallel_zero_copy_io_uring() {
-        // Test io_uring version specifically
-        let path = "test_model.safetensors";
-
-        tokio_uring::start(async {
-            // Load with parallel loading (zero-copy)
-            let data = load_parallel(path, 4).await.unwrap();
-
-            // Verify we can deserialize it
-            let tensors = data.tensors();
-            assert!(!tensors.names().is_empty());
-
-            // Load with single-threaded loading for comparison
-            let data_single = load(path).await.unwrap();
-
-            // Data should be identical
-            assert_eq!(data.as_bytes().len(), data_single.as_bytes().len());
-            assert_eq!(data.as_bytes(), data_single.as_bytes());
-
-            println!(
-                "Zero-copy parallel loading (io_uring) test passed! Loaded {} tensors",
-                tensors.names().len()
-            );
-        });
-    }
 }

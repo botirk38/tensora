@@ -162,7 +162,7 @@ impl SafeTensorsWriter {
         P: AsRef<Path>,
     {
         let buffer = safetensors::serialize(tensors, metadata)?;
-        backends::write_all(path.as_ref().to_str().unwrap(), &buffer)
+        backends::write_all(path.as_ref(), buffer)
             .await
             .map_err(Into::into)
     }

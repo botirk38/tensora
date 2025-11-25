@@ -87,14 +87,16 @@ async fn profile_async(serverlessllm_dir: &str) {
     // Warmup phase - populate buffer pools and caches
     println!("  Warming up...");
     for i in 0..3 {
-        let _warmup = serverlessllm::load(serverlessllm_dir).unwrap();
+        let _warmup = serverlessllm::load(serverlessllm_dir).await.unwrap();
         println!("    Warmup iteration {} complete", i + 1);
     }
 
     // Profiling phase - single iteration to avoid memory accumulation
     println!("  Starting profiling...");
     let start = Instant::now();
-    let model = serverlessllm::load(black_box(serverlessllm_dir)).unwrap();
+    let model = serverlessllm::load(black_box(serverlessllm_dir))
+        .await
+        .unwrap();
     let load_time = start.elapsed();
 
     let tensor_count = model.len();
@@ -120,14 +122,14 @@ fn profile_sync(serverlessllm_dir: &str) {
     // Warmup phase
     println!("  Warming up...");
     for i in 0..3 {
-        let _warmup = serverlessllm::load(serverlessllm_dir).unwrap();
+        let _warmup = serverlessllm::load_sync(serverlessllm_dir).unwrap();
         println!("    Warmup iteration {} complete", i + 1);
     }
 
     // Profiling phase
     println!("  Starting profiling...");
     let start = Instant::now();
-    let model = serverlessllm::load(black_box(serverlessllm_dir)).unwrap();
+    let model = serverlessllm::load_sync(black_box(serverlessllm_dir)).unwrap();
     let load_time = start.elapsed();
 
     let tensor_count = model.len();
