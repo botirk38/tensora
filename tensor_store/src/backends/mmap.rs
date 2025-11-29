@@ -113,3 +113,152 @@ pub fn map_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Mm
         len,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_mmap_basic() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"Hello, mmap!").unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map(tmpfile.path()).unwrap();
+        assert_eq!(mmap.as_slice(), b"Hello, mmap!");
+        assert_eq!(mmap.len(), 12);
+        assert!(!mmap.is_empty());
+    }
+
+    #[test]
+    fn test_mmap_empty_file_error() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        // File is empty
+        let result = map(tmpfile.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mmap_large_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![42u8; 10 * 1024 * 1024]; // 10MB
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map(tmpfile.path()).unwrap();
+        assert_eq!(mmap.len(), 10 * 1024 * 1024);
+        assert!(mmap.as_slice().iter().all(|&x| x == 42));
+    }
+
+    #[test]
+    fn test_mmap_range_aligned() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"0123456789ABCDEF").unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map_range(tmpfile.path(), 4, 8).unwrap();
+        assert_eq!(mmap.as_slice(), b"456789AB");
+        assert_eq!(mmap.len(), 8);
+    }
+
+    #[test]
+    fn test_mmap_range_unaligned() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"0123456789ABCDEF").unwrap();
+        tmpfile.flush().unwrap();
+
+        // Unaligned offset
+        let mmap = map_range(tmpfile.path(), 3, 5).unwrap();
+        assert_eq!(mmap.as_slice(), b"34567");
+        assert_eq!(mmap.len(), 5);
+    }
+
+    #[test]
+    fn test_mmap_range_page_boundary() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let mut data = vec![0u8; 8192]; // 2 pages (assuming 4KB pages)
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte = (i % 256) as u8;
+        }
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.flush().unwrap();
+
+        // Map from page boundary
+        let mmap = map_range(tmpfile.path(), 4096, 100).unwrap();
+        assert_eq!(mmap.len(), 100);
+        assert_eq!(mmap.as_slice()[0], 0); // First byte of second page
+    }
+
+    #[test]
+    fn test_mmap_range_exceeds_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"short").unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = map_range(tmpfile.path(), 0, 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mmap_range_zero_length_error() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"data").unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = map_range(tmpfile.path(), 0, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mmap_clone() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"clone test").unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap1 = map(tmpfile.path()).unwrap();
+        let mmap2 = mmap1.clone();
+
+        assert_eq!(mmap1.as_slice(), mmap2.as_slice());
+        assert_eq!(mmap1.len(), mmap2.len());
+        assert_eq!(Arc::strong_count(&mmap1.inner), 2);
+    }
+
+    #[test]
+    fn test_mmap_deref() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"deref test").unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map(tmpfile.path()).unwrap();
+
+        // Test Deref trait
+        let slice: &[u8] = &*mmap;
+        assert_eq!(slice, b"deref test");
+    }
+
+    #[test]
+    fn test_mmap_as_ref() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"as_ref test").unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map(tmpfile.path()).unwrap();
+
+        // Test AsRef trait
+        let slice: &[u8] = mmap.as_ref();
+        assert_eq!(slice, b"as_ref test");
+    }
+
+    #[test]
+    fn test_mmap_range_full_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = b"full file range";
+        tmpfile.write_all(data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let mmap = map_range(tmpfile.path(), 0, data.len()).unwrap();
+        assert_eq!(mmap.as_slice(), data);
+    }
+}

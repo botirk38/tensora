@@ -441,4 +441,79 @@ mod tests {
         let result = buffer.into_vec(100);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_align_to_block_large_sizes() {
+        assert_eq!(align_to_block(BLOCK_SIZE * 100), BLOCK_SIZE * 100);
+        assert_eq!(align_to_block(BLOCK_SIZE * 100 + 1), BLOCK_SIZE * 101);
+        assert_eq!(align_to_block(BLOCK_SIZE * 100 - 1), BLOCK_SIZE * 100);
+    }
+
+    #[test]
+    fn test_is_block_aligned_edge_cases() {
+        assert!(is_block_aligned(0, 0));
+        assert!(is_block_aligned(0, BLOCK_SIZE));
+        assert!(is_block_aligned(BLOCK_SIZE_U64, BLOCK_SIZE));
+        assert!(!is_block_aligned(1, BLOCK_SIZE));
+        assert!(!is_block_aligned(0, 1));
+        assert!(!is_block_aligned(BLOCK_SIZE_U64, BLOCK_SIZE + 1));
+    }
+
+    #[test]
+    fn test_can_use_direct_read_aligned() {
+        assert!(can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE));
+        assert!(can_use_direct_read(BLOCK_SIZE * 2, BLOCK_SIZE));
+        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE * 2));
+    }
+
+    #[test]
+    fn test_can_use_direct_read_unaligned() {
+        assert!(!can_use_direct_read(0, BLOCK_SIZE));
+        assert!(!can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE + 1));
+        assert!(!can_use_direct_read(BLOCK_SIZE + 1, BLOCK_SIZE));
+        assert!(!can_use_direct_read(BLOCK_SIZE * 3, BLOCK_SIZE * 2));
+    }
+
+    #[test]
+    fn test_can_use_direct_write_edge_cases() {
+        assert!(can_use_direct_write(0));
+        assert!(can_use_direct_write(BLOCK_SIZE));
+        assert!(can_use_direct_write(BLOCK_SIZE * 100));
+        assert!(!can_use_direct_write(1));
+        assert!(!can_use_direct_write(BLOCK_SIZE - 1));
+        assert!(!can_use_direct_write(BLOCK_SIZE + 1));
+    }
+
+    #[test]
+    fn test_pad_to_block() {
+        assert_eq!(pad_to_block(0), 0);
+        assert_eq!(pad_to_block(1), BLOCK_SIZE);
+        assert_eq!(pad_to_block(BLOCK_SIZE), BLOCK_SIZE);
+        assert_eq!(pad_to_block(BLOCK_SIZE + 1), BLOCK_SIZE * 2);
+    }
+
+    #[test]
+    fn test_alloc_aligned_large() {
+        let capacity = BLOCK_SIZE * 1024;
+        let buf = alloc_aligned(capacity).unwrap();
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.capacity(), capacity);
+        assert_eq!(buf.as_ptr().addr() % BLOCK_SIZE, 0);
+    }
+
+    #[test]
+    fn test_owned_aligned_buffer_into_vec_exceeds_capacity() {
+        let buffer = OwnedAlignedBuffer::new(BLOCK_SIZE).unwrap();
+        let result = buffer.into_vec(BLOCK_SIZE * 2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_aligned_chunk_out_of_bounds() {
+        let buffer = OwnedAlignedBuffer::new(BLOCK_SIZE).unwrap();
+        let result = buffer.slice(0, BLOCK_SIZE * 2);
+        assert!(result.is_err());
+        let result = buffer.slice(BLOCK_SIZE, 1);
+        assert!(result.is_err());
+    }
 }

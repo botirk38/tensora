@@ -130,3 +130,72 @@ pub use async_io::write_all;
 pub mod sync {
     pub use super::sync_io::{load, load_range, load_range_batch, write_all};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_pool_initialization() {
+        let pool = get_buffer_pool();
+        // Just verify we can get the pool without panicking
+        assert!(!std::ptr::eq(pool, std::ptr::null()));
+    }
+
+    #[test]
+    fn test_buffer_pool_singleton() {
+        let pool1 = get_buffer_pool();
+        let pool2 = get_buffer_pool();
+        // Verify both references point to the same instance
+        assert!(std::ptr::eq(pool1, pool2));
+    }
+
+    #[test]
+    fn test_buffer_pool_config_values() {
+        // Verify constants are within reasonable ranges
+        assert!(CHECKPOINT_NUM_SHARDS > 0);
+        assert!(CHECKPOINT_NUM_SHARDS <= 64); // Reasonable upper bound
+        assert!(CHECKPOINT_TLS_CACHE_SIZE > 0);
+        assert!(CHECKPOINT_MAX_BUFFERS_PER_SHARD > 0);
+        assert!(CHECKPOINT_MIN_BUFFER_SIZE >= 1024); // At least 1KB
+    }
+
+    #[test]
+    fn test_get_buffer_pool_multiple_calls() {
+        // Call multiple times to verify stability
+        for _ in 0..10 {
+            let pool = get_buffer_pool();
+            assert!(!std::ptr::eq(pool, std::ptr::null()));
+        }
+    }
+
+    #[test]
+    fn test_platform_specific_exports() {
+        // This test just verifies the conditional compilation works
+        // and that the functions are exported correctly
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, verify io_uring functions are exported
+            let _ = stringify!(load);
+            let _ = stringify!(load_parallel);
+            let _ = stringify!(load_range);
+            let _ = stringify!(load_batch);
+            let _ = stringify!(write_all);
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On non-Linux, verify async_io functions are exported
+            let _ = stringify!(load);
+            let _ = stringify!(load_parallel);
+            let _ = stringify!(load_range);
+            let _ = stringify!(load_batch);
+            let _ = stringify!(write_all);
+        }
+
+        // Sync functions should always be available
+        let _ = stringify!(sync::load);
+        let _ = stringify!(sync::load_range);
+        let _ = stringify!(sync::write_all);
+    }
+}

@@ -160,4 +160,80 @@ mod tests {
         assert_eq!(data, [1, 10, 20, 30, 5]);
         assert_eq!(&data[1..4], &[10, 20, 30]);
     }
+
+    #[test]
+    fn test_buffer_slice_large_slice() {
+        let mut data = vec![0u8; 1024 * 1024]; // 1MB
+        let slice = &mut data[..];
+
+        // SAFETY: exclusive access
+        let buffer_slice = unsafe { BufferSlice::from_slice(slice) };
+
+        assert_eq!(buffer_slice.len(), 1024 * 1024);
+        assert!(!buffer_slice.is_empty());
+    }
+
+    #[test]
+    fn test_buffer_slice_full_array() {
+        let mut data = [42u8; 100];
+        let slice = &mut data[..];
+
+        // SAFETY: exclusive access
+        let mut buffer_slice = unsafe { BufferSlice::from_slice(slice) };
+
+        // SAFETY: reconstruct slice
+        let reconstructed = unsafe { buffer_slice.as_mut_slice() };
+
+        // Verify all elements
+        assert_eq!(reconstructed.len(), 100);
+        assert!(reconstructed.iter().all(|&x| x == 42));
+
+        // Modify all
+        for elem in reconstructed.iter_mut() {
+            *elem = 99;
+        }
+
+        // Verify changes
+        assert!(data.iter().all(|&x| x == 99));
+    }
+
+    #[test]
+    fn test_buffer_slice_single_element() {
+        let mut data = [7u8];
+        let slice = &mut data[..];
+
+        // SAFETY: exclusive access
+        let mut buffer_slice = unsafe { BufferSlice::from_slice(slice) };
+
+        assert_eq!(buffer_slice.len(), 1);
+
+        // SAFETY: reconstruct
+        let reconstructed = unsafe { buffer_slice.as_mut_slice() };
+        assert_eq!(reconstructed[0], 7);
+
+        reconstructed[0] = 13;
+        assert_eq!(data[0], 13);
+    }
+
+    #[test]
+    fn test_buffer_slice_non_overlapping() {
+        let mut data = [0u8; 100];
+
+        // Create two non-overlapping slices
+        let (left, right) = data.split_at_mut(50);
+
+        // SAFETY: slices are non-overlapping
+        let slice1 = unsafe { BufferSlice::from_slice(left) };
+        let slice2 = unsafe { BufferSlice::from_slice(right) };
+
+        assert_eq!(slice1.len(), 50);
+        assert_eq!(slice2.len(), 50);
+    }
+
+    #[test]
+    fn test_buffer_slice_send() {
+        // Verify BufferSlice can be sent across threads
+        fn assert_send<T: Send>() {}
+        assert_send::<BufferSlice>();
+    }
 }

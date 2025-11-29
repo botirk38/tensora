@@ -85,7 +85,7 @@ test-unit:
   stage: test
   script:
     - cd tensor_store
-    - cargo test --workspace --lib --bins --locked
+    - cargo test --workspace --lib --bins --locked -- --show-output
   cache:
     key:
       files:
@@ -124,9 +124,14 @@ coverage-llvm:
     - cargo install cargo-llvm-cov || echo "cargo-llvm-cov already installed"
   script:
     - cd tensor_store
-    - cargo llvm-cov --workspace --lcov --output-path coverage.lcov
+    - cargo llvm-cov clean --workspace
+    - cargo llvm-cov --workspace --all-targets --lcov --output-path coverage.lcov
     - cargo llvm-cov report --summary-only
-  coverage: '/\d+\.\d+% coverage/'
+    - cargo llvm-cov report --html
+    - |
+      COVERAGE=$(cargo llvm-cov report --summary-only | grep -E '^\s*TOTAL' | awk '{print $10}' | sed 's/%//' || echo "0")
+      echo "Total coverage: ${COVERAGE}%"
+  coverage: '/Total coverage: (\d+\.\d+)%/'
   cache:
     key:
       files:
@@ -141,6 +146,7 @@ coverage-llvm:
   artifacts:
     paths:
       - tensor_store/coverage.lcov
+      - tensor_store/target/llvm-cov/html/
     expire_in: 1 month
 
 # =============================================================================

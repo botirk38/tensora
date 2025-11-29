@@ -64,6 +64,9 @@ libc = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["async_tokio"] }
+proptest = "1.5"
+tempfile = "3.14"
+tokio-test = "0.4"
 
 
 [profile.release]
