@@ -1,168 +1,135 @@
-use std::env;
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod config;
 mod safetensors;
 mod serverlessllm;
 
-use config::{ProfileConfig, ProfileError};
+use config::ProfileConfig;
 
-#[derive(Debug, Clone, Copy)]
-enum Suite {
-    Safetensors,
-    ServerlessLlm,
+#[derive(Parser)]
+#[command(name = "profile")]
+#[command(about = "Profiling harness for tensor_store (no Criterion)", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-#[derive(Debug)]
-struct CliArgs {
-    suite: Suite,
-    case: String,
-    fixture: Option<String>,
-    iterations: usize,
-    list: bool,
-    help: bool,
+#[derive(Subcommand)]
+enum Commands {
+    /// Profile SafeTensors loader
+    Safetensors {
+        /// Profiling case to run
+        #[arg(value_enum)]
+        case: SafeTensorsCase,
+
+        /// Fixture name (e.g., qwen2-0.5b, mistral-7b)
+        #[arg(short, long)]
+        fixture: Option<String>,
+
+        /// Number of iterations to run (default: 1)
+        #[arg(short, long, default_value_t = 1)]
+        iterations: usize,
+    },
+    /// Profile ServerlessLLM loader
+    Serverlessllm {
+        /// Profiling case to run
+        #[arg(value_enum)]
+        case: ServerlessLLMCase,
+
+        /// Fixture name (e.g., qwen2-0.5b, mistral-7b)
+        #[arg(short, long)]
+        fixture: Option<String>,
+
+        /// Number of iterations to run (default: 1)
+        #[arg(short, long, default_value_t = 1)]
+        iterations: usize,
+    },
 }
 
-fn parse_args() -> Result<CliArgs, ProfileError> {
-    let mut suite: Option<Suite> = None;
-    let mut case: Option<String> = None;
-    let mut fixture: Option<String> = None;
-    let mut iterations: usize = 1;
-    let mut list = false;
-    let mut help = false;
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum SafeTensorsCase {
+    /// io_uring async load (Linux only)
+    IoUringLoad,
+    /// io_uring parallel load (Linux only)
+    IoUringParallel,
+    /// io_uring prewarmed load (Linux only)
+    IoUringPrewarmed,
+    /// Tokio async load
+    TokioLoad,
+    /// Tokio parallel load
+    TokioParallel,
+    /// Tokio prewarmed load
+    TokioPrewarmed,
+    /// Synchronous load
+    Sync,
+    /// Memory-mapped load
+    Mmap,
+    /// Original safetensors crate load
+    Original,
+}
 
-    let mut args = env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--suite" => {
-                let value = args.next().ok_or_else(|| {
-                    ProfileError::new("Missing value after --suite (safetensors|serverlessllm)")
-                })?;
-                suite = match value.as_str() {
-                    "safetensors" => Some(Suite::Safetensors),
-                    "serverlessllm" => Some(Suite::ServerlessLlm),
-                    other => {
-                        return Err(ProfileError::new(format!(
-                            "Unknown suite '{}'. Use safetensors or serverlessllm",
-                            other
-                        )));
-                    }
-                };
-            }
-            "--case" => {
-                case = Some(args.next().ok_or_else(|| {
-                    ProfileError::new("Missing value after --case (see --list for options)")
-                })?);
-            }
-            "--fixture" => {
-                fixture = Some(
-                    args.next()
-                        .ok_or_else(|| ProfileError::new("Missing value after --fixture"))?,
-                );
-            }
-            "--iterations" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| ProfileError::new("Missing value after --iterations"))?;
-                iterations = value.parse::<usize>().map_err(|err| {
-                    ProfileError::new(format!(
-                        "--iterations expects a positive integer (got '{value}': {err})"
-                    ))
-                })?;
-            }
-            "--list" => {
-                list = true;
-            }
-            "--help" | "-h" => {
-                help = true;
-            }
-            other => return Err(ProfileError::new(format!("Unknown argument '{}'", other))),
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum ServerlessLLMCase {
+    /// Async load
+    AsyncLoad,
+    /// Synchronous load
+    SyncLoad,
+    /// Memory-mapped load
+    MmapLoad,
+}
+
+impl SafeTensorsCase {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::IoUringLoad => "io-uring-load",
+            Self::IoUringParallel => "io-uring-parallel",
+            Self::IoUringPrewarmed => "io-uring-prewarmed",
+            Self::TokioLoad => "tokio-load",
+            Self::TokioParallel => "tokio-parallel",
+            Self::TokioPrewarmed => "tokio-prewarmed",
+            Self::Sync => "sync",
+            Self::Mmap => "mmap",
+            Self::Original => "original",
         }
     }
-
-    let selected_suite = suite.ok_or_else(|| {
-        ProfileError::new("Missing --suite. Use safetensors or serverlessllm (try --list)")
-    })?;
-
-    let selected_case = if list || help {
-        // When listing or printing help, we don't need a case value.
-        case.unwrap_or_default()
-    } else {
-        case.ok_or_else(|| {
-            ProfileError::new("Missing --case. Use --list after selecting a suite to see options")
-        })?
-    };
-
-    Ok(CliArgs {
-        suite: selected_suite,
-        case: selected_case,
-        fixture,
-        iterations,
-        list,
-        help,
-    })
 }
 
-fn print_usage() {
-    eprintln!(
-        "\
-Profiling harness (no Criterion).
-
-Usage:
-  cargo run --release --bin profile -- --suite <safetensors|serverlessllm> --case <name> [--fixture <name>] [--iterations N]
-
-Options:
-  --suite        Target suite to profile (safetensors or serverlessllm)
-  --case         Scenario to run (use --list with --suite to see options)
-  --fixture      Fixture directory under ./fixtures (default: all fixtures)
-  --iterations   Number of iterations to run (default: 1)
-  --list         List available cases for the chosen suite and exit
-  --help, -h     Show this message
-
-Examples:
-  cargo flamegraph --bin profile -- --suite safetensors --case io-uring-load --fixture qwen2-0.5b
-  cargo flamegraph --bin profile -- --suite serverlessllm --case async-load --iterations 3
-"
-    );
-}
-
-fn list_cases(suite: Suite) {
-    match suite {
-        Suite::Safetensors => {
-            println!("safetensors cases:");
-            for case in safetensors::available_cases() {
-                println!("  - {case}");
-            }
-        }
-        Suite::ServerlessLlm => {
-            println!("serverlessllm cases:");
-            for case in serverlessllm::available_cases() {
-                println!("  - {case}");
-            }
+impl ServerlessLLMCase {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::AsyncLoad => "async-load",
+            Self::SyncLoad => "sync-load",
+            Self::MmapLoad => "mmap-load",
         }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = parse_args()?;
+    let cli = Cli::parse();
 
-    if args.help {
-        print_usage();
-        return Ok(());
-    }
-
-    if args.list {
-        list_cases(args.suite);
-        return Ok(());
-    }
-
-    let config = ProfileConfig {
-        iterations: args.iterations,
-        fixture: args.fixture,
-    };
-
-    match args.suite {
-        Suite::Safetensors => safetensors::run(&args.case, &config)?,
-        Suite::ServerlessLlm => serverlessllm::run(&args.case, &config)?,
+    match cli.command {
+        Commands::Safetensors {
+            case,
+            fixture,
+            iterations,
+        } => {
+            let config = ProfileConfig {
+                iterations,
+                fixture,
+            };
+            safetensors::run(case.as_str(), &config)?;
+        }
+        Commands::Serverlessllm {
+            case,
+            fixture,
+            iterations,
+        } => {
+            let config = ProfileConfig {
+                iterations,
+                fixture,
+            };
+            serverlessllm::run(case.as_str(), &config)?;
+        }
     }
 
     Ok(())

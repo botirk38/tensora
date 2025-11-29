@@ -6,23 +6,12 @@ use tensor_store::readers::traits::TensorMetadata;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 
-const CASES: &[&str] = &["async-load", "sync-load", "mmap-load"];
-
-pub const fn available_cases() -> &'static [&'static str] {
-    CASES
-}
-
 pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "async-load" => async_load(config),
         "sync-load" => sync_load(config),
         "mmap-load" => mmap_load(config),
-        other => Err(ProfileError::new(format!(
-            "Unknown serverlessllm case '{}'. Available: {}",
-            other,
-            CASES.join(", ")
-        ))
-        .into()),
+        other => Err(ProfileError::new(format!("Unknown serverlessllm case '{}'", other)).into()),
     }
 }
 

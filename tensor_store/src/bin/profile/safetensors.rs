@@ -7,22 +7,6 @@ use tensor_store::readers::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 
-const CASES: &[&str] = &[
-    "io-uring-load",
-    "io-uring-parallel",
-    "io-uring-prewarmed",
-    "tokio-load",
-    "tokio-parallel",
-    "tokio-prewarmed",
-    "sync",
-    "mmap",
-    "original",
-];
-
-pub const fn available_cases() -> &'static [&'static str] {
-    CASES
-}
-
 pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "io-uring-load" => io_uring_load(config),
@@ -34,12 +18,7 @@ pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
         "sync" => sync_load(config),
         "mmap" => mmap_load(config),
         "original" => original_load(config),
-        other => Err(ProfileError::new(format!(
-            "Unknown safetensors case '{}'. Available: {}",
-            other,
-            CASES.join(", ")
-        ))
-        .into()),
+        other => Err(ProfileError::new(format!("Unknown safetensors case '{}'", other)).into()),
     }
 }
 

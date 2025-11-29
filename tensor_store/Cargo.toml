@@ -32,8 +32,13 @@ path = "profiling/serverlessllm_reader.rs"
 name = "profile"
 path = "src/bin/profile/main.rs"
 
+[[bin]]
+name = "demo"
+path = "src/bin/demo/main.rs"
+
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
 futures = "0.3"
 num_cpus = "1.16"
 region = "3.0.2"
