@@ -1,14 +1,3 @@
-# Minimal CI configuration - use extended template with custom runner tags
+# Minimal CI configuration - use extended template for cross-platform testing
 include:
   - component: gitlab.com/rust-ci/rust-ci/extended@1.4.0
-
-# Custom runner tags for io-uring support
-default:
-  tags:
-    - linux
-    - shell
-    - io-uring
-
-# Preserve cargo home location
-variables:
-  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
