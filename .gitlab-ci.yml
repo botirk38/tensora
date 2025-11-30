@@ -2,3 +2,4 @@ include:
   - local: templates/extended.yml
     inputs:
       target: lib
+      rust-image: rust:latest
