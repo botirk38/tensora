@@ -1,0 +1,80 @@
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Debug symbols
+debug/
+*.dSYM/
+
+# Profiling and performance data
+*.profdata
+*.profraw
+perf.data*
+flamegraph.svg
+callgrind.out*
+cachegrind.out*
+
+# Test and benchmark results
+criterion/
+*.test
+*.bench
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.iml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+
+# Coverage reports
+*.lcov
+coverage/
+tarpaulin-report.html
+cobertura.xml
+llvm-cov/
+
+# Documentation build
+/target/doc/
+doc/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.log
+
+# Test fixtures (large files)
+fixtures/**
+!fixtures/.gitkeep
+
+# Environment and local config
+.env
+.env.local
+.cargo/config.toml.local
+
+# Generated files
+*.svg
+!assets/**/*.svg
+
+# Claude temporary files
+.claude/plans/
