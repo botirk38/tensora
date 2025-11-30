@@ -1,2 +1,4 @@
 include:
-  - remote: "https://gitlab.com/rust-ci/rust-ci/-/raw/1.4.0/templates/extended.yml"
+  - local: templates/extended.yml
+    inputs:
+      target: lib

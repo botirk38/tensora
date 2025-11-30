@@ -1,0 +1,625 @@
+spec:
+  inputs:
+    target:
+      default: bin
+      description: Whether the project's target is a binary or library
+      options:
+      - bin
+      - lib
+
+    rust-image:
+      default: rust
+      description: The image used for the rust jobs
+    pages-image:
+      default: alpine
+      description: The image used for deploying the doc website
+
+    stages:
+      type: array
+      default:
+      - lint
+      - test
+      - docs
+      - production
+      description: The pipeline stages
+    stages-extra:
+      type: array
+      default: []
+      description: Extra stages to add to the pipeline
+
+    cargo-home:
+      default: $CI_PROJECT_DIR/.cargo_home
+      description: Directory to store dependency downloads
+
+    cache-paths:
+      type: array
+      default:
+      - $CI_PROJECT_DIR/.cargo_home/.crates.toml
+      - $CI_PROJECT_DIR/.cargo_home/.crates2.json
+      - $CI_PROJECT_DIR/.cargo_home/bin/
+      - $CI_PROJECT_DIR/.cargo_home/registry/index/
+      - $CI_PROJECT_DIR/.cargo_home/registry/cache/
+      - $CI_PROJECT_DIR/.cargo_home/git/db/
+      - $CI_PROJECT_DIR/.cargo_home/advisory-dbs
+      description: The paths that get cached by default
+    extra-cache-paths:
+      type: array
+      default: []
+      description: Paths that get appended to the default cached paths
+
+    docs-path:
+      default: /
+      description: Path where to upload docs on Gitlab pages
+
+    fmt-name:
+      default: fmt
+      description: The name of the cargo fmt job
+    clippy-name:
+      default: clippy
+      description: The name of the cargo clippy job
+    outdated-name:
+      default: outdated
+      description: The name of the cargo outdated job
+    clippy-beta-name:
+      default: clippy-beta
+      description: The name of the cargo clippy beta job
+    test-name:
+      default: test
+      description: The name of the cargo test job
+    doc-name:
+      default: doc
+      description: The name of the cargo doc job
+    release-name:
+      default: release build
+      description: The name of the release build job
+
+    fmt-stage:
+      default: lint
+      description: The stage to run the cargo fmt job in
+    clippy-stage:
+      default: lint
+      description: The stage to run the cargo clippy job in
+    outdated-stage:
+      default: lint
+      description: The stage to run the cargo outdated job in
+    clippy-beta-stage:
+      default: lint
+      description: The stage to run the cargo clippy beta job in
+    test-stage:
+      default: test
+      description: The stage to run the cargo test job in
+    doc-stage:
+      default: docs
+      description: The stage to run the cargo doc job in
+    production-stage:
+      default: production
+      description: The stage to run the production jobs in
+
+    fmt-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo fmt job should be interruptible
+    clippy-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo clippy job should be interruptible
+    outdated-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo outdated job should be interruptible
+    clippy-beta-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo clippy beta job should be interruptible
+    test-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo test job should be interruptible
+    doc-interruptible:
+      type: boolean
+      default: true
+      description: Whether the cargo doc job should be interruptible
+    production-interruptible:
+      type: boolean
+      default: false
+      description: Whether the production jobs should be interruptible
+
+    clippy-allow-failure:
+      type: boolean
+      default: true
+      description: Whether to allow the cargo clippy job to fail
+    clippy-beta-allow-failure:
+      type: boolean
+      default: true
+      description: Whether to allow the cargo clippy beta job to fail
+
+    before:
+      type: array
+      default: []
+      description: Script to be ran before the rust commands
+    fmt-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo fmt
+    clippy-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo clippy
+    outdated-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo outdated
+    clippy-beta-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo clippy beta
+    test-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo test
+    doc-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to cargo doc
+    release-before:
+      type: array
+      default: []
+      description: Script to be ran before the call to release build
+
+    after:
+      type: array
+      default: []
+      description: Script to be ran after the rust commands
+    fmt-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo fmt
+    clippy-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo clippy
+    outdated-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo outdated
+    clippy-beta-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo clippy beta
+    test-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo test
+    doc-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to cargo doc
+    release-after:
+      type: array
+      default: []
+      description: Script to be ran after the call to release build
+
+    clippy-beta-needs-extra:
+      type: array
+      default: []
+      description: Extra jobs that the cargo clippy beta job needs
+    test-needs-extra:
+      type: array
+      default: []
+      description: Extra jobs that the cargo test job needs
+    doc-needs-extra:
+      type: array
+      default: []
+      description: Extra jobs that the cargo doc job needs
+    pages-needs-extra:
+      type: array
+      default: []
+      description: Extra jobs that the pages job needs
+
+    doc-artifacts-paths:
+      type: array
+      default:
+      - target/doc
+      - .rust-ci/metadata.json
+      description: Artifact paths for the cargo doc job. These files are used by the pages just to build the docs website.
+    doc-artifacts-extra:
+      type: array
+      default: []
+      description: Extra artifact paths for the cargo doc job
+    release-artifacts-paths:
+      type: array
+      default:
+      - .production-build
+      description: Artifact paths for the release build job. This is where the release binary is saved.
+    release-artifacts-extra:
+      type: array
+      default: []
+      description: Extra artifact paths for the release build job
+    pages-artifacts-paths:
+      type: array
+      default:
+      - public
+      description: Artifact paths for the pages job. This is where the doc webpages are saved.
+    pages-artifacts-extra:
+      type: array
+      default: []
+      description: Extra artifact paths for the pages job
+
+    fmt-command:
+      default: cargo fmt
+      description: The cargo fmt command
+    clippy-command:
+      default: cargo clippy
+      description: The cargo clippy command
+    outdated-command:
+      default: cargo outdated
+      description: The cargo outdated command
+    clippy-beta-command:
+      default: cargo clippy
+      description: The cargo clippy beta command
+    test-command:
+      default: cargo test
+      description: The cargo test command
+    doc-command:
+      default: cargo doc
+      description: The cargo doc command
+    release-command:
+      default: cargo install
+      description: The release build command
+
+    fmt-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo fmt`, e.g. `SOME_VAR=foo`
+    clippy-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo clippy`, e.g. `SOME_VAR=foo`
+    outdated-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo outdated`, e.g. `SOME_VAR=foo`
+    clippy-beta-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo clippy`, e.g. `SOME_VAR=foo`
+    test-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo test`, e.g. `SOME_VAR=foo`
+    doc-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo doc`, e.g. `SOME_VAR=foo`
+    release-command-prefix:
+      default: ''
+      description: Prefix to apply before `cargo install`, e.g. `SOME_VAR=foo`
+
+    fmt-args:
+      default: --check --all --verbose
+      description: Arguments to be passed to `cargo fmt`. If overriding this you should probably still include `--check`.
+    clippy-args:
+      default: -- -D warnings
+      description: Arguments to be passed to `cargo clippy`
+    outdated-args:
+      default: --root-deps-only --exit-code 134 -w
+      description: Arguments to be passed to `cargo outdated`. To allow failure you can match the exit code to the value specified in the `outdated-allowed-exit-codes` parameter.
+    clippy-beta-args:
+      default: -- -D warnings
+      description: Arguments to be passed to `cargo clippy`
+    test-args:
+      default: --workspace
+      description: Arguments to be passed to `cargo test`
+    doc-args:
+      default: --workspace --no-deps
+      description: Arguments to be passed to `cargo doc`
+    release-build-args:
+      default: --root .production-build --path {} --locked
+      description: Arguments to be passed to `cargo install`. The command is ran against each workspace member with a bin target. `{}` will be substituted for the path to the member. Note this job makes `.production-build/` a job artifact.
+
+    fmt-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo fmt`
+    clippy-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo clippy`
+    outdated-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo outdated`
+    clippy-beta-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo clippy`
+    test-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo test`
+    doc-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo doc`
+    release-args-extra:
+      default: ''
+      description: Extra arguments to be passed to `cargo install`
+
+    release-extends:
+      default: .production
+      description: What configuration should be reused for the release build job
+    pages-extends:
+      default: .production
+      description: What configuration should be reused for the pages job
+
+    production-condition:
+      default: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      description: Condition used to define a production job
+    production-rules-extra:
+      type: array
+      default: []
+      description: Extra rules to apply to production jobs
+
+    install-all-tools:
+      type: boolean
+      default: true
+      description: Whether to automatically install all source-code analysis tools used in the pipeline. Setting `false` will override all other `install-*` input parameters relevant to each tool.
+    install-rustup-components:
+      type: boolean
+      default: true
+      description: Whether to automatically install rustup components used in the pipeline. Setting `false` will override all other `install-*` input parameters relevant to each tool.
+    install-fmt:
+      type: boolean
+      default: true
+      description: Whether to automatically install rustfmt. Setting `false` will override all other `install-*` input parameters relevant to the tool.
+    install-clippy:
+      type: boolean
+      default: true
+      description: Whether to automatically install clippy. Setting `false` will override all other `install-*` input parameters relevant to the tool.
+    install-outdated:
+      type: boolean
+      default: true
+      description: Whether to automatically install outdated. Setting `false` will override all other `install-*` input parameters relevant to the tool.
+    install-clippy-beta:
+      type: boolean
+      default: true
+      description: Whether to automatically install clippy-beta. Setting `false` will override all other `install-*` input parameters relevant to the tool.
+    install-dasel:
+      type: boolean
+      default: true
+      description: Whether to automatically install dasel (used in the pages job). Setting `false` will override all other `install-*` input parameters relevant to the tool.
+    install-cargo-extensions:
+      type: boolean
+      default: true
+      description: |-
+        Whether to automatically install the cargo extensions used by this
+        pipeline (e.g. cargo-outdated). Setting `false` will override all other
+        `install-*` input parameters relevant to each tool.
+
+    curl-install:
+      default: if which apt; then apt-get -qq update && apt-get -qq install curl; elif which apk; then apk add curl bash; else echo 'Unable to install curl, please change the `curl install` inputs parameter' && exit 1; fi
+      description: |-
+        This shell one-liner is used to install curl, which is used to install
+        cargo-binstall. If not using a debian- or alpine-based image you'll
+        need to modify this appropriately.
+
+    outdated-allowed-exit-codes:
+      type: array
+      default:
+      - 134
+      description: Failure will be allowed in the case where the outdated job returns these exit codes. You should match this to the value specified in the `outdated-args` parameter. To disallow failure entirely, set this parameter to the empty array.
+
+    cargo-outdated-version:
+      default: '0.16'
+      description: The version of cargo-outdated to use.
+
+---
+
+###########
+# Prelude #
+###########
+
+.rust-ci:
+  default:
+    cache:
+      paths:
+      - $[[ inputs.cache-paths ]]
+      - $[[ inputs.extra-cache-paths ]]
+  fmt:
+    script:
+    - rustc --version && cargo --version
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-rustup-components ]] && $[[ inputs.install-fmt ]];  } && rustup component add rustfmt'
+    - $[[ inputs.fmt-command-prefix ]] $[[ inputs.fmt-command ]] $[[ inputs.fmt-args ]] $[[ inputs.fmt-args-extra ]]
+  clippy:
+    script:
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-rustup-components ]] && $[[ inputs.install-clippy ]];  } && rustup component add clippy'
+    - CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.clippy-command-prefix ]] $[[ inputs.clippy-command ]] $[[ inputs.clippy-args ]] $[[ inputs.clippy-args-extra ]]
+  outdated:
+    script:
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - !reference [.rust-ci, setup-binstall]
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-cargo-extensions ]] && $[[ inputs.install-outdated ]];  } && CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.cargo-home ]]/bin/cargo-binstall binstall -y cargo-outdated --version $[[ inputs.cargo-outdated-version ]]'
+    - set +e
+    - CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.outdated-command-prefix ]] $[[ inputs.outdated-command ]] $[[ inputs.outdated-args ]] $[[ inputs.outdated-args-extra ]] || exit $?
+  clippy_beta:
+    script:
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-rustup-components ]] && $[[ inputs.install-clippy-beta ]];  } && rustup toolchain install beta'
+    - rustup default beta
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-rustup-components ]] && $[[ inputs.install-clippy-beta ]];  } && rustup component add clippy'
+    - CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.clippy-beta-command-prefix ]] $[[ inputs.clippy-beta-command ]] $[[ inputs.clippy-beta-args ]] $[[ inputs.clippy-beta-args-extra ]]
+  test:
+    script:
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.test-command-prefix ]] $[[ inputs.test-command ]] $[[ inputs.test-args ]] $[[ inputs.test-args-extra ]]
+  doc:
+    script:
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - CARGO_HOME=$[[ inputs.cargo-home ]] $[[ inputs.doc-command-prefix ]] $[[ inputs.doc-command ]] $[[ inputs.doc-args ]] $[[ inputs.doc-args-extra ]]
+    - mkdir -p .rust-ci
+    - CARGO_HOME=$[[ inputs.cargo-home ]] cargo metadata --format-version 1 --no-deps > .rust-ci/metadata.json
+  release_build:
+    script:
+    - rustc --version && CARGO_HOME=$[[ inputs.cargo-home ]] cargo --version
+    - '[ -f $[[ inputs.cargo-home ]]/bin/cargo-workspaces ] || CARGO_HOME=$[[ inputs.cargo-home ]] cargo install cargo-workspaces --version 0.3.6'
+    - '[ -f $[[ inputs.cargo-home ]]/bin/jaq ] || CARGO_HOME=$[[ inputs.cargo-home ]] cargo install jaq --version 1.5.1'
+    - CARGO_HOME=$[[ inputs.cargo-home ]] cargo metadata --format-version 1 --no-deps | $[[ inputs.cargo-home ]]/bin/jaq '.packages.[] | select(.targets.[].kind | any(. == "bin")) | .name' | sort | uniq | while read; do PATH=$[[ inputs.cargo-home ]]/bin:$PATH CARGO_HOME=$[[ inputs.cargo-home ]] cargo workspaces list --json | $[[ inputs.cargo-home ]]/bin/jaq ".[] | select( .name == $REPLY ) | .location" | xargs -I {} sh -c CARGO_HOME='$[[ inputs.cargo-home ]]  $[[ inputs.release-command-prefix ]] $[[ inputs.release-command ]] $[[ inputs.release-build-args ]] $[[ inputs.release-args-extra ]]'; done
+  pages:
+    script:
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-dasel ]];  } && apk add dasel'
+    - |-
+      # The below block uses `xargs` to strip quotes from `dasel` output
+      if [ `cat .rust-ci/metadata.json | dasel -r json '.workspace_members.all().count()'` -eq 1 ]; then
+        echo "<meta http-equiv=\"refresh\" content=\"0; url=./$(cat .rust-ci/metadata.json | dasel -r json '.packages.[0].name' | sed 's/-/_/g' | xargs)/index.html\">" > target/doc/index.html
+      else
+        echo "<html>
+        <html lang=\"en\">
+        <head>
+          <meta name=\"${CI_PROJECT_NAME} docs\" content=\"Documentation for the ${CI_PROJECT_NAME} crates\" />
+          <meta charset=\"utf-8\">
+          <title>${CI_PROJECT_NAME} documentation</title>
+          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+        </head>
+        <body>
+          <h1>${CI_PROJECT_NAME}</h1>
+          <ul>" > target/doc/index.html
+
+        for package in `cat .rust-ci/metadata.json | dasel -r json '.packages.all().name' | sed s/-/_/g | xargs`; do
+          echo "    <li><a href=\"./$package/index.html\">$package</a></li>" >> target/doc/index.html
+        done
+
+        echo "  </ul>
+        </body>
+        </html>" >> target/doc/index.html
+      fi
+    - mkdir -p public/$(dirname $[[ inputs.docs-path ]])
+    - mv target/doc/* public/$[[ inputs.docs-path ]]
+  setup-binstall:
+  - test -f $[[ inputs.cargo-home ]]/bin/cargo-binstall || { $[[ inputs.curl-install ]]; curl -L --proto "=https" --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | CARGO_HOME=$[[ inputs.cargo-home ]] bash; }
+
+# Template for production jobs. This is for use downstream.
+.production:
+  stage: $[[ inputs.production-stage ]]
+  interruptible: $[[ inputs.production-interruptible ]]
+  rules:
+  - if: $[[ inputs.production-condition ]]
+  - $[[ inputs.production-rules-extra ]]
+
+############
+# Pipeline #
+############
+
+# Workaround for this (3 years old!) bug: https://gitlab.com/gitlab-org/gitlab/-/issues/222370#note_662695503
+workflow:
+  rules:
+  - when: always
+
+stages:
+- $[[ inputs.stages ]]
+- $[[ inputs.stages-extra ]]
+
+$[[ inputs.fmt-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.fmt-stage ]]
+  interruptible: $[[ inputs.fmt-interruptible ]]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.fmt-before ]]
+  - !reference [.rust-ci, fmt, script]
+  - $[[ inputs.fmt-after ]]
+  - $[[ inputs.after ]]
+$[[ inputs.clippy-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.clippy-stage ]]
+  interruptible: $[[ inputs.clippy-interruptible ]]
+  cache: !reference [.rust-ci, default, cache]
+  allow_failure: $[[ inputs.clippy-allow-failure ]]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.clippy-before ]]
+  - !reference [.rust-ci, clippy, script]
+  - $[[ inputs.clippy-after ]]
+  - $[[ inputs.after ]]
+$[[ inputs.outdated-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.outdated-stage ]]
+  interruptible: $[[ inputs.outdated-interruptible ]]
+  cache: !reference [.rust-ci, default, cache]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.outdated-before ]]
+  - !reference [.rust-ci, outdated, script]
+  - $[[ inputs.outdated-after ]]
+  - $[[ inputs.after ]]
+  allow_failure:
+    exit_codes:
+    - $[[ inputs.outdated-allowed-exit-codes ]]
+$[[ inputs.clippy-beta-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.clippy-beta-stage ]]
+  interruptible: $[[ inputs.clippy-beta-interruptible ]]
+  cache: !reference [.rust-ci, default, cache]
+  allow_failure: $[[ inputs.clippy-beta-allow-failure ]]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.clippy-beta-before ]]
+  - !reference [.rust-ci, clippy_beta, script]
+  - $[[ inputs.clippy-beta-after ]]
+  - $[[ inputs.after ]]
+  needs:
+  - $[[ inputs.clippy-name ]]
+  - $[[ inputs.clippy-beta-needs-extra ]]
+$[[ inputs.test-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.test-stage ]]
+  interruptible: $[[ inputs.test-interruptible ]]
+  cache: !reference [.rust-ci, default, cache]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.test-before ]]
+  - !reference [.rust-ci, test, script]
+  - $[[ inputs.test-after ]]
+  - $[[ inputs.after ]]
+  needs:
+  - $[[ inputs.fmt-name ]]
+  - $[[ inputs.clippy-name ]]
+  - $[[ inputs.test-needs-extra ]]
+$[[ inputs.doc-name ]]:
+  image: $[[ inputs.rust-image ]]
+  stage: $[[ inputs.doc-stage ]]
+  interruptible: $[[ inputs.doc-interruptible ]]
+  cache: !reference [.rust-ci, default, cache]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.doc-before ]]
+  - !reference [.rust-ci, doc, script]
+  - $[[ inputs.doc-after ]]
+  - $[[ inputs.after ]]
+  needs:
+  - $[[ inputs.fmt-name ]]
+  - $[[ inputs.clippy-name ]]
+  - $[[ inputs.doc-needs-extra ]]
+  artifacts:
+    paths:
+    - $[[ inputs.doc-artifacts-paths ]]
+    - $[[ inputs.doc-artifacts-extra ]]
+$[[ inputs.release-name ]]:
+  image: $[[ inputs.rust-image ]]
+  extends: $[[ inputs.release-extends ]]
+  cache: !reference [.rust-ci, default, cache]
+  script:
+  - $[[ inputs.before ]]
+  - $[[ inputs.release-before ]]
+  - !reference [.rust-ci, release_build, script]
+  - $[[ inputs.release-after ]]
+  - $[[ inputs.after ]]
+  variables:
+    RUST_CI_TARGET: $[[ inputs.target ]]
+  artifacts:
+    paths:
+    - $[[ inputs.release-artifacts-paths ]]
+    - $[[ inputs.release-artifacts-extra ]]
+  rules:
+  - if: $RUST_CI_TARGET == "bin" && $[[ inputs.production-condition ]]
+  - $[[ inputs.production-rules-extra ]]
+pages:
+  extends: $[[ inputs.pages-extends ]]
+  image: $[[ inputs.pages-image ]]
+  script:
+  - !reference [.rust-ci, pages, script]
+  needs:
+  - $[[ inputs.doc-name ]]
+  - $[[ inputs.pages-needs-extra ]]
+  artifacts:
+    paths:
+    - $[[ inputs.pages-artifacts-paths ]]
+    - $[[ inputs.pages-artifacts-extra ]]
