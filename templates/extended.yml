@@ -455,7 +455,7 @@ spec:
     - CARGO_HOME=$[[ inputs.cargo-home ]] cargo metadata --format-version 1 --no-deps | $[[ inputs.cargo-home ]]/bin/jaq '.packages.[] | select(.targets.[].kind | any(. == "bin")) | .name' | sort | uniq | while read; do PATH=$[[ inputs.cargo-home ]]/bin:$PATH CARGO_HOME=$[[ inputs.cargo-home ]] cargo workspaces list --json | $[[ inputs.cargo-home ]]/bin/jaq ".[] | select( .name == $REPLY ) | .location" | xargs -I {} sh -c CARGO_HOME='$[[ inputs.cargo-home ]]  $[[ inputs.release-command-prefix ]] $[[ inputs.release-command ]] $[[ inputs.release-build-args ]] $[[ inputs.release-args-extra ]]'; done
   pages:
     script:
-    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-dasel ]];  } && apk add dasel'
+    - '{ $[[ inputs.install-all-tools ]] && $[[ inputs.install-dasel ]];  } && curl -L --proto "=https" --tlsv1.2 -sSf https://raw.githubusercontent.com/jqlang/dasel/master/install.sh | sh -s -- -b /usr/local/bin'
     - |-
       # The below block uses `xargs` to strip quotes from `dasel` output
       if [ `cat .rust-ci/metadata.json | dasel -r json '.workspace_members.all().count()'` -eq 1 ]; then
