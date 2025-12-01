@@ -61,7 +61,7 @@ mod linux {
         let mut buf = get_buffer_pool().get(file_size);
         file.read_exact(buf.as_mut_slice()).await?;
         buf.truncate(file_size);
-        Ok(buf.into_vec())
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -250,7 +250,7 @@ mod linux {
         }
 
         final_buf.truncate(file_size);
-        Ok(final_buf.into_inner())
+        Ok(final_buf.to_vec())
     }
 
     #[inline]
@@ -278,7 +278,7 @@ mod linux {
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(buf.as_mut_slice()).await?;
         buf.truncate(len);
-        Ok(buf.into_vec())
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -333,7 +333,7 @@ mod non_linux {
         let mut buf = get_buffer_pool().get(file_size);
         file.read_exact(buf.as_mut_slice()).await?;
         buf.truncate(file_size);
-        Ok(buf.into_vec())
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -432,7 +432,7 @@ mod non_linux {
         }
 
         final_buf.truncate(file_size);
-        Ok(final_buf.into_inner())
+        Ok(final_buf.to_vec())
     }
 
     #[inline]
@@ -442,7 +442,7 @@ mod non_linux {
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(buf.as_mut_slice()).await?;
         buf.truncate(len);
-        Ok(buf.into_vec())
+        Ok(buf.to_vec())
     }
 
     #[inline]

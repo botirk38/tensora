@@ -11,12 +11,13 @@ const fn div_ceil(a: usize, b: usize) -> usize {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::super::batch::{flatten_results, group_requests_by_file};
+
     use super::super::odirect::{
         BLOCK_SIZE, alloc_aligned, can_use_direct_read, can_use_direct_write, is_block_aligned,
         open_direct_read_sync, open_direct_write_sync,
     };
     use super::*;
+    use rayon::prelude::*;
     use std::fs::File;
     use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
     use std::thread;
@@ -53,7 +54,7 @@ mod linux {
 
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(&mut buf[..])?;
-        Ok(buf.into_inner())
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -101,10 +102,10 @@ mod linux {
                                 })?;
 
                         let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
-                        let path_buf = path_ref.to_path_buf();
+                        let path_clone = path_ref.to_path_buf();
 
                         let handle = thread::spawn(move || {
-                            let mut direct_file = open_direct_read_sync(path_buf.as_path())?;
+                            let mut direct_file = open_direct_read_sync(path_clone.as_path())?;
                             direct_file.seek(SeekFrom::Start(u64::try_from(start).map_err(
                                 |_e| {
                                     std::io::Error::new(
@@ -113,7 +114,6 @@ mod linux {
                                     )
                                 },
                             )?))?;
-
                             let slice = unsafe { buffer_slice.as_mut_slice() };
                             direct_file.read_exact(slice)?;
                             IoResult::Ok(())
@@ -210,7 +210,7 @@ mod linux {
         }
 
         final_buf.truncate(file_size);
-        Ok(final_buf.into_inner())
+        Ok(final_buf.to_vec())
     }
 
     pub fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
@@ -237,7 +237,7 @@ mod linux {
 
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(&mut buf[..])?;
-        Ok(buf.into_inner())
+        Ok(buf.to_vec())
     }
 
     pub fn load_range_batch(
@@ -247,33 +247,25 @@ mod linux {
             return Ok(Vec::new());
         }
 
-        let grouped = group_requests_by_file(requests);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(16)
+            .build()
+            .unwrap();
+        let mut results: Vec<(usize, Vec<u8>, usize, usize)> = pool.install(|| {
+            requests
+                .par_iter()
+                .enumerate()
+                .map(|(idx, (path, offset, len))| {
+                    load_range(path, *offset, *len).map(|data| (idx, data, 0, *len))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        results.sort_by_key(|(idx, _, _, _)| *idx);
 
-        let mut results = Vec::with_capacity(requests.len());
-        for (path, reqs) in grouped {
-            let mut handles = Vec::with_capacity(reqs.len());
-
-            for req in reqs {
-                let path_clone = path.clone();
-                handles.push(thread::spawn(move || {
-                    let data = load_range(&path_clone, req.offset, req.len)?;
-                    IoResult::Ok((req.idx, data, 0, req.len))
-                }));
-            }
-
-            let mut file_results = Vec::with_capacity(handles.len());
-            for handle in handles {
-                file_results.push(
-                    handle
-                        .join()
-                        .map_err(|_e| std::io::Error::other("thread panicked"))??,
-                );
-            }
-
-            results.push(file_results);
-        }
-
-        Ok(flatten_results(results))
+        Ok(results
+            .into_iter()
+            .map(|(_, data, _, len)| (data, 0, len))
+            .collect())
     }
 
     /// Write an entire buffer to a file synchronously.
@@ -311,8 +303,9 @@ mod linux {
 
 #[cfg(not(target_os = "linux"))]
 mod non_linux {
-    use super::super::batch::{flatten_results, group_requests_by_file};
+
     use super::*;
+    use rayon::prelude::*;
     use std::fs::File;
     use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
     use std::thread;
@@ -326,7 +319,7 @@ mod non_linux {
 
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(&mut buf[..])?;
-        Ok(buf.into_inner())
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -354,7 +347,7 @@ mod non_linux {
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "Chunk size ({} bytes) exceeds maximum Vec capacity ({} bytes). \
-                     Increase chunks to at least {} to proceed.",
+                      Increase chunks to at least {} to proceed.",
                     chunk_size,
                     max_capacity,
                     file_size.div_ceil(max_capacity)
@@ -431,7 +424,7 @@ mod non_linux {
 
         let mut buf = get_buffer_pool().get(len);
         file.read_exact(&mut buf[..])?;
-        Ok(buf.into_inner())
+        Ok(buf.to_vec())
     }
 
     pub fn load_range_batch(
@@ -441,33 +434,25 @@ mod non_linux {
             return Ok(Vec::new());
         }
 
-        let grouped = group_requests_by_file(requests);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(16)
+            .build()
+            .unwrap();
+        let mut results: Vec<(usize, Vec<u8>, usize, usize)> = pool.install(|| {
+            requests
+                .par_iter()
+                .enumerate()
+                .map(|(idx, (path, offset, len))| {
+                    load_range(path, *offset, *len).map(|data| (idx, data, 0, *len))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        results.sort_by_key(|(idx, _, _, _)| *idx);
 
-        let mut results = Vec::with_capacity(requests.len());
-        for (path, reqs) in grouped {
-            let mut handles = Vec::with_capacity(reqs.len());
-
-            for req in reqs {
-                let path_clone = path.clone();
-                handles.push(thread::spawn(move || {
-                    let data = load_range(&path_clone, req.offset, req.len)?;
-                    IoResult::Ok((req.idx, data, 0, req.len))
-                }));
-            }
-
-            let mut file_results = Vec::with_capacity(handles.len());
-            for handle in handles {
-                file_results.push(
-                    handle
-                        .join()
-                        .map_err(|_e| std::io::Error::other("thread panicked"))??,
-                );
-            }
-
-            results.push(file_results);
-        }
-
-        Ok(flatten_results(results))
+        Ok(results
+            .into_iter()
+            .map(|(_, data, _, len)| (data, 0, len))
+            .collect())
     }
 
     /// Write an entire buffer to a file synchronously.

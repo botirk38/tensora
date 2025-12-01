@@ -191,7 +191,7 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     validate_read_count(n, file_size)?;
     buf.truncate(file_size);
     file.close().await?;
-    Ok(buf.into_vec())
+    Ok(buf.to_vec())
 }
 
 /// Load tensor data in parallel chunks using `io_uring` with batched operations.
@@ -323,7 +323,7 @@ pub async fn load_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoRe
     validate_read_count(n, len)?;
     buf.truncate(len);
     file.close().await?;
-    Ok(buf.into_vec())
+    Ok(buf.to_vec())
 }
 
 /// Helpers for batched range reads.
@@ -352,7 +352,7 @@ async fn read_request_buffered(
     let n = res?;
     validate_read_count(n, req.len)?;
     read_buf.truncate(req.len);
-    Ok((req.idx, read_buf.into_vec(), 0, req.len))
+    Ok((req.idx, read_buf.to_vec(), 0, req.len))
 }
 
 async fn process_file_batch(

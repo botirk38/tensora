@@ -255,7 +255,9 @@ impl ServerlessLLMIndex {
         base_path: impl AsRef<Path>,
         tensor_names: &[&str],
     ) -> ReaderResult<HashMap<String, Vec<u8>>> {
-        let zero_copy_results = self.load_tensors_batch_zero_copy(base_path, tensor_names).await?;
+        let zero_copy_results = self
+            .load_tensors_batch_zero_copy(base_path, tensor_names)
+            .await?;
 
         // Convert results to owned Vec<u8> for API compatibility
         let result = zero_copy_results
@@ -442,7 +444,10 @@ impl ServerlessLLMIndex {
                 .entry(entry.partition_id)
                 .and_modify(|(_, max_size)| *max_size = (*max_size).max(required_size))
                 .or_insert_with(|| {
-                    (partition_paths.get(&entry.partition_id).unwrap().clone(), required_size)
+                    (
+                        partition_paths.get(&entry.partition_id).unwrap().clone(),
+                        required_size,
+                    )
                 });
         }
 
@@ -488,8 +493,8 @@ impl ServerlessLLMIndex {
         }
 
         // Load all tensors in parallel using batch API
-        let batch_results = backends::sync::load_range_batch(&batch_requests)
-            .map_err(ReaderError::from)?;
+        let batch_results =
+            backends::sync::load_range_batch(&batch_requests).map_err(ReaderError::from)?;
 
         // Convert results to HashMap
         let mut result = HashMap::with_capacity(names.len());
@@ -616,8 +621,6 @@ impl ServerlessLLMIndex {
 
         Ok(())
     }
-
-
 
     /// Returns the partition IDs used by this index.
     #[inline]
@@ -1056,7 +1059,10 @@ impl ServerlessLLMMmap {
             })
             .collect();
 
-        Ok(Self { index, partitions: partitions? })
+        Ok(Self {
+            index,
+            partitions: partitions?,
+        })
     }
 
     /// Returns a lazy view of the tensor with the given name.

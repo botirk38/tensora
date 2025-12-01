@@ -128,6 +128,8 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
             println!("  Size: {}", format_bytes(total_size_bytes));
             println!("  Partitions: {}", partition_count);
 
+            let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
             let start = Instant::now();
             let model = serverlessllm::load(&dir).await?;
             let duration = start.elapsed();
@@ -138,7 +140,10 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
             println!("  Tensors: {}", tensor_count);
 
             let throughput = total_size_bytes as f64 / duration.as_secs_f64() / 1e9;
-            println!("  Throughput: {:.2} GB/s\n", throughput);
+            println!("  Throughput: {:.2} GB/s", throughput);
+
+            crate::io_metrics::display_io_metrics_delta(io_before, duration);
+            println!();
         }
 
         Ok::<_, Box<dyn std::error::Error>>(())
@@ -199,6 +204,8 @@ fn demo_sync(config: &DemoConfig) -> DemoResult {
         println!("  Size: {}", format_bytes(total_size_bytes));
         println!("  Partitions: {}", partition_count);
 
+        let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
         let start = Instant::now();
         let model = serverlessllm::load_sync(&dir)?;
         let duration = start.elapsed();
@@ -209,7 +216,10 @@ fn demo_sync(config: &DemoConfig) -> DemoResult {
         println!("  Tensors: {}", tensor_count);
 
         let throughput = total_size_bytes as f64 / duration.as_secs_f64() / 1e9;
-        println!("  Throughput: {:.2} GB/s\n", throughput);
+        println!("  Throughput: {:.2} GB/s", throughput);
+
+        crate::io_metrics::display_io_metrics_delta(io_before, duration);
+        println!();
     }
 
     Ok(())
@@ -230,6 +240,8 @@ fn demo_mmap(config: &DemoConfig) -> DemoResult {
         println!("  Size: {}", format_bytes(total_size_bytes));
         println!("  Partitions: {}", partition_count);
 
+        let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
         let start = Instant::now();
         let model = serverlessllm::load_mmap(&dir)?;
         let duration = start.elapsed();
@@ -240,7 +252,10 @@ fn demo_mmap(config: &DemoConfig) -> DemoResult {
         println!("  Tensors: {}", tensor_count);
 
         let throughput = total_size_bytes as f64 / duration.as_secs_f64() / 1e9;
-        println!("  Throughput: {:.2} GB/s\n", throughput);
+        println!("  Throughput: {:.2} GB/s", throughput);
+
+        crate::io_metrics::display_io_metrics_delta(io_before, duration);
+        println!();
     }
 
     Ok(())

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 mod config;
+mod io_metrics;
 mod safetensors;
 mod serverlessllm;
 

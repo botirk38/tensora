@@ -97,6 +97,8 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
             println!("  File: {}", path.file_name().unwrap().to_str().unwrap());
             println!("  Size: {}", format_bytes(file_size));
 
+            let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
             let start = Instant::now();
             let data = safetensors::load(&path).await?;
             let duration = start.elapsed();
@@ -107,7 +109,10 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
             println!("  Tensors: {}", tensor_count);
 
             let throughput = file_size as f64 / duration.as_secs_f64() / 1e9;
-            println!("  Throughput: {:.2} GB/s\n", throughput);
+            println!("  Throughput: {:.2} GB/s", throughput);
+
+            crate::io_metrics::display_io_metrics_delta(io_before, duration);
+            println!();
         }
 
         Ok::<_, tensor_store::ReaderError>(())
@@ -162,6 +167,8 @@ fn demo_sync(config: &DemoConfig) -> DemoResult {
         println!("  File: {}", path.file_name().unwrap().to_str().unwrap());
         println!("  Size: {}", format_bytes(file_size));
 
+        let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
         let start = Instant::now();
         let data = safetensors::load_sync(&path)?;
         let duration = start.elapsed();
@@ -172,7 +179,11 @@ fn demo_sync(config: &DemoConfig) -> DemoResult {
         println!("  Tensors: {}", tensor_count);
 
         let throughput = file_size as f64 / duration.as_secs_f64() / 1e9;
-        println!("  Throughput: {:.2} GB/s\n", throughput);
+        println!("  Throughput: {:.2} GB/s", throughput);
+
+        // Always attempt to display IO metrics, even if minimal activity
+        crate::io_metrics::display_io_metrics_delta(io_before, duration);
+        println!();
     }
 
     Ok(())
@@ -190,6 +201,8 @@ fn demo_mmap(config: &DemoConfig) -> DemoResult {
         println!("  File: {}", path.file_name().unwrap().to_str().unwrap());
         println!("  Size: {}", format_bytes(file_size));
 
+        let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
         let start = Instant::now();
         let data = safetensors::load_mmap(&path)?;
         let duration = start.elapsed();
@@ -200,7 +213,10 @@ fn demo_mmap(config: &DemoConfig) -> DemoResult {
         println!("  Tensors: {}", tensor_count);
 
         let throughput = file_size as f64 / duration.as_secs_f64() / 1e9;
-        println!("  Throughput: {:.2} GB/s\n", throughput);
+        println!("  Throughput: {:.2} GB/s", throughput);
+
+        crate::io_metrics::display_io_metrics_delta(io_before, duration);
+        println!();
     }
 
     Ok(())
@@ -222,6 +238,8 @@ fn demo_parallel(config: &DemoConfig) -> DemoResult {
             println!("  Size: {}", format_bytes(file_size));
             println!("  Chunks: {}", chunks);
 
+            let io_before = crate::io_metrics::capture_disk_snapshot().ok();
+
             let start = Instant::now();
             let data = safetensors::load_parallel(&path, chunks).await?;
             let duration = start.elapsed();
@@ -232,7 +250,10 @@ fn demo_parallel(config: &DemoConfig) -> DemoResult {
             println!("  Tensors: {}", tensor_count);
 
             let throughput = file_size as f64 / duration.as_secs_f64() / 1e9;
-            println!("  Throughput: {:.2} GB/s\n", throughput);
+            println!("  Throughput: {:.2} GB/s", throughput);
+
+            crate::io_metrics::display_io_metrics_delta(io_before, duration);
+            println!();
         }
 
         Ok::<_, tensor_store::ReaderError>(())
