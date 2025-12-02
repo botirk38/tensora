@@ -4,7 +4,6 @@ use std::io;
 
 /// Errors that can occur during tensor writing operations.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum WriterError {
     /// I/O error occurred during write operations.
     #[error("I/O error: {0}")]

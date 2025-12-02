@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// Used by both readers (for parsing index entries) and writers (for creating index entries).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct IndexEntry {
     /// Shard identifier (which shard file contains this tensor)
     pub shard_id: u8,

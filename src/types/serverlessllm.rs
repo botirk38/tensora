@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// Used by both readers (for parsing index files) and writers (for creating index files).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[non_exhaustive]
 pub struct TensorEntry {
     /// Byte offset of the tensor data within the partition file
     pub offset: u64,

@@ -77,7 +77,6 @@ use tokio_uring::fs::statx;
 
 /// Parsed `ServerlessLLM` index
 #[derive(Debug, Default)]
-#[non_exhaustive]
 pub struct ServerlessLLMIndex {
     /// All tensors in the index
     tensors: HashMap<String, TensorEntry>,
@@ -117,6 +116,37 @@ impl ServerlessLLMIndex {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&TensorEntry> {
         self.tensors.get(name)
+    }
+
+    /// Returns the number of tensors tracked by this index.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.tensors.len()
+    }
+
+    /// Returns true when the index has no tensors.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tensors.is_empty()
+    }
+
+    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    #[inline]
+    #[must_use]
+    pub fn tensor_names(&self) -> Vec<&str> {
+        self.tensors
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
+    }
+
+    /// Returns an immutable view of the underlying tensor map.
+    #[inline]
+    #[must_use]
+    pub const fn tensors_map(&self) -> &HashMap<String, TensorEntry> {
+        &self.tensors
     }
 
     /// Returns an iterator over tensor names and entries.
@@ -766,7 +796,6 @@ impl TensorMmap {
 /// This struct now supports zero-copy access by holding a reference to shared buffers
 /// with offset/length metadata instead of copying data for each tensor.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct Tensor {
     /// Owned buffer containing tensor data
     data: Vec<u8>,
@@ -852,6 +881,43 @@ impl Tensor {
     pub const fn size(&self) -> u64 {
         self.entry.size
     }
+
+    /// Returns the partition id containing this tensor.
+    #[inline]
+    #[must_use]
+    pub const fn partition_id(&self) -> usize {
+        self.entry.partition_id
+    }
+
+    /// Returns the offset into the backing buffer where the tensor begins.
+    #[inline]
+    #[must_use]
+    pub const fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Returns the length of the tensor slice within the backing buffer.
+    #[inline]
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns an owned copy of the tensor data slice.
+    #[inline]
+    #[must_use]
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.data().to_vec()
+    }
+
+    /// Consumes the tensor and returns the owned data slice as a Vec<u8>.
+    #[inline]
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        let start = self.offset;
+        let end = start + self.len;
+        self.data[start..end].to_vec()
+    }
 }
 
 /// High-level ServerlessLLM reader with owned tensor data.
@@ -859,7 +925,6 @@ impl Tensor {
 /// This provides a simple API similar to SafeTensors: load once, then access tensors by name.
 /// All tensor data is loaded into memory for fast access.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct ServerlessLLM {
     /// All tensors loaded into memory
     tensors: HashMap<String, Tensor>,
@@ -949,6 +1014,44 @@ impl ServerlessLLM {
     #[must_use]
     pub fn tensor(&self, name: &str) -> Option<&Tensor> {
         self.tensors.get(name)
+    }
+
+    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    #[inline]
+    #[must_use]
+    pub fn tensor_names(&self) -> Vec<&str> {
+        self.tensors
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
+    }
+
+    /// Returns the number of tensors in the loaded model.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.tensors.len()
+    }
+
+    /// Returns true when no tensors are loaded.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tensors.is_empty()
+    }
+
+    /// Returns an immutable view of the loaded tensors.
+    #[inline]
+    #[must_use]
+    pub const fn tensors(&self) -> &HashMap<String, Tensor> {
+        &self.tensors
+    }
+
+    /// Consumes the model and returns the underlying tensor map.
+    #[inline]
+    #[must_use]
+    pub fn into_tensors(self) -> HashMap<String, Tensor> {
+        self.tensors
     }
 
     /// Returns an iterator over all tensor names and tensors.
@@ -1254,4 +1357,188 @@ fn to_i64_vec(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Vec<
         })?);
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn write_index(
+        dir: &Path,
+        entries: &[(&str, (u64, u64, Vec<i64>, Vec<i64>, &str, usize))],
+    ) -> std::path::PathBuf {
+        let index_path = dir.join("tensor_index.json");
+        let mut root = serde_json::Map::new();
+
+        for (name, (offset, size, shape, stride, dtype, partition_id)) in entries {
+            root.insert(
+                (*name).to_string(),
+                json!([offset, size, shape, stride, *dtype, partition_id]),
+            );
+        }
+
+        let json_data = serde_json::Value::Object(root).to_string();
+        fs::write(&index_path, json_data).expect("write index");
+        index_path
+    }
+
+    fn write_partition(path: &str, data: &[u8]) {
+        let mut file = fs::File::create(path).expect("create partition");
+        file.write_all(data).expect("write partition data");
+    }
+
+    #[test]
+    fn parse_index_impl_supports_partition_defaults_and_ids() {
+        let data = br#"{
+            "tensor_a": [0, 4, [2,2], [2,1], "f32"],
+            "tensor_b": [4, 2, [1,2], [2,1], "i8", 3]
+        }"#;
+
+        let index = parse_index_impl(data).expect("parse index");
+        let tensor_a = index.get("tensor_a").expect("tensor_a");
+        assert_eq!(tensor_a.partition_id, 0);
+        assert_eq!(tensor_a.size, 4);
+        let tensor_b = index.get("tensor_b").expect("tensor_b");
+        assert_eq!(tensor_b.partition_id, 3);
+        assert_eq!(tensor_b.shape, vec![1, 2]);
+    }
+
+    #[test]
+    fn parse_index_impl_rejects_invalid_entry_length() {
+        let data = br#"{"bad": [1,2,3,4]}"#;
+        let err = parse_index_impl(data).unwrap_err();
+        assert!(
+            format!("{err}").contains("must have 5 or 6 elements"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn load_tensor_sync_reads_and_caches_partition() {
+        let dir = TempDir::new().unwrap();
+        let base_path = dir.path().join("tensor.data");
+        let part_path = format!("{}_0", base_path.display());
+
+        write_partition(&part_path, b"hello_world");
+        let index_path = write_index(
+            dir.path(),
+            &[("weight", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+        );
+
+        let index = parse_index_sync(&index_path).unwrap();
+        let first = index
+            .load_tensor_sync(&base_path, "weight")
+            .expect("first load");
+        assert_eq!(first, b"hello");
+
+        // Second load should hit the cached partition metadata path.
+        let second = index
+            .load_tensor_sync(&base_path, "weight")
+            .expect("second load");
+        assert_eq!(second, b"hello");
+    }
+
+    #[test]
+    fn load_tensor_sync_reports_missing_tensor() {
+        let dir = TempDir::new().unwrap();
+        let base_path = dir.path().join("tensor.data");
+        let part_path = format!("{}_0", base_path.display());
+        write_partition(&part_path, b"abcde");
+        let index_path = write_index(
+            dir.path(),
+            &[("exists", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+        );
+        let index = parse_index_sync(&index_path).unwrap();
+        let err = index.load_tensor_sync(&base_path, "missing").unwrap_err();
+        assert!(format!("{err}").contains("tensor 'missing' not found"));
+    }
+
+    #[test]
+    fn load_tensor_sync_errors_when_partition_too_small() {
+        let dir = TempDir::new().unwrap();
+        let base_path = dir.path().join("tensor.data");
+        let part_path = format!("{}_0", base_path.display());
+        write_partition(&part_path, b"abc"); // shorter than requested size
+        let index_path = write_index(
+            dir.path(),
+            &[("tensor", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+        );
+        let index = parse_index_sync(&index_path).unwrap();
+        let err = index.load_tensor_sync(&base_path, "tensor").unwrap_err();
+        assert!(format!("{err}").contains("too small"));
+    }
+
+    #[test]
+    fn tensor_helpers_expose_data_and_metadata() {
+        let entry = TensorEntry {
+            offset: 2,
+            size: 3,
+            shape: vec![3],
+            stride: vec![1],
+            dtype: "u8".to_owned(),
+            partition_id: 0,
+        };
+        let tensor = Tensor::new(b"012345".to_vec(), 2, 3, entry.clone());
+        assert_eq!(tensor.data(), b"234");
+        assert_eq!(tensor.to_vec(), b"234");
+        assert_eq!(tensor.clone().into_vec(), b"234");
+        assert_eq!(tensor.dtype(), "u8");
+        assert_eq!(tensor.shape(), &[3]);
+        assert_eq!(tensor.stride(), &[1]);
+        assert_eq!(tensor.size(), 3);
+        assert_eq!(tensor.partition_id(), 0);
+        assert_eq!(tensor.offset(), 2);
+        assert_eq!(tensor.len(), 3);
+    }
+
+    #[test]
+    fn load_tensors_batch_sync_handles_multiple_partitions() {
+        let dir = TempDir::new().unwrap();
+        let base_path = dir.path().join("tensor.data");
+        write_partition(&format!("{}_0", base_path.display()), b"abcde");
+        write_partition(&format!("{}_1", base_path.display()), b"vwxyz");
+
+        let index_path = write_index(
+            dir.path(),
+            &[
+                ("a", (0, 3, vec![3], vec![1], "u8", 0)),
+                ("b", (2, 3, vec![3], vec![1], "u8", 1)),
+            ],
+        );
+
+        let index = parse_index_sync(&index_path).unwrap();
+        let tensors = index
+            .load_tensors_batch_sync(&base_path, &["a", "b"])
+            .unwrap();
+        assert_eq!(tensors["a"], b"abc");
+        assert_eq!(tensors["b"], b"xyz");
+
+        let mut names = index.tensor_names();
+        names.sort_unstable();
+        assert_eq!(names, vec!["a", "b"]);
+        assert_eq!(index.len(), 2);
+        assert!(!index.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn load_mmap_returns_view_within_bounds() {
+        let dir = TempDir::new().unwrap();
+        let base_path = dir.path().join("tensor.data");
+        write_partition(&format!("{}_0", base_path.display()), b"0123456789");
+        let _index_path = write_index(dir.path(), &[("slice", (2, 4, vec![4], vec![1], "u8", 0))]);
+
+        let model = load_mmap(dir.path()).expect("load mmap");
+        let view = model.tensor("slice").expect("tensor slice");
+        assert_eq!(view.data(), b"2345");
+        assert_eq!(view.dtype(), "u8");
+    }
 }

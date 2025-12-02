@@ -5,7 +5,6 @@ use std::io;
 
 /// Unified error type for all tensor readers.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum ReaderError {
     /// I/O error occurred during reading.
     Io(io::Error),
@@ -63,3 +62,34 @@ impl From<safetensors::SafeTensorError> for ReaderError {
 
 /// Result type alias for reader operations.
 pub type ReaderResult<T> = Result<T, ReaderError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn display_formats_variants() {
+        let io_err = ReaderError::Io(io::Error::new(io::ErrorKind::Other, "oops"));
+        assert!(format!("{io_err}").contains("oops"));
+
+        let st_err = ReaderError::SafeTensors(safetensors::SafeTensorError::TensorNotFound(
+            "missing".into(),
+        ));
+        assert!(format!("{st_err}").contains("SafeTensors error"));
+
+        let sllm_err = ReaderError::ServerlessLlm("bad".into());
+        assert!(format!("{sllm_err}").contains("ServerlessLLM format error"));
+    }
+
+    #[test]
+    fn from_conversions_set_sources() {
+        let io_error = io::Error::new(io::ErrorKind::Other, "source");
+        let reader_error: ReaderError = io_error.into();
+        assert!(reader_error.source().is_some());
+
+        let st_error: ReaderError =
+            safetensors::SafeTensorError::TensorNotFound("missing".into()).into();
+        assert!(st_error.source().is_some());
+    }
+}

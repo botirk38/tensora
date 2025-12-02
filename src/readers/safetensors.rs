@@ -43,7 +43,7 @@ use std::path::Path;
 /// This reader memory-maps the file and parses the SafeTensors header lazily.
 /// Tensor data is accessed directly from the memory map without copying.
 /// Available on all platforms that support memory mapping.
-#[non_exhaustive]
+#[derive(Debug)]
 pub struct SafeTensorsMmap {
     mmap: backends::mmap::Mmap,
     tensors: SafeTensors<'static>,
@@ -53,7 +53,7 @@ pub struct SafeTensorsMmap {
 ///
 /// This reader loads the entire file into memory and owns the data.
 /// Provides fast access to all tensors with eager parsing.
-#[non_exhaustive]
+#[derive(Debug)]
 pub struct SafeTensorsOwned {
     buffer: Box<[u8]>,
     tensors: SafeTensors<'static>,
@@ -99,6 +99,26 @@ impl SafeTensorsOwned {
     pub const fn tensors(&self) -> &SafeTensors<'static> {
         &self.tensors
     }
+
+    /// Returns a tensor view by name using `ReaderError` for convenience.
+    #[inline]
+    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+        self.tensors.tensor(name).map_err(ReaderError::from)
+    }
+
+    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    #[inline]
+    #[must_use]
+    pub fn tensor_names(&self) -> Vec<&str> {
+        self.tensors.names()
+    }
+
+    /// Returns true when no tensors are loaded.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tensors.is_empty()
+    }
 }
 
 impl Clone for SafeTensorsOwned {
@@ -142,6 +162,26 @@ impl SafeTensorsMmap {
     #[must_use]
     pub const fn tensors(&self) -> &SafeTensors<'static> {
         &self.tensors
+    }
+
+    /// Returns a tensor view by name using `ReaderError` for convenience.
+    #[inline]
+    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+        self.tensors.tensor(name).map_err(ReaderError::from)
+    }
+
+    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    #[inline]
+    #[must_use]
+    pub fn tensor_names(&self) -> Vec<&str> {
+        self.tensors.names()
+    }
+
+    /// Returns true when no tensors are mapped.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tensors.is_empty()
     }
 
     /// Access the underlying memory-mapped data.
@@ -310,4 +350,92 @@ pub fn load_range_sync(
 #[inline]
 pub fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
     SafeTensorsMmap::load_sync(path)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use safetensors::serialize;
+    use safetensors::tensor::TensorView;
+    use tempfile::TempDir;
+
+    fn sample_bytes() -> Vec<u8> {
+        let data = vec![1u8, 2, 3, 4];
+        let view = TensorView::new(Dtype::U8, vec![4], &data).expect("create tensor view");
+        serialize([("tensor", view)], None).expect("serialize")
+    }
+
+    #[test]
+    fn owned_from_bytes_roundtrips_and_clones() {
+        let bytes = sample_bytes();
+        let owned = SafeTensorsOwned::from_bytes(bytes.clone()).expect("parse");
+        assert_eq!(owned.tensor_names(), vec!["tensor"]);
+        assert_eq!(owned.as_bytes(), bytes.as_slice());
+        assert_eq!(owned.tensor("tensor").unwrap().shape(), &[4]);
+        assert!(!owned.is_empty());
+        let cloned = owned.clone();
+        assert_eq!(cloned.tensor_names(), vec!["tensor"]);
+        assert_eq!(cloned.len(), 1);
+    }
+
+    #[test]
+    fn owned_from_bytes_rejects_invalid_data() {
+        let err = SafeTensorsOwned::from_bytes(vec![0, 1, 2]).unwrap_err();
+        assert!(matches!(err, ReaderError::SafeTensors(_)));
+    }
+
+    #[test]
+    fn load_sync_and_metadata_helpers_work() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        std::fs::write(&path, sample_bytes()).unwrap();
+
+        let owned = load_sync(&path).expect("load sync");
+        assert!(owned.contains("tensor"));
+        assert_eq!(owned.tensor_names(), vec!["tensor"]);
+        assert!(!owned.is_empty());
+        assert_eq!(owned.tensor("tensor").unwrap().dtype(), Dtype::U8);
+    }
+
+    #[test]
+    fn load_range_sync_requires_full_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        let bytes = sample_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let err = load_range_sync(&path, 1, bytes.len()).unwrap_err();
+        assert!(matches!(err, ReaderError::InvalidMetadata(_)));
+    }
+
+    #[test]
+    fn load_async_variants_parse() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        std::fs::write(&path, sample_bytes()).unwrap();
+
+        tokio_uring::start(async {
+            let owned = load(&path).await.expect("load async");
+            assert_eq!(owned.len(), 1);
+
+            let parallel = load_parallel(&path, 2).await.expect("load parallel");
+            assert_eq!(parallel.len(), 1);
+        });
+    }
+
+    #[test]
+    fn mmap_loader_parses_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        std::fs::write(&path, sample_bytes()).unwrap();
+
+        let mmap = load_mmap(&path).expect("load mmap");
+        assert_eq!(mmap.len(), 1);
+        assert!(mmap.contains("tensor"));
+        assert_eq!(mmap.tensor("tensor").unwrap().dtype(), Dtype::U8);
+    }
 }

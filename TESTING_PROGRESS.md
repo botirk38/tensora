@@ -266,7 +266,7 @@ test_load_range_batch_multiple
 | sync_io.rs | 0 | 21 | +21 |
 | **Phase 2 Total** | **0** | **72** | **+72** |
 
-**Cumulative Total**: 129 tests (46 Phase 1 + 72 Phase 2 + 11 backend infrastructure)
+**Cumulative Total**: 146 tests (46 Phase 1 + 72 Phase 2 + 11 backend infrastructure + 17 Phase 3 reader tests)
 
 ### Implementation Notes
 - All tests use `tempfile` for temporary file management
@@ -278,14 +278,20 @@ test_load_range_batch_multiple
 
 ---
 
-## Phase 3: Readers - TODO
+## Phase 3: Readers - IN PROGRESS
 
-**Timeline**: Week 3
+**Timeline**: Week 3 (in progress)
 **Effort**: ~26 hours
 **Goal**: Reader modules at 80%+ coverage
-**Status**: Pending
+**Status**: In Progress
 
-### Modules to Test
+### Accomplishments
+- `serverlessllm.rs`: Added 8 unit tests (index parsing/validation, partition size checks, batch load happy path, mmap view creation, tensor data/metadata helpers).
+- `safetensors.rs`: Added 6 tests (owned/mmap load paths, async/parallel load via tokio-uring, metadata accessors, invalid data rejection).
+- Shared reader infra: Added 3 tests for `error.rs` and `traits.rs` covering Display/from conversions and trait defaults.
+- API DX: Added direct helper methods (`tensor()`, `tensor_names()`, `is_empty()`, `len()`, `tensors_map()`) on reader types; added tensor slice getters (`offset()`, `len()`, `partition_id()`, `to_vec()`) for `Tensor`; removed `#[non_exhaustive]` from reader/types/writer public enums/structs to support ergonomic pattern matching.
+
+### Modules to Test (remaining)
 
 #### 1. serverlessllm.rs (1,357 lines) - 16 hours
 **Current Coverage**: 0%
@@ -858,15 +864,49 @@ cargo test --lib -- async_io
 
 **Phase 1**: Complete ✓ (46 tests, all passing)
 **Phase 2**: Complete ✓ (72 tests added, 129 total backend tests, all passing)
-**Phase 3**: Pending (readers)
+**Phase 3**: In Progress (17 reader tests added; API ergonomics improved)
 **Phase 4**: Pending (writers, converters)
 **Phase 5**: Pending (property tests, integration)
 **Phase 6**: Pending (verification, polish)
 
 **Next Steps**:
-1. Start Phase 3 with `serverlessllm.rs` reader tests
-2. Follow with `safetensors.rs` reader tests
-3. Continue through remaining phases
+1. Expand Phase 3 with fixture-backed integration tests for ServerlessLLM and SafeTensors.
+2. Continue through remaining phases.
 
-**Total Tests So Far**: 129
+**Total Tests So Far**: 146
 **Estimated Time to Completion**: ~69 hours remaining (4 weeks)
+
+---
+
+## Execution Plan for Remaining Phases
+
+### Phase 3: Readers - Execution Plan
+- Prepare fixtures: ensure `fixtures/openai-community-gpt2` and SafeTensors samples are available locally; add constants for fixture paths.
+- ServerlessLLM reader: implement unit tests listed above, then add integration tests that load GPT-2 and at least one additional fixture; verify tensor counts, names, and data integrity between eager vs mmap.
+- SafeTensors reader: cover owned and mmap variants plus trait implementations; add async/sync path tests and cross-verify tensors across fixtures.
+- Shared reader modules: add error construction/Display/from conversions plus trait default behavior tests.
+- Coverage checkpoint: run `cargo test --lib readers::` locally after each module and record pass/fail notes here.
+- Exit criteria: serverlessllm.rs ≥80%, safetensors.rs ≥85%, shared reader modules ≥60%, all reader tests stable on Linux.
+
+### Phase 4: Writers & Converters - Execution Plan
+- ServerlessLLM writer: unit tests for writer construction, index/partition writing (async + sync), empty index handling; integration roundtrip using temp dirs and GPT-2 fixtures.
+- SafeTensors writer: basic/empty write cases, sync/async, verify file content by re-loading with reader.
+- Converter: unit tests for helpers (stride calc, dtype mapping, partitioning) plus integration tests converting fixtures with varying partition counts (1/2/4/8) and comparing tensor data across formats.
+- Types: finalize TensorEntry serialization/deserialization/clone/Default tests.
+- Exit criteria: serverlessllm writer ≥85%, safetensors writer ≥85%, converter ≥90%, types ≥95%; roundtrip tests pass with fixtures.
+
+### Phase 5: Property Tests & Integration - Execution Plan
+- Add proptest dependency gates to avoid long runs on CI (`--release -- proptest` guidance stands); isolate property suites per module.
+- Implement serialization, alignment, and data-integrity properties outlined earlier; ensure determinism by bounding sizes and chunks.
+- Add end-to-end conversion property/integration test using GPT-2 fixture inside `converters` module with temp output directory.
+- Exit criteria: property tests reliable under `cargo test --release`, zero flakes across three consecutive runs.
+
+### Phase 6: Verification & Polish - Execution Plan
+- Coverage run: `cargo llvm-cov clean --workspace && cargo llvm-cov --workspace --all-targets --html`; capture summary numbers here.
+- Gap filling: target branches <80% first; document any untestable code paths inline with `// SAFETY: ... (untestable because ...)`.
+- CI validation: run the full pipeline locally if possible; otherwise confirm GitLab jobs green after push and archive coverage artifacts.
+- Exit criteria: total coverage ≥80%, test count ≥240, all CI jobs passing; TODO checklist above fully checked.
+
+### Reporting Cadence
+- Update this document after each module lands (even partial) with test counts, coverage notes, and any regressions found.
+- Record failures and flakes with root cause; add mitigation notes to keep stability ahead of property test work.
