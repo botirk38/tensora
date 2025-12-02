@@ -474,3 +474,290 @@ pub use linux::*;
 
 #[cfg(not(target_os = "linux"))]
 pub use non_linux::*;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    // -----------------------------------------------------------------------
+    // Unit Tests - Pure Functions
+    // -----------------------------------------------------------------------
+
+    mod helpers {
+        use super::*;
+
+        #[test]
+        fn test_div_ceil_basic() {
+            assert_eq!(div_ceil(10, 3), 4);
+            assert_eq!(div_ceil(9, 3), 3);
+            assert_eq!(div_ceil(1, 3), 1);
+        }
+
+        #[test]
+        fn test_div_ceil_exact_division() {
+            assert_eq!(div_ceil(12, 4), 3);
+            assert_eq!(div_ceil(100, 10), 10);
+        }
+
+        #[test]
+        fn test_div_ceil_zero() {
+            assert_eq!(div_ceil(0, 5), 0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration Tests - Cross-Platform
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_empty_file() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_load_small_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"test data").unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result, b"test data");
+    }
+
+    #[test]
+    fn test_load_larger_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![0xAB; 1024 * 1024]; // 1MB
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_load_parallel_basic() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![0xCD; 1024 * 100]; // 100KB
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.as_file().sync_all().unwrap(); // Ensure data is written
+        tmpfile.flush().unwrap();
+
+        let result = load_parallel(tmpfile.path(), 4).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_load_parallel_single_chunk() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![0xEF; 1024 * 5];
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load_parallel(tmpfile.path(), 1).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_load_parallel_zero_chunks_error() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let result = load_parallel(tmpfile.path(), 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_load_parallel_empty_file() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let result = load_parallel(tmpfile.path(), 4).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_load_parallel_vs_sequential() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![0x42; 1024 * 500]; // 500KB
+        tmpfile.write_all(&data).unwrap();
+        tmpfile.as_file().sync_all().unwrap(); // Ensure data is written
+        tmpfile.flush().unwrap();
+
+        let sequential = load(tmpfile.path()).unwrap();
+        let parallel = load_parallel(tmpfile.path(), 8).unwrap();
+
+        assert_eq!(sequential, parallel);
+        assert_eq!(sequential, data);
+    }
+
+    #[test]
+    fn test_load_range_basic() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        tmpfile.write_all(data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load_range(tmpfile.path(), 5, 10).unwrap();
+        assert_eq!(result, &data[5..15]);
+    }
+
+    #[test]
+    fn test_load_range_full_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = b"complete file content";
+        tmpfile.write_all(data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load_range(tmpfile.path(), 0, data.len()).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_load_range_zero_length() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"test").unwrap();
+        tmpfile.flush().unwrap();
+
+        let result = load_range(tmpfile.path(), 0, 0).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_write_all_basic() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let data = b"Hello, sync_io!".to_vec();
+
+        write_all(tmpfile.path(), data.clone()).unwrap();
+
+        // Read back and verify
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_write_all_empty() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        write_all(tmpfile.path(), Vec::new()).unwrap();
+
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_write_all_large() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let data = vec![0x55; 1024 * 1024]; // 1MB
+
+        write_all(tmpfile.path(), data.clone()).unwrap();
+
+        let result = load(tmpfile.path()).unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_load_range_batch_single_file() {
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        tmpfile.write_all(data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let requests = vec![
+            (tmpfile.path(), 0, 10),
+            (tmpfile.path(), 10, 10),
+            (tmpfile.path(), 20, 10),
+        ];
+
+        let results = load_range_batch(&requests).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, &data[0..10]);
+        assert_eq!(results[1].0, &data[10..20]);
+        assert_eq!(results[2].0, &data[20..30]);
+    }
+
+    #[test]
+    fn test_load_range_batch_multiple_files() {
+        let mut tmpfile1 = NamedTempFile::new().unwrap();
+        let mut tmpfile2 = NamedTempFile::new().unwrap();
+        tmpfile1.write_all(b"FILE1DATA").unwrap();
+        tmpfile1.flush().unwrap();
+        tmpfile2.write_all(b"FILE2DATA").unwrap();
+        tmpfile2.flush().unwrap();
+
+        let requests = vec![
+            (tmpfile1.path(), 0, 5),
+            (tmpfile2.path(), 0, 5),
+            (tmpfile1.path(), 5, 4),
+        ];
+
+        let results = load_range_batch(&requests).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, b"FILE1");
+        assert_eq!(results[1].0, b"FILE2");
+        assert_eq!(results[2].0, b"DATA");
+    }
+
+    #[test]
+    fn test_load_range_batch_empty() {
+        let requests: Vec<(&str, u64, usize)> = vec![];
+        let results = load_range_batch(&requests).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let result = load("/nonexistent/file/path");
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Linux-Specific Tests
+    // -----------------------------------------------------------------------
+
+    #[cfg(target_os = "linux")]
+    mod linux_tests {
+        use super::*;
+
+        #[test]
+        fn test_load_with_direct_io_attempt() {
+            // This test verifies that O_DIRECT path is attempted
+            // It may fall back to buffered I/O depending on filesystem
+            let mut tmpfile = NamedTempFile::new().unwrap();
+            let data = vec![0x77; 4096 * 2]; // Block-aligned size
+            tmpfile.write_all(&data).unwrap();
+            tmpfile.flush().unwrap();
+
+            let result = load(tmpfile.path()).unwrap();
+            assert_eq!(result, data);
+        }
+
+        #[test]
+        fn test_load_parallel_direct_io() {
+            let mut tmpfile = NamedTempFile::new().unwrap();
+            let data = vec![0x88; 4096 * 100]; // Block-aligned
+            tmpfile.write_all(&data).unwrap();
+            tmpfile.as_file().sync_all().unwrap(); // Ensure data is written
+            tmpfile.flush().unwrap();
+
+            let result = load_parallel(tmpfile.path(), 4).unwrap();
+            assert_eq!(result, data);
+        }
+
+        #[test]
+        fn test_write_all_aligned_data() {
+            let tmpfile = NamedTempFile::new().unwrap();
+            let data = vec![0x99; 4096]; // Block-aligned
+
+            write_all(tmpfile.path(), data.clone()).unwrap();
+
+            let result = load(tmpfile.path()).unwrap();
+            assert_eq!(result, data);
+        }
+    }
+}

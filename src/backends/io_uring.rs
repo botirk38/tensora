@@ -468,3 +468,443 @@ pub async fn write_all(path: impl AsRef<Path>, data: Vec<u8>) -> IoResult<()> {
     let file = open_direct_write_io_uring(path_ref).await?;
     write_with_file(file, aligned_data, len).await
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    // Helper to run async tests in tokio-uring runtime
+    fn run_test<F, R>(f: F) -> R
+    where
+        F: std::future::Future<Output = R>,
+    {
+        tokio_uring::start(f)
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit Tests - Pure Functions (No Runtime Needed)
+    // -----------------------------------------------------------------------
+
+    mod validation {
+        use super::*;
+
+        #[test]
+        fn test_validate_read_count_exact() {
+            assert!(validate_read_count(100, 100).is_ok());
+        }
+
+        #[test]
+        fn test_validate_read_count_short_read() {
+            let result = validate_read_count(50, 100);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+            assert!(err.to_string().contains("Expected to read 100 bytes"));
+        }
+
+        #[test]
+        fn test_validate_read_count_over_read() {
+            // Reading more than expected is OK
+            assert!(validate_read_count(150, 100).is_ok());
+        }
+
+        #[test]
+        fn test_validate_chunk_size_within_limits() {
+            let chunk_size = 1024 * 1024; // 1MB
+            let file_size = 10 * 1024 * 1024; // 10MB
+            assert!(validate_chunk_size(chunk_size, file_size).is_ok());
+        }
+
+        #[test]
+        fn test_validate_chunk_size_exceeds_isize_max() {
+            let max_capacity = usize::try_from(isize::MAX).unwrap();
+            let chunk_size = max_capacity + 1;
+            let file_size = max_capacity; // Avoid overflow, just test chunk_size validation
+            let result = validate_chunk_size(chunk_size, file_size);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(err.to_string().contains("exceeds maximum Vec capacity"));
+        }
+
+        #[test]
+        fn test_checked_arithmetic_success() {
+            let result = checked_arithmetic(Some(42), "test");
+            assert_eq!(result.unwrap(), 42);
+        }
+
+        #[test]
+        fn test_checked_arithmetic_overflow() {
+            let result = checked_arithmetic::<usize>(None, "overflow");
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(err.to_string().contains("overflow"));
+        }
+    }
+
+    mod chunk_building {
+        use super::*;
+
+        #[test]
+        fn test_build_chunk_requests_single_chunk() {
+            let file_size = BLOCK_SIZE * 2;
+            let chunk_size = file_size;
+            let chunks = 1;
+
+            let requests = build_chunk_requests(file_size, chunk_size, chunks).unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].start, 0);
+            assert_eq!(requests[0].len, file_size);
+            assert_eq!(requests[0].offset, 0);
+            assert_eq!(requests[0].padded_len, align_to_block(file_size));
+        }
+
+        #[test]
+        fn test_build_chunk_requests_multiple_chunks() {
+            let file_size = BLOCK_SIZE * 10;
+            let chunk_size = BLOCK_SIZE * 3;
+            let chunks = 4;
+
+            let requests = build_chunk_requests(file_size, chunk_size, chunks).unwrap();
+            assert!(requests.len() >= 3); // At least 3 chunks needed for file_size
+
+            // First chunk
+            assert_eq!(requests[0].start, 0);
+            assert_eq!(requests[0].len, chunk_size);
+
+            // Second chunk
+            assert_eq!(requests[1].start, chunk_size);
+            assert_eq!(requests[1].len, chunk_size);
+        }
+
+        #[test]
+        fn test_build_chunk_requests_uneven_division() {
+            let file_size = BLOCK_SIZE * 10 + 100; // Not evenly divisible
+            let chunk_size = BLOCK_SIZE * 3;
+            let chunks = 4;
+
+            let requests = build_chunk_requests(file_size, chunk_size, chunks).unwrap();
+
+            // Last chunk should be smaller
+            let total_len: usize = requests.iter().map(|r| r.len).sum();
+            assert_eq!(total_len, file_size);
+
+            let last = requests.last().unwrap();
+            assert!(last.len < chunk_size);
+        }
+
+        #[test]
+        fn test_build_chunk_requests_alignment_padding() {
+            let file_size = BLOCK_SIZE + 100; // Unaligned size
+            let chunk_size = file_size;
+            let chunks = 1;
+
+            let requests = build_chunk_requests(file_size, chunk_size, chunks).unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].len, file_size);
+            assert!(requests[0].padded_len >= file_size);
+            assert_eq!(requests[0].padded_len % BLOCK_SIZE, 0); // Padded to block size
+        }
+
+        #[test]
+        fn test_build_chunk_requests_empty_file() {
+            let requests = build_chunk_requests(0, BLOCK_SIZE, 4).unwrap();
+            assert_eq!(requests.len(), 0);
+        }
+
+        #[test]
+        fn test_build_chunk_requests_chunk_exceeds_file() {
+            let file_size = BLOCK_SIZE * 2;
+            let chunk_size = BLOCK_SIZE * 10;
+            let chunks = 4;
+
+            let requests = build_chunk_requests(file_size, chunk_size, chunks).unwrap();
+            assert_eq!(requests.len(), 1); // Only one chunk needed
+            assert_eq!(requests[0].len, file_size);
+        }
+    }
+
+    mod helpers {
+        use super::*;
+
+        #[test]
+        fn test_allow_direct_fallback_einval() {
+            let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+            assert!(allow_direct_fallback(&err));
+        }
+
+        #[test]
+        fn test_allow_direct_fallback_eopnotsupp() {
+            let err = std::io::Error::from_raw_os_error(libc::EOPNOTSUPP);
+            assert!(allow_direct_fallback(&err));
+        }
+
+        #[test]
+        fn test_allow_direct_fallback_other_errors() {
+            let err = std::io::Error::from_raw_os_error(libc::EACCES);
+            assert!(!allow_direct_fallback(&err));
+
+            let err = std::io::Error::from_raw_os_error(libc::ENOENT);
+            assert!(!allow_direct_fallback(&err));
+        }
+
+        #[test]
+        fn test_statx_file_size_normal() {
+            let mut stat: libc::statx = unsafe { std::mem::zeroed() };
+            stat.stx_size = 1024;
+
+            let size = statx_file_size(stat).unwrap();
+            assert_eq!(size, 1024);
+        }
+
+        #[test]
+        fn test_statx_file_size_large() {
+            let mut stat: libc::statx = unsafe { std::mem::zeroed() };
+            stat.stx_size = 1024 * 1024 * 1024; // 1GB
+
+            let size = statx_file_size(stat).unwrap();
+            assert_eq!(size, 1024 * 1024 * 1024);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration Tests - Require tokio-uring Runtime
+    // -----------------------------------------------------------------------
+
+    mod integration {
+        use super::*;
+
+        #[test]
+        fn test_load_empty_file() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result.len(), 0);
+            })
+        }
+
+        #[test]
+        fn test_load_small_file() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                tmpfile.write_all(b"test data").unwrap();
+                tmpfile.flush().unwrap();
+
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result, b"test data");
+            })
+        }
+
+        #[test]
+        fn test_load_block_aligned_file() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = vec![0xAB; BLOCK_SIZE];
+                tmpfile.write_all(&data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result.len(), BLOCK_SIZE);
+                assert_eq!(result, data);
+            })
+        }
+
+        #[test]
+        fn test_load_parallel_single_chunk() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = vec![0xCD; BLOCK_SIZE * 2];
+                tmpfile.write_all(&data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let result = load_parallel(tmpfile.path(), 1).await.unwrap();
+                assert_eq!(result, data);
+            })
+        }
+
+        #[test]
+        fn test_load_parallel_multiple_chunks() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = vec![0xEF; BLOCK_SIZE * 10];
+                tmpfile.write_all(&data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let result = load_parallel(tmpfile.path(), 4).await.unwrap();
+                assert_eq!(result, data);
+            })
+        }
+
+        #[test]
+        fn test_load_parallel_zero_chunks_error() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                let result = load_parallel(tmpfile.path(), 0).await;
+                assert!(result.is_err());
+                let err = result.unwrap_err();
+                assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            })
+        }
+
+        #[test]
+        fn test_load_parallel_empty_file() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                let result = load_parallel(tmpfile.path(), 4).await.unwrap();
+                assert_eq!(result.len(), 0);
+            })
+        }
+
+        #[test]
+        fn test_load_range_aligned() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = vec![0x12; BLOCK_SIZE * 5];
+                tmpfile.write_all(&data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let offset = BLOCK_SIZE as u64;
+                let len = BLOCK_SIZE * 2;
+                let result = load_range(tmpfile.path(), offset, len).await.unwrap();
+                assert_eq!(result.len(), len);
+                assert_eq!(result, &data[BLOCK_SIZE..BLOCK_SIZE * 3]);
+            })
+        }
+
+        #[test]
+        fn test_load_range_unaligned() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                tmpfile.write_all(data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let offset = 5;
+                let len = 10;
+                let result = load_range(tmpfile.path(), offset, len).await.unwrap();
+                assert_eq!(result, &data[5..15]);
+            })
+        }
+
+        #[test]
+        fn test_load_range_zero_length() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                tmpfile.write_all(b"test").unwrap();
+                tmpfile.flush().unwrap();
+
+                let result = load_range(tmpfile.path(), 0, 0).await.unwrap();
+                assert_eq!(result.len(), 0);
+            })
+        }
+
+        #[test]
+        fn test_write_all_basic() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                let data = b"Hello, io_uring!".to_vec();
+
+                write_all(tmpfile.path(), data.clone()).await.unwrap();
+
+                // Read back and verify
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result, data);
+            })
+        }
+
+        #[test]
+        fn test_write_all_empty() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                write_all(tmpfile.path(), Vec::new()).await.unwrap();
+
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result.len(), 0);
+            })
+        }
+
+        #[test]
+        fn test_write_all_aligned() {
+            run_test(async {
+                let tmpfile = NamedTempFile::new().unwrap();
+                let data = vec![0x42; BLOCK_SIZE];
+
+                write_all(tmpfile.path(), data.clone()).await.unwrap();
+
+                let result = load(tmpfile.path()).await.unwrap();
+                assert_eq!(result, data);
+            })
+        }
+
+        #[test]
+        fn test_batch_load_single_file() {
+            run_test(async {
+                let mut tmpfile = NamedTempFile::new().unwrap();
+                let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                tmpfile.write_all(data).unwrap();
+                tmpfile.flush().unwrap();
+
+                let requests = vec![
+                    (tmpfile.path(), 0, 10),
+                    (tmpfile.path(), 10, 10),
+                    (tmpfile.path(), 20, 10),
+                ];
+
+                let results = load_batch(&requests).await.unwrap();
+                assert_eq!(results.len(), 3);
+                assert_eq!(results[0].0, &data[0..10]);
+                assert_eq!(results[1].0, &data[10..20]);
+                assert_eq!(results[2].0, &data[20..30]);
+            })
+        }
+
+        #[test]
+        fn test_batch_load_multiple_files() {
+            run_test(async {
+                let mut tmpfile1 = NamedTempFile::new().unwrap();
+                let mut tmpfile2 = NamedTempFile::new().unwrap();
+                tmpfile1.write_all(b"FILE1DATA").unwrap();
+                tmpfile1.flush().unwrap();
+                tmpfile2.write_all(b"FILE2DATA").unwrap();
+                tmpfile2.flush().unwrap();
+
+                let requests = vec![
+                    (tmpfile1.path(), 0, 5),
+                    (tmpfile2.path(), 0, 5),
+                    (tmpfile1.path(), 5, 4),
+                ];
+
+                let results = load_batch(&requests).await.unwrap();
+                assert_eq!(results.len(), 3);
+                assert_eq!(results[0].0, b"FILE1");
+                assert_eq!(results[1].0, b"FILE2");
+                assert_eq!(results[2].0, b"DATA");
+            })
+        }
+
+        #[test]
+        fn test_batch_load_empty_requests() {
+            run_test(async {
+                let requests: Vec<(&str, u64, usize)> = vec![];
+                let results = load_batch(&requests).await.unwrap();
+                assert_eq!(results.len(), 0);
+            })
+        }
+
+        #[test]
+        fn test_load_missing_file() {
+            run_test(async {
+                let result = load("/nonexistent/file/path").await;
+                assert!(result.is_err());
+            })
+        }
+    }
+}
