@@ -4,13 +4,8 @@ include:
       target: lib
       rust-image: rust:latest
       cargo-outdated-version: "0.17.0"
-      before:
-        - |
-          if ! command -v rustup &> /dev/null; then
-            echo "rustup not found, installing..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-            source "$HOME/.cargo/env"
-            rustup toolchain link system-rust /usr
-          else
-            echo "rustup already installed"
-          fi
+
+# Force all jobs to use Docker runners
+default:
+  tags:
+    - docker
