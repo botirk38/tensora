@@ -80,3 +80,81 @@ Use this tool for:
 - Identifying performance bottlenecks
 - Measuring impact of optimizations
 - Generating profiling data without benchmark framework overhead
+
+## Flamegraph Generation
+
+Generate visual flamegraphs to identify hotspots:
+
+```bash
+# Install flamegraph
+cargo install flamegraph
+
+# Generate flamegraph for io_uring load
+cargo flamegraph --bin profile -- safetensors io-uring-load --fixture qwen-qwen2-0.5b
+
+# Output: flamegraph.svg (open in browser)
+```
+
+For more detailed instructions, see [profiling/README.md](../../../profiling/README.md).
+
+## Interpreting Results
+
+### Sample Output
+```
+=== SafeTensors io_uring Load Profile ===
+Fixture: fixtures/qwen-qwen2-0.5b/model.safetensors
+File size: 494.03 MB
+Backend: io_uring
+
+Iteration 1: 52.341ms (9.44 GB/s)
+Iteration 2: 51.892ms (9.52 GB/s)
+Iteration 3: 52.103ms (9.48 GB/s)
+
+Average: 52.112ms (9.48 GB/s)
+Std Dev: 0.225ms
+```
+
+### Performance Baseline Reference
+
+| Loader | Typical Speed | Notes |
+|--------|---------------|-------|
+| `io-uring-load` | 9-10 GB/s | Best on Linux NVMe |
+| `io-uring-parallel` | 10-12 GB/s | With 8+ cores |
+| `tokio-load` | 8-9 GB/s | Cross-platform |
+| `sync` | 7-8 GB/s | Baseline |
+| `mmap` | Variable | Depends on access pattern |
+| `original` | 6-7 GB/s | safetensors crate reference |
+
+## Advanced Profiling
+
+### With perf stat (CPU counters)
+```bash
+cargo build --release --bin profile
+perf stat ./target/release/profile safetensors io-uring-load --iterations 10
+```
+
+### With perf record (sampling)
+```bash
+perf record -g ./target/release/profile safetensors io-uring-load --iterations 5
+perf report
+```
+
+### With Valgrind (memory analysis)
+```bash
+valgrind --tool=cachegrind ./target/release/profile safetensors sync --iterations 3
+```
+
+## Fixture Setup
+
+Download test fixtures before profiling:
+
+```bash
+cd scripts
+uv run python download_models.py Qwen/Qwen2-0.5B --convert --verify
+```
+
+## See Also
+
+- [Profiling Suite](../../../profiling/README.md) - Comprehensive profiling guide
+- [Benchmarks](../../../benches/README.md) - Criterion-based benchmarks
+- [Demo Binary](../demo/README.md) - Interactive demonstrations

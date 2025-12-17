@@ -120,6 +120,27 @@ def get_file_hash(filepath: str, algorithm: str = "sha256") -> str:
     return hash_func.hexdigest()
 
 
+def calculate_optimal_partitions(file_size_bytes: int) -> int:
+    """Calculate optimal partition count based on model size.
+
+    Heuristic based on recommended partition counts:
+    - < 1 GB: 4 partitions (minimal overhead)
+    - 1-10 GB: 8 partitions (balanced)
+    - 10-50 GB: 16 partitions (good parallelism)
+    - > 50 GB: 32 partitions (maximum parallelism)
+    """
+    size_gb = file_size_bytes / (1024 ** 3)
+
+    if size_gb < 1:
+        return 4
+    elif size_gb < 10:
+        return 8
+    elif size_gb < 50:
+        return 16
+    else:
+        return 32
+
+
 def create_model_readme(
     output_dir: str, config: ModelConfig, safetensors_files: List[str], model_info: dict
 ):
@@ -180,15 +201,15 @@ def main():
     )
     parser.add_argument("--token", help="HuggingFace token for private repos")
     parser.add_argument(
-        "--convert",
+        "--no-convert",
         action="store_true",
-        help="Automatically convert to ServerlessLLM format after download",
+        help="Skip conversion to ServerlessLLM format (only download SafeTensors)",
     )
     parser.add_argument(
         "--partitions",
         type=int,
-        default=8,
-        help="Number of partitions for ServerlessLLM conversion",
+        default=None,
+        help="Number of partitions for ServerlessLLM conversion (default: auto-calculated based on model size)",
     )
     parser.add_argument(
         "--verify",
@@ -251,17 +272,37 @@ def main():
             shutil.copy2(main_file, final_safetensors)
             print(f"Copied to: {final_safetensors}")
 
-            # Convert to ServerlessLLM if requested
-            if args.convert:
+            # Convert to ServerlessLLM by default (unless --no-convert specified)
+            if not args.no_convert:
                 convert_binary = Path("../target/release/convert")
+
+                # Auto-build if missing
                 if not convert_binary.exists():
-                    print("Warning: convert binary not found, skipping conversion")
-                    print("Build with: cargo build --release --bin convert")
-                else:
-                    serverlessllm_dir = output_dir / "model_serverlessllm"
-                    print(
-                        f"Converting to ServerlessLLM format with {args.partitions} partitions..."
+                    print("Convert binary not found. Building...")
+                    import subprocess
+
+                    build_result = subprocess.run(
+                        ["cargo", "build", "--release", "--bin", "convert"],
+                        cwd=Path(".."),
+                        capture_output=True,
+                        text=True,
                     )
+
+                    if build_result.returncode != 0:
+                        print(f"✗ Failed to build convert binary: {build_result.stderr}")
+                        print("Skipping ServerlessLLM conversion")
+                    else:
+                        print("✓ Convert binary built successfully")
+
+                # Proceed with conversion if binary exists now
+                if convert_binary.exists():
+                    serverlessllm_dir = output_dir / "model_serverlessllm"
+
+                    # Calculate optimal partitions if not specified
+                    file_size = os.path.getsize(final_safetensors)
+                    partition_count = args.partitions if args.partitions else calculate_optimal_partitions(file_size)
+
+                    print(f"Converting to ServerlessLLM format with {partition_count} partitions (model size: {file_size / (1024**3):.2f} GB)...")
 
                     import subprocess
 
@@ -270,7 +311,7 @@ def main():
                             str(convert_binary),
                             str(final_safetensors),
                             str(serverlessllm_dir),
-                            str(args.partitions),
+                            str(partition_count),
                         ],
                         capture_output=True,
                         text=True,

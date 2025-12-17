@@ -9,8 +9,10 @@ This binary provides hands-on demonstrations of various tensor loading strategie
 ## Usage
 
 ```bash
-cargo run --bin demo -- <COMMAND> <SCENARIO> [OPTIONS]
+cargo run [--release] --bin demo -- <COMMAND> <SCENARIO> [OPTIONS]
 ```
+
+**Important**: The `--release` flag (optional but recommended) goes before `--bin`, and `--` separates cargo flags from program arguments.
 
 ## Commands
 
@@ -74,3 +76,66 @@ Use this tool to:
 - Compare performance characteristics
 - Explore tensor metadata structures
 - Learn about partition-based loading in ServerlessLLM
+
+## Sample Output
+
+### SafeTensors Async Demo
+```
+=== SafeTensors Async Load Demo ===
+Loading: fixtures/qwen-qwen2-0.5b/model.safetensors
+Backend: io_uring (Linux)
+Loaded 201 tensors in 52.3ms
+
+Sample tensors:
+  model.embed_tokens.weight: F16 [151936, 896] (272.5 MB)
+  model.layers.0.mlp.down_proj.weight: F16 [896, 4864] (8.3 MB)
+  ...
+```
+
+### ServerlessLLM Metadata Demo
+```
+=== ServerlessLLM Metadata Demo ===
+Index: fixtures/qwen-qwen2-0.5b/model_serverlessllm/
+
+Partitions: 8
+Total tensors: 201
+Total size: 494.03 MB
+
+Partition distribution:
+  Partition 0: 26 tensors (62.1 MB)
+  Partition 1: 25 tensors (61.8 MB)
+  ...
+```
+
+## Fixture Setup
+
+Before running demos, download test fixtures:
+
+```bash
+cd scripts
+uv run python download_models.py Qwen/Qwen2-0.5B --convert --verify
+```
+
+This creates:
+```
+fixtures/
+└── qwen-qwen2-0.5b/
+    ├── model.safetensors          # For SafeTensors demos
+    └── model_serverlessllm/       # For ServerlessLLM demos
+```
+
+## Building for Release
+
+For accurate performance characteristics, build in release mode:
+
+```bash
+cargo build --release --bin demo
+./target/release/demo safetensors all --fixture qwen-qwen2-0.5b
+```
+
+## See Also
+
+- [Benchmarks](../../../benches/README.md) - For rigorous performance measurement
+- [Profile Binary](../profile/README.md) - For profiling with external tools
+- [SafeTensors Module](../../safetensors/README.md)
+- [ServerlessLLM Module](../../serverlessllm/README.md)

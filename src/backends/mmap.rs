@@ -1,3 +1,24 @@
+  //! Memory-mapped I/O backend for zero-copy file access.
+//!
+//! This module provides memory-mapped file loading using `memmap2`, allowing
+//! the OS to manage file data paging. Useful for lazy loading and random access patterns.
+//!
+//! # Features
+//!
+//! - Zero-copy access to file data
+//! - OS-managed memory paging
+//! - Suitable for read-only access
+//! - Good for random access patterns
+//!
+//! # Example
+//!
+//! ```ignore
+//! use tensor_store::backends::mmap;
+//!
+//! let mmap = mmap::load("large_file.bin")?;
+//! let data = mmap.as_slice(); // No copy, just pointer
+//! ```
+
 use super::IoResult;
 use std::fs::File;
 use std::io::{Error, ErrorKind};
