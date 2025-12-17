@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use tensor_store::readers::safetensors;
+//! use tensor_store::safetensors;
 //!
 //! // Load and parse SafeTensors file (owned)
 //! let tensors = safetensors::load("model.safetensors").await?;
@@ -31,8 +31,8 @@
 //! ```
 
 use crate::backends;
-use crate::readers::error::{ReaderError, ReaderResult};
-use crate::readers::traits::{AsyncReader, SyncReader, TensorMetadata};
+use crate::types::error::{ReaderError, ReaderResult};
+use crate::types::traits::{AsyncReader, SyncReader, TensorMetadata};
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as Tensor};
 use std::ops::Deref;

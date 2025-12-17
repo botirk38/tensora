@@ -1,8 +1,8 @@
+use ::safetensors::SafeTensors;
 use criterion::{Criterion, criterion_group, criterion_main};
-use safetensors::SafeTensors;
 use std::hint::black_box;
 use std::path::PathBuf;
-use tensor_store::readers::safetensors;
+use tensor_store::safetensors;
 
 /// Touch one byte per page to ensure mmap benches trigger page faults.
 fn touch_pages(data: &[u8]) -> u8 {

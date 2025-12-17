@@ -23,10 +23,10 @@
 //! ).await?;
 //! ```
 
-use crate::readers::safetensors::Dtype;
-use crate::types::serverlessllm::TensorEntry;
-use crate::writers::error::{WriterError, WriterResult};
-use crate::writers::serverlessllm::ServerlessLlmWriter;
+use crate::safetensors::Dtype;
+use crate::serverlessllm::ServerlessLlmWriter;
+use crate::serverlessllm::TensorEntry;
+use crate::types::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -60,7 +60,7 @@ pub async fn convert_safetensors_to_serverlessllm(
     let chunks = num_cpus.max(min_chunks_for_size);
 
     // Use parallel loading for better I/O performance
-    let owned = crate::readers::safetensors::load_parallel(input_path, chunks)
+    let owned = crate::safetensors::load_parallel(input_path, chunks)
         .await
         .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
     let tensors = owned.tensors();

@@ -3,31 +3,29 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub mod backends;
 pub mod converters;
-pub mod readers;
+pub mod safetensors;
+pub mod serverlessllm;
 pub mod types;
-pub mod writers;
 
 // ============================================================================
 // Convenience re-exports for common types and functions
 // ============================================================================
 
 // Error types
-pub use readers::error::{ReaderError, ReaderResult};
-pub use writers::error::{WriterError, WriterResult};
+pub use types::error::{ReaderError, ReaderResult};
+pub use types::error::{WriterError, WriterResult};
 
 // Traits
-pub use readers::traits::{AsyncReader, SyncReader, TensorMetadata};
-pub use writers::traits::{AsyncWriter, SyncWriter};
+pub use types::traits::{AsyncReader, AsyncWriter, SyncReader, SyncWriter, TensorMetadata};
 
-// Reader types
-pub use readers::safetensors::{SafeTensors, SafeTensorsMmap};
-pub use readers::serverlessllm::{
-    ServerlessLLM, ServerlessLLMIndex, ServerlessLLMMmap, Tensor, TensorMmap,
+// SafeTensors types
+pub use safetensors::{SafeTensorsMmap, SafeTensorsOwned, SafeTensorsWriter};
+
+// ServerlessLLM types
+pub use serverlessllm::{
+    ServerlessLLM, ServerlessLLMIndex, ServerlessLLMMmap, ServerlessLlmWriter, Tensor, TensorEntry,
+    TensorMmap,
 };
-
-// Writer types
-pub use writers::safetensors::SafeTensorsWriter;
-pub use writers::serverlessllm::ServerlessLlmWriter;
 
 // Conversion functions
 pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm;

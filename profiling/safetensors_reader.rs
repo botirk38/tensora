@@ -30,7 +30,7 @@
 
 use std::hint::black_box;
 use std::time::Instant;
-use tensor_store::readers::safetensors;
+use tensor_store::safetensors;
 
 #[derive(Debug)]
 enum ProfileMode {

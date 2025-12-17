@@ -8,7 +8,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use tensor_store::writers::safetensors::{
+//! use tensor_store::safetensors::{
 //!     self, Dtype, MetadataMap, TensorView
 //! };
 //!
@@ -26,7 +26,7 @@
 //! ```
 
 use crate::backends;
-use crate::writers::error::WriterResult;
+use crate::types::error::WriterResult;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
@@ -151,11 +151,11 @@ impl SafeTensorsWriter {
     /// # Errors
     ///
     /// Returns an error if serialization or file writing fails.
-pub async fn write_to_file_async<S, V, I, P>(
-    &self,
-    tensors: I,
-    metadata: Option<MetadataMap>,
-    path: P,
+    pub async fn write_to_file_async<S, V, I, P>(
+        &self,
+        tensors: I,
+        metadata: Option<MetadataMap>,
+        path: P,
     ) -> WriterResult<()>
     where
         S: AsRef<str> + Ord + Display,
@@ -188,8 +188,8 @@ fn ensure_parent_dir(path: &Path) -> WriterResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use safetensors::tensor::TensorView;
     use safetensors::SafeTensors;
+    use safetensors::tensor::TensorView;
     use tempfile::TempDir;
 
     fn sample_view() -> TensorView<'static> {

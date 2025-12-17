@@ -2,8 +2,8 @@ use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use safetensors::SafeTensors;
-use tensor_store::readers::safetensors;
+use ::safetensors::SafeTensors;
+use tensor_store::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 

@@ -1,8 +1,8 @@
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use tensor_store::readers::serverlessllm;
-use tensor_store::readers::traits::TensorMetadata;
+use tensor_store::serverlessllm;
+use tensor_store::types::traits::TensorMetadata;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 

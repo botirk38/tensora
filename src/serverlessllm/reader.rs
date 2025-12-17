@@ -22,7 +22,7 @@
 //! ## High-Level API (Recommended)
 //!
 //! ```rust,ignore
-//! use tensor_store::readers::serverlessllm;
+//! use tensor_store::serverlessllm;
 //!
 //! // Load entire model with eager loading (async)
 //! let model = serverlessllm::load("model_dir/").await?;
@@ -64,9 +64,9 @@
 //! ```
 //!
 use crate::backends;
-use crate::readers::error::{ReaderError, ReaderResult};
-use crate::readers::traits::{AsyncReader, SyncReader, TensorMetadata};
-use crate::types::serverlessllm::TensorEntry;
+use crate::serverlessllm::types::TensorEntry;
+use crate::types::error::{ReaderError, ReaderResult};
+use crate::types::traits::{AsyncReader, SyncReader, TensorMetadata};
 use futures::future;
 use rayon::prelude::*;
 use std::collections::HashMap;

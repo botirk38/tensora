@@ -46,8 +46,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::PathBuf;
-use tensor_store::readers::serverlessllm;
-use tensor_store::readers::traits::TensorMetadata;
+use tensor_store::serverlessllm;
+use tensor_store::types::traits::TensorMetadata;
 
 /// Touch one byte per page so mmap benches pay the page fault cost.
 fn touch_pages(data: &[u8]) -> u8 {

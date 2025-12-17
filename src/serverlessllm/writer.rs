@@ -20,7 +20,7 @@
 //! # Example Usage
 //!
 //! ```rust,ignore
-//! use tensor_store::writers::serverlessllm::ServerlessLlmWriter;
+//! use tensor_store::serverlessllm::ServerlessLlmWriter;
 //!
 //! // Async usage
 //! let writer = ServerlessLlmWriter::new();
@@ -33,12 +33,12 @@
 //! ```
 
 use crate::backends;
-use crate::writers::error::{WriterError, WriterResult};
+use crate::types::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
 
 // Re-export shared TensorEntry type for backwards compatibility
-pub use crate::types::serverlessllm::TensorEntry;
+pub use crate::serverlessllm::types::TensorEntry;
 
 /// High-level writer for the `ServerlessLLM` checkpoint format.
 #[derive(Debug, Default, Clone, Copy)]

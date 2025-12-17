@@ -32,8 +32,8 @@
 
 use std::hint::black_box;
 use std::time::Instant;
-use tensor_store::readers::serverlessllm;
-use tensor_store::readers::traits::TensorMetadata;
+use tensor_store::serverlessllm;
+use tensor_store::types::traits::TensorMetadata;
 
 #[derive(Debug)]
 enum ProfileMode {

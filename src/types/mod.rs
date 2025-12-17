@@ -1,7 +1,9 @@
-//! Shared type definitions for tensor storage formats.
+//! Shared types, traits, and errors for tensor operations.
 //!
-//! This module contains type definitions that are used by both readers and writers
-//! to ensure consistency across serialization and deserialization operations.
+//! This module contains the common types and traits used across all format modules.
 
-pub mod serverlessllm;
-pub mod tensorstore;
+pub mod error;
+pub mod traits;
+
+pub use error::{ReaderError, ReaderResult, WriterError, WriterResult};
+pub use traits::{AsyncReader, AsyncWriter, SyncReader, SyncWriter, TensorMetadata};
