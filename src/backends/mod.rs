@@ -138,7 +138,10 @@ pub fn sync_backend() -> &'static dyn SyncBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        async_backend, get_buffer_pool, sync_backend, CHECKPOINT_MAX_BUFFERS_PER_SHARD,
+        CHECKPOINT_MIN_BUFFER_SIZE, CHECKPOINT_NUM_SHARDS, CHECKPOINT_TLS_CACHE_SIZE,
+    };
 
     #[test]
     fn test_buffer_pool_initialization() {

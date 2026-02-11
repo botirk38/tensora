@@ -42,7 +42,8 @@ pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{flatten_results, group_requests_by_file, BatchResult};
+    use std::path::Path;
 
     #[test]
     fn test_group_requests_by_file_single_file() {

@@ -140,8 +140,9 @@ impl From<serde_json::Error> for WriterError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::ReaderError;
     use std::error::Error;
+    use std::io;
 
     #[test]
     fn display_formats_variants() {

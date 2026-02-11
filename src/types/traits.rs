@@ -101,7 +101,7 @@ pub trait SyncWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::TensorMetadata;
 
     struct DummyMeta(Vec<String>);
 

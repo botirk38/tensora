@@ -539,7 +539,10 @@ pub async fn write_all(path: impl AsRef<Path>, data: Vec<u8>) -> IoResult<()> {
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests {
-    use super::*;
+    use super::{
+        build_chunk_requests, checked_arithmetic, load, load_parallel, load_range,
+        statx_file_size, validate_chunk_size, validate_read_count, write_all,
+    };
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -556,7 +559,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     mod validation {
-        use super::*;
+        use super::{checked_arithmetic, validate_chunk_size, validate_read_count};
 
         #[test]
         fn test_validate_read_count_exact() {
@@ -614,7 +617,8 @@ mod tests {
     }
 
     mod chunk_building {
-        use super::*;
+        use super::build_chunk_requests;
+        use crate::backends::odirect::{align_to_block, BLOCK_SIZE};
 
         #[test]
         fn test_build_chunk_requests_single_chunk() {
@@ -696,7 +700,8 @@ mod tests {
     }
 
     mod helpers {
-        use super::*;
+        use super::statx_file_size;
+        use crate::backends::io_uring::allow_direct_fallback;
 
         #[test]
         fn test_allow_direct_fallback_einval() {
@@ -743,7 +748,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     mod integration {
-        use super::*;
+        use super::{load, load_parallel, load_range, run_test, write_all};
+        use crate::backends::io_uring::load_batch;
+        use crate::backends::odirect::{align_to_block, BLOCK_SIZE};
+        use std::io::Write;
+        use tempfile::NamedTempFile;
 
         #[test]
         fn test_load_empty_file() {

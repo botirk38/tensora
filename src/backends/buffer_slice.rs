@@ -150,7 +150,7 @@ impl BufferSlice {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::BufferSlice;
 
     #[test]
     fn test_buffer_slice_len() {

@@ -148,8 +148,9 @@ pub fn map_range(path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Mm
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{map, map_range};
     use std::io::Write;
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
 
     #[test]
