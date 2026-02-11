@@ -852,7 +852,7 @@ impl Tensor {
 
     /// Consumes the view and returns the raw tensor data.
     ///
-    /// If this tensor covers the entire buffer, returns the owned Vec<u8>.
+    /// If this tensor covers the entire buffer, returns the owned `Vec<u8>`.
     /// Otherwise, returns a copy of the slice.
     #[inline]
     #[must_use]
@@ -913,6 +913,13 @@ impl Tensor {
         self.len
     }
 
+    /// Returns true if the tensor has zero length.
+    #[inline]
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns an owned copy of the tensor data slice.
     #[inline]
     #[must_use]
@@ -920,7 +927,7 @@ impl Tensor {
         self.data().to_vec()
     }
 
-    /// Consumes the tensor and returns the owned data slice as a Vec<u8>.
+    /// Consumes the tensor and returns the owned data slice as a `Vec<u8>`.
     #[inline]
     #[must_use]
     pub fn into_vec(self) -> Vec<u8> {
@@ -1381,17 +1388,40 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    fn write_index(
-        dir: &Path,
-        entries: &[(&str, (u64, u64, Vec<i64>, Vec<i64>, &str, usize))],
-    ) -> std::path::PathBuf {
+    #[allow(clippy::too_many_arguments)]
+    fn tensor_entry(
+        offset: u64,
+        size: u64,
+        shape: Vec<i64>,
+        stride: Vec<i64>,
+        dtype: &str,
+        partition_id: usize,
+    ) -> TensorEntry {
+        TensorEntry {
+            offset,
+            size,
+            shape,
+            stride,
+            dtype: dtype.to_owned(),
+            partition_id,
+        }
+    }
+
+    fn write_index(dir: &Path, entries: &[(&str, TensorEntry)]) -> std::path::PathBuf {
         let index_path = dir.join("tensor_index.json");
         let mut root = serde_json::Map::new();
 
-        for (name, (offset, size, shape, stride, dtype, partition_id)) in entries {
+        for (name, entry) in entries {
             root.insert(
                 (*name).to_string(),
-                json!([offset, size, shape, stride, *dtype, partition_id]),
+                json!([
+                    entry.offset,
+                    entry.size,
+                    entry.shape,
+                    entry.stride,
+                    entry.dtype,
+                    entry.partition_id
+                ]),
             );
         }
 
@@ -1440,7 +1470,7 @@ mod tests {
         write_partition(&part_path, b"hello_world");
         let index_path = write_index(
             dir.path(),
-            &[("weight", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+            &[("weight", tensor_entry(0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
         );
 
         let index = parse_index_sync(&index_path).unwrap();
@@ -1464,7 +1494,7 @@ mod tests {
         write_partition(&part_path, b"abcde");
         let index_path = write_index(
             dir.path(),
-            &[("exists", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+            &[("exists", tensor_entry(0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
         );
         let index = parse_index_sync(&index_path).unwrap();
         let err = index.load_tensor_sync(&base_path, "missing").unwrap_err();
@@ -1479,7 +1509,7 @@ mod tests {
         write_partition(&part_path, b"abc"); // shorter than requested size
         let index_path = write_index(
             dir.path(),
-            &[("tensor", (0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
+            &[("tensor", tensor_entry(0, 5, vec![1, 5], vec![5, 1], "u8", 0))],
         );
         let index = parse_index_sync(&index_path).unwrap();
         let err = index.load_tensor_sync(&base_path, "tensor").unwrap_err();
@@ -1519,8 +1549,8 @@ mod tests {
         let index_path = write_index(
             dir.path(),
             &[
-                ("a", (0, 3, vec![3], vec![1], "u8", 0)),
-                ("b", (2, 3, vec![3], vec![1], "u8", 1)),
+                ("a", tensor_entry(0, 3, vec![3], vec![1], "u8", 0)),
+                ("b", tensor_entry(2, 3, vec![3], vec![1], "u8", 1)),
             ],
         );
 
@@ -1544,7 +1574,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let base_path = dir.path().join("tensor.data");
         write_partition(&format!("{}_0", base_path.display()), b"0123456789");
-        let _index_path = write_index(dir.path(), &[("slice", (2, 4, vec![4], vec![1], "u8", 0))]);
+        let _index_path = write_index(
+            dir.path(),
+            &[("slice", tensor_entry(2, 4, vec![4], vec![1], "u8", 0))],
+        );
 
         let model = load_mmap(dir.path()).expect("load mmap");
         let view = model.tensor("slice").expect("tensor slice");
@@ -1558,7 +1591,6 @@ mod tests {
 
     mod proptests {
         use super::*;
-        use crate::types::traits::TensorMetadata;
         use proptest::prelude::*;
 
         proptest! {
@@ -1622,7 +1654,7 @@ mod tests {
 
             #[test]
             fn test_calculate_contiguous_stride_property(
-                dim1 in 1i64..100,
+                _dim1 in 1i64..100,
                 dim2 in 1i64..100,
                 dim3 in 1i64..100
             ) {

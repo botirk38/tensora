@@ -156,13 +156,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_buffer_pool_config_values() {
-        // Verify constants are within reasonable ranges
         assert!(CHECKPOINT_NUM_SHARDS > 0);
-        assert!(CHECKPOINT_NUM_SHARDS <= 64); // Reasonable upper bound
+        assert!(CHECKPOINT_NUM_SHARDS <= 64);
         assert!(CHECKPOINT_TLS_CACHE_SIZE > 0);
         assert!(CHECKPOINT_MAX_BUFFERS_PER_SHARD > 0);
-        assert!(CHECKPOINT_MIN_BUFFER_SIZE >= 1024); // At least 1KB
+        assert!(CHECKPOINT_MIN_BUFFER_SIZE >= 1024);
     }
 
     #[test]

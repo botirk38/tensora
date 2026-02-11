@@ -64,9 +64,10 @@ pub async fn convert_safetensors_to_serverlessllm(
         .await
         .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
     let tensors = owned.tensors();
+    let names = tensors.names();
 
-    let mut blobs = Vec::new();
-    for name in tensors.names() {
+    let mut blobs = Vec::with_capacity(names.len());
+    for name in names {
         let view = tensors.tensor(name).map_err(WriterError::SafeTensors)?;
         let data = view.data().to_vec();
         let shape: Vec<i64> = view

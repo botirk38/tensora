@@ -82,7 +82,7 @@ pub const fn pad_to_block(len: usize) -> usize {
 ///
 /// # Returns
 ///
-/// An empty Vec<u8> with the requested capacity, aligned to BLOCK_SIZE.
+/// An empty `Vec<u8>` with the requested capacity, aligned to BLOCK_SIZE.
 ///
 /// # Errors
 ///
@@ -96,15 +96,21 @@ pub fn alloc_aligned(capacity: usize) -> IoResult<Vec<u8>> {
     let layout = Layout::from_size_align(capacity, BLOCK_SIZE)
         .map_err(|_| IoError::new(ErrorKind::InvalidInput, "invalid allocation layout"))?;
 
-    // SAFETY: We allocate zeroed memory to avoid exposing uninitialized data
-    // when we truncate padded buffers to actual data size.
+    // SAFETY: alloc_zeroed is safe to call with a valid Layout. We use zeroed
+    // memory instead of uninitialized to prevent information leaks when buffers
+    // are truncated after I/O (e.g., removing alignment padding).
     let ptr = unsafe { alloc_zeroed(layout) };
     if ptr.is_null() {
         std::alloc::handle_alloc_error(layout);
     }
 
-    // SAFETY: ptr is non-null and allocated with the correct layout.
-    // We start with length 0 to allow safe initialization.
+    // SAFETY: Vec::from_raw_parts requirements are met:
+    // 1. `ptr` is non-null (checked above) and allocated via the global allocator
+    // 2. `ptr` is valid for reads/writes of `capacity` bytes
+    // 3. `ptr` is aligned to BLOCK_SIZE (guaranteed by layout)
+    // 4. `capacity` matches the actual allocation size
+    // 5. length=0 is always ≤ capacity, so no uninitialized data is exposed
+    // 6. The memory will be freed via Vec's Drop implementation
     let buf = unsafe { Vec::from_raw_parts(ptr, 0, capacity) };
     Ok(buf)
 }
@@ -115,7 +121,7 @@ pub fn alloc_aligned(capacity: usize) -> IoResult<Vec<u8>> {
 
 /// The actual backing storage for aligned buffers.
 ///
-/// Owns a block-aligned Vec<u8> and provides safe access to it.
+/// Owns a block-aligned `Vec<u8>` and provides safe access to it.
 struct AlignedBacking {
     buf: Vec<u8>,
 }
@@ -138,9 +144,14 @@ impl AlignedBacking {
     ///
     /// # Safety
     ///
-    /// Caller must ensure proper bounds when using this pointer.
+    /// Caller must guarantee:
+    /// - Accesses via this pointer stay within [0, capacity) bounds
+    /// - No data races occur (only one mutable alias active at a time)
+    /// - The backing Vec is not moved or deallocated while pointer is in use
     #[inline]
     const fn base_ptr(&self) -> *mut u8 {
+        // SAFETY: as_ptr() returns a valid pointer to the Vec's buffer,
+        // and cast_mut() is safe for interior mutability patterns.
         self.buf.as_ptr().cast_mut()
     }
 
@@ -157,7 +168,12 @@ impl AlignedBacking {
             ));
         }
 
-        // SAFETY: len is bounded by capacity, and the allocation is valid.
+        // SAFETY: Vec::set_len requirements are met:
+        // 1. len ≤ capacity (checked above)
+        // 2. All bytes in [0, len) are initialized because:
+        //    - Buffer was allocated with alloc_zeroed, or
+        //    - Bytes were written to via I/O operations
+        // 3. The caller is responsible for ensuring initialization
         unsafe {
             self.buf.set_len(len);
         }
@@ -214,12 +230,21 @@ impl AlignedChunk {
     /// Returns a mutable pointer to the start of this chunk.
     #[inline]
     fn ptr(&self) -> *mut u8 {
-        // SAFETY: offset is validated during construction to be within bounds.
+        // SAFETY: pointer arithmetic is safe because:
+        // 1. base_ptr() returns a valid pointer to the backing buffer
+        // 2. offset was validated in new() to satisfy: offset + len ≤ capacity
+        // 3. Therefore offset alone is also ≤ capacity
+        // 4. The result pointer is within the same allocated object
         unsafe { self.backing.base_ptr().add(self.offset) }
     }
 }
 
-// Implement tokio-uring's buffer traits for zero-copy I/O
+// SAFETY: IoBuf implementation is safe because:
+// 1. The buffer is backed by an Arc<AlignedBacking> which ensures the memory
+//    remains valid for the lifetime of the chunk
+// 2. stable_ptr() returns a pointer to our exclusive region within the backing
+// 3. bytes_init/bytes_total correctly report our slice bounds
+// 4. The underlying memory is properly aligned for O_DIRECT operations
 unsafe impl tokio_uring::buf::IoBuf for AlignedChunk {
     fn stable_ptr(&self) -> *const u8 {
         self.ptr()
@@ -234,6 +259,11 @@ unsafe impl tokio_uring::buf::IoBuf for AlignedChunk {
     }
 }
 
+// SAFETY: IoBufMut implementation is safe because:
+// 1. All IoBuf guarantees above apply
+// 2. stable_mut_ptr() returns a mutable pointer to our exclusive region
+// 3. set_init() only advances the initialization marker (never decreases)
+// 4. The AlignedChunk owns exclusive access to its region of the backing buffer
 unsafe impl tokio_uring::buf::IoBufMut for AlignedChunk {
     fn stable_mut_ptr(&mut self) -> *mut u8 {
         self.ptr()
@@ -255,7 +285,7 @@ unsafe impl tokio_uring::buf::IoBufMut for AlignedChunk {
 /// This is the main API for creating aligned buffers. It can be:
 /// 1. Used directly for single I/O operations
 /// 2. Split into multiple chunks for concurrent parallel I/O
-/// 3. Consumed to extract the final data as a Vec<u8>
+/// 3. Consumed to extract the final data as a `Vec<u8>`
 pub struct OwnedAlignedBuffer {
     backing: Arc<AlignedBacking>,
 }
@@ -286,7 +316,7 @@ impl OwnedAlignedBuffer {
         AlignedChunk::new(Arc::clone(&self.backing), offset, len)
     }
 
-    /// Consumes the buffer and returns the inner Vec<u8> with the specified length.
+    /// Consumes the buffer and returns the inner `Vec<u8>` with the specified length.
     ///
     /// This transfers ownership without copying data. The buffer must have no
     /// outstanding chunk references (all chunks must be dropped first).

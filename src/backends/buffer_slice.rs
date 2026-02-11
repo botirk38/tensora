@@ -65,8 +65,11 @@ pub struct BufferSlice {
     _phantom: std::marker::PhantomData<&'static mut [u8]>,
 }
 
-// SAFETY: We guarantee that BufferSlice instances represent non-overlapping
-// regions and are used with exclusive access patterns across thread boundaries.
+// SAFETY: BufferSlice can be safely sent across threads because:
+// 1. It represents exclusive ownership of a non-overlapping memory region
+// 2. The raw pointer is only dereferenced via `as_mut_slice()` which requires `&mut self`
+// 3. Callers must guarantee the backing buffer outlives all BufferSlice instances
+// 4. The PhantomData marker ensures proper variance and drop checking
 unsafe impl Send for BufferSlice {}
 
 impl BufferSlice {
@@ -74,11 +77,32 @@ impl BufferSlice {
     ///
     /// # Safety
     ///
-    /// The caller must ensure:
-    /// - The slice remains valid for the lifetime of this `BufferSlice`
-    /// - No other code accesses this slice until the `BufferSlice` is consumed
-    /// - This slice does not overlap with any other `BufferSlice` instances
-    /// - The slice will be accessed by exactly one task at a time
+    /// The caller must guarantee all of the following:
+    ///
+    /// 1. **Validity**: The backing memory remains valid and allocated for the
+    ///    entire lifetime of this `BufferSlice`.
+    ///
+    /// 2. **Exclusivity**: No other code reads from or writes to this memory
+    ///    region until this `BufferSlice` is dropped or fully consumed.
+    ///
+    /// 3. **Non-overlapping**: This slice does not overlap with any other
+    ///    `BufferSlice` instances that may be accessed concurrently.
+    ///
+    /// 4. **Single-threaded access**: The resulting `BufferSlice` will only be
+    ///    accessed by one task/thread at a time (though it can be moved between
+    ///    threads via `Send`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut buffer = vec![0u8; 100];
+    /// let (left, right) = buffer.split_at_mut(50);
+    ///
+    /// // SAFETY: left and right are non-overlapping, and we maintain
+    /// // exclusive access to each slice in separate tasks.
+    /// let slice1 = unsafe { BufferSlice::from_slice(left) };
+    /// let slice2 = unsafe { BufferSlice::from_slice(right) };
+    /// ```
     pub const unsafe fn from_slice(slice: &mut [u8]) -> Self {
         Self {
             ptr: slice.as_mut_ptr(),
@@ -91,11 +115,23 @@ impl BufferSlice {
     ///
     /// # Safety
     ///
-    /// - This can only be called once per `BufferSlice`
-    /// - The caller must ensure no concurrent access to this slice
-    /// - The parent buffer must still be valid
-    /// - No other `BufferSlice` instances may access overlapping regions
+    /// The caller must guarantee:
+    ///
+    /// 1. **Validity**: The backing buffer is still allocated and valid.
+    ///
+    /// 2. **Exclusivity**: No other code is currently accessing this memory
+    ///    region, and the returned slice will not be aliased.
+    ///
+    /// 3. **Non-overlapping**: No other `BufferSlice` pointing to overlapping
+    ///    memory is being accessed concurrently.
+    ///
+    /// Note: Taking `&mut self` provides some protection against multiple
+    /// simultaneous calls, but does not prevent the caller from creating
+    /// multiple mutable references if they call this in a loop.
     pub const unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: Caller guarantees the pointer is valid, properly aligned,
+        // and points to `self.len` initialized bytes. The `&mut self` receiver
+        // ensures we have exclusive access to this BufferSlice.
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 

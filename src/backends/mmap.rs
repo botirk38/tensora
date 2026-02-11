@@ -1,4 +1,4 @@
-  //! Memory-mapped I/O backend for zero-copy file access.
+//! Memory-mapped I/O backend for zero-copy file access.
 //!
 //! This module provides memory-mapped file loading using `memmap2`, allowing
 //! the OS to manage file data paging. Useful for lazy loading and random access patterns.
@@ -255,7 +255,7 @@ mod tests {
         let mmap = map(tmpfile.path()).unwrap();
 
         // Test Deref trait
-        let slice: &[u8] = &*mmap;
+        let slice: &[u8] = &mmap;
         assert_eq!(slice, b"deref test");
     }
 
