@@ -17,7 +17,62 @@ pub enum ReaderError {
     #[error("SafeTensors error: {0}")]
     SafeTensors(#[from] safetensors::SafeTensorError),
 
-    /// `ServerlessLLM` format error (invalid JSON or structure).
+    /// Tensor not found in the index.
+    #[error("Tensor '{name}' not found in index")]
+    TensorNotFound {
+        /// Name of the tensor that was not found.
+        name: String,
+    },
+
+    /// Partition file not found or inaccessible.
+    #[error("Partition {partition_id} not found at path '{path}'")]
+    PartitionNotFound {
+        /// ID of the partition.
+        partition_id: usize,
+        /// Expected path to the partition file.
+        path: String,
+    },
+
+    /// Partition file is smaller than required for the requested tensor.
+    #[error("Partition file '{path}' is too small: has {actual} bytes, needs {required} bytes")]
+    PartitionTooSmall {
+        /// Path to the partition file.
+        path: String,
+        /// Actual size of the partition file.
+        actual: u64,
+        /// Required size for the tensor.
+        required: u64,
+    },
+
+    /// Invalid tensor index format (JSON structure error).
+    #[error("Invalid tensor index format: {0}")]
+    InvalidIndexFormat(String),
+
+    /// JSON parse error when reading tensor index.
+    #[error("JSON parse error in tensor index: {0}")]
+    JsonParseError(String),
+
+    /// Offset + size calculation would overflow.
+    #[error("Offset + size overflow for tensor '{name}'")]
+    OffsetOverflow {
+        /// Name of the tensor.
+        name: String,
+    },
+
+    /// Tensor size exceeds platform limits.
+    #[error("Size too large for tensor '{name}': {size} bytes")]
+    SizeTooLarge {
+        /// Name of the tensor.
+        name: String,
+        /// Size that exceeded limits.
+        size: u64,
+    },
+
+    /// Mutex was poisoned (another thread panicked while holding the lock).
+    #[error("Mutex lock poisoned")]
+    MutexPoisoned,
+
+    /// Generic `ServerlessLLM` format error (for cases not covered by specific variants).
     #[error("ServerlessLLM format error: {0}")]
     ServerlessLlm(String),
 
