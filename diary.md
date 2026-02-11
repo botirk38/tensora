@@ -8,17 +8,31 @@ The hypothesis: Can io_uring's kernel-offloaded I/O eliminate CPU overhead from 
 
 ## 2025-02-11
 
-Code review day. Went through everything with fresh eyes looking for Rust idioms and best practices violations.
+Code review day that turned into comprehensive refactoring. Started with clippy warnings, ended up touching 15+ files.
 
-Fixed 14 clippy warnings that had accumulated. Most were minor - unused imports, missing is_empty() methods, that sort of thing. The type_complexity one in tests was annoying until I realized I could just make a type alias.
+Fixed clippy pedantic warnings - unnested or-patterns, redundant closures, underscores in large literals. Also converted ReaderError to use thiserror (was manual Display/Error impls copy-pasted from WriterError). Added rust-version = "1.92" to Cargo.toml.
 
-Bigger win was converting ReaderError to use thiserror. Had manual Display and Error impls that were copy-pasted from WriterError which already used thiserror. Now both are consistent - less code, same behavior.
+Bigger architectural change: refactored trait signatures from `impl AsRef<Path>` to `&Path`. The impl version looks nicer but breaks object safety - can't make trait objects. `&Path` is more restrictive but enables dynamic dispatch. Callers just add `.as_ref()` at call sites.
 
-Spent time improving unsafe documentation. The BufferSlice and odirect code does tricky pointer stuff for zero-copy I/O. Future me (or anyone else reading this) needs to understand why it's safe. Added proper SAFETY comments explaining preconditions and invariants.
+Error handling overhaul was the real work. Added 8 rich error variants to `ReaderError`:
+- `TensorNotFound { name }` - better than generic "not found" string
+- `PartitionNotFound { partition_id, path }` - tells you exactly which partition failed
+- `PartitionTooSmall { path, actual, required }` - actionable: shows the size mismatch
+- `OffsetOverflow { name }`, `SizeTooLarge { name, size }` - safer than panicking
+- `MutexPoisoned` - thread panic handling
+- Plus `InvalidIndexFormat`, `JsonParseError` for parsing issues
 
-Also added rust-version = "1.92" to Cargo.toml. Should've done this earlier - makes MSRV explicit.
+Then replaced ~15 string-based errors in serverlessllm/reader.rs with the new variants. Replaced `.unwrap()` calls on mutex locks with proper error handling. Fixed HashMap lookups that assumed keys existed.
 
-Small stuff but code quality matters. Technical debt compounds.
+Documentation pass: added `# Errors` sections to ~50 public functions across all backends and both reader modules. Each function now documents what can go wrong.
+
+Final cleanup: replaced `use super::*` with explicit imports in 29 test modules. Wildcard imports hide what you're actually using. The io_uring tests were tricky - nested modules with different imports.
+
+Spent time improving unsafe documentation too. The BufferSlice and odirect code does tricky pointer stuff for zero-copy I/O. Added proper SAFETY comments explaining preconditions and invariants.
+
+8 commits, all 173 tests passing, clippy clean, docs generate without warnings.
+
+This wasn't planned. Started with "fix a few clippy warnings" and scope crept. But it's the right kind of scope creep - technical debt that needed addressing. The error variants will make debugging easier. When something fails, users get specific context instead of generic strings.
 
 ## 2025-12-17
 
