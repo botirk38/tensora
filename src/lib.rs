@@ -23,7 +23,7 @@ pub use safetensors::{SafeTensorsMmap, SafeTensorsOwned, SafeTensorsWriter};
 
 // ServerlessLLM types
 pub use serverlessllm::{
-    ServerlessLLM, ServerlessLLMIndex, ServerlessLLMMmap, ServerlessLlmWriter, Tensor, TensorEntry,
+    ServerlessLLMOwned, ServerlessLLMIndex, ServerlessLLMMmap, ServerlessLlmWriter, Tensor, TensorEntry,
     TensorMmap,
 };
 

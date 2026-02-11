@@ -952,15 +952,15 @@ impl Tensor {
 
 /// High-level ServerlessLLM reader with owned tensor data.
 ///
-/// This provides a simple API similar to SafeTensors: load once, then access tensors by name.
 /// All tensor data is loaded into memory for fast access.
+/// Named `ServerlessLLMOwned` for consistency with `SafeTensorsOwned`.
 #[derive(Debug, Clone)]
-pub struct ServerlessLLM {
+pub struct ServerlessLLMOwned {
     /// All tensors loaded into memory
     tensors: HashMap<String, Tensor>,
 }
 
-impl ServerlessLLM {
+impl ServerlessLLMOwned {
     /// Loads a ServerlessLLM model from directory asynchronously with eager loading.
     ///
     /// This loads the index file and all tensor data into memory for fast access.
@@ -971,7 +971,7 @@ impl ServerlessLLM {
     ///
     /// # Returns
     ///
-    /// An `ServerlessLLM` with all tensors loaded and ready for access.
+    /// A `ServerlessLLMOwned` with all tensors loaded and ready for access.
     pub async fn from_directory_async(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let dir_path = directory.as_ref();
         let index_path = dir_path.join("tensor_index.json");
@@ -1008,7 +1008,7 @@ impl ServerlessLLM {
     ///
     /// # Returns
     ///
-    /// An `ServerlessLLM` with all tensors loaded and ready for access.
+    /// A `ServerlessLLMOwned` with all tensors loaded and ready for access.
     pub fn from_directory(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let dir_path = directory.as_ref();
         let index_path = dir_path.join("tensor_index.json");
@@ -1124,15 +1124,16 @@ pub fn parse_index_sync(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMInd
 ///
 /// # Returns
 ///
-/// An `ServerlessLLM` with all tensors loaded and ready for access.
+/// An `ServerlessLLMOwned` with all tensors loaded and ready for access.
 ///
 /// # Errors
 ///
 /// - Index or partition files cannot be read
 /// - Invalid index format
+/// - Network or I/O errors
 #[inline]
-pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
-    ServerlessLLM::from_directory_async(directory).await
+pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLMOwned> {
+    ServerlessLLMOwned::from_directory_async(directory).await
 }
 
 /// Load a ServerlessLLM model with eager loading (sync).
@@ -1143,15 +1144,15 @@ pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
 ///
 /// # Returns
 ///
-/// An `ServerlessLLM` with all tensors loaded and ready for access.
+/// An `ServerlessLLMOwned` with all tensors loaded and ready for access.
 ///
 /// # Errors
 ///
 /// - Index or partition files cannot be read
 /// - Invalid index format
 #[inline]
-pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLM> {
-    ServerlessLLM::from_directory(directory)
+pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<ServerlessLLMOwned> {
+    ServerlessLLMOwned::from_directory(directory)
 }
 
 /// Load a ServerlessLLM model with mmap-based lazy loading (sync).
@@ -1255,7 +1256,7 @@ impl ServerlessLLMMmap {
     }
 }
 
-impl<'a> IntoIterator for &'a ServerlessLLM {
+impl<'a> IntoIterator for &'a ServerlessLLMOwned {
     type Item = (&'a String, &'a Tensor);
     type IntoIter = std::collections::hash_map::Iter<'a, String, Tensor>;
 
@@ -1282,7 +1283,7 @@ impl TensorMetadata for ServerlessLLMMmap {
     }
 }
 
-impl TensorMetadata for ServerlessLLM {
+impl TensorMetadata for ServerlessLLMOwned {
     #[inline]
     fn len(&self) -> usize {
         self.tensors.len()
