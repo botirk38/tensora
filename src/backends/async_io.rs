@@ -79,7 +79,7 @@ mod linux {
     fn allow_direct_fallback(err: &std::io::Error) -> bool {
         matches!(
             err.raw_os_error(),
-            Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
+            Some(libc::EINVAL | libc::EOPNOTSUPP)
         )
     }
 
@@ -607,7 +607,7 @@ mod tests {
 
         #[test]
         fn test_div_ceil_large_numbers() {
-            assert_eq!(div_ceil(1000000, 3), 333334);
+            assert_eq!(div_ceil(1_000_000, 3), 333_334);
         }
     }
 

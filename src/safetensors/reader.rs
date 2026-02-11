@@ -213,8 +213,8 @@ impl SyncReader for SafeTensorsMmap {
     type Output = Self;
 
     #[inline]
-    fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let path_str = path.as_ref().to_str().ok_or_else(|| {
+    fn load_sync(path: &Path) -> ReaderResult<Self::Output> {
+        let path_str = path.to_str().ok_or_else(|| {
             ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
         })?;
         let mmap = backends::mmap::map(path_str)?;
@@ -252,9 +252,8 @@ impl AsyncReader for SafeTensorsOwned {
     type Output = Self;
 
     #[inline]
-    async fn load(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let path_ref = path.as_ref();
-        let bytes = backends::async_backend().load(path_ref).await?;
+    async fn load(path: &Path) -> ReaderResult<Self::Output> {
+        let bytes = backends::async_backend().load(path).await?;
         Self::from_bytes(bytes)
     }
 }
@@ -263,9 +262,8 @@ impl SyncReader for SafeTensorsOwned {
     type Output = Self;
 
     #[inline]
-    fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let path_ref = path.as_ref();
-        let bytes = backends::sync_backend().load(path_ref)?;
+    fn load_sync(path: &Path) -> ReaderResult<Self::Output> {
+        let bytes = backends::sync_backend().load(path)?;
         Self::from_bytes(bytes)
     }
 }
@@ -275,7 +273,7 @@ impl SyncReader for SafeTensorsOwned {
 /// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
 pub async fn load(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsOwned> {
-    SafeTensorsOwned::load(path).await
+    SafeTensorsOwned::load(path.as_ref()).await
 }
 
 /// Load tensor data in parallel chunks and parse it.
@@ -298,7 +296,7 @@ pub async fn load_parallel(
 /// Returns a `SafeTensorsOwned` with the parsed tensors.
 #[inline]
 pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsOwned> {
-    SafeTensorsOwned::load_sync(path)
+    SafeTensorsOwned::load_sync(path.as_ref())
 }
 
 /// Synchronous ranged load **only when the range covers the full file**.
@@ -341,7 +339,7 @@ pub fn load_range_sync(
 /// Returns a `SafeTensorsMmap` with memory-mapped tensors.
 #[inline]
 pub fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
-    SafeTensorsMmap::load_sync(path)
+    SafeTensorsMmap::load_sync(path.as_ref())
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 //! Synchronous blocking I/O using std::fs
 
-use super::{IoResult, SyncBackend, buffer_slice::BufferSlice, get_buffer_pool};
+use super::{buffer_slice::BufferSlice, get_buffer_pool, IoResult, SyncBackend};
 use std::path::{Path, PathBuf};
 
 /// Ceiling division: (a + b - 1) / b
@@ -46,8 +46,8 @@ impl SyncBackend for DefaultSyncBackend {
 mod linux {
 
     use super::super::odirect::{
-        BLOCK_SIZE, alloc_aligned, can_use_direct_read, can_use_direct_write, is_block_aligned,
-        open_direct_read_sync, open_direct_write_sync,
+        alloc_aligned, can_use_direct_read, can_use_direct_write, is_block_aligned,
+        open_direct_read_sync, open_direct_write_sync, BLOCK_SIZE,
     };
     use super::*;
     use rayon::prelude::*;
@@ -57,10 +57,7 @@ mod linux {
 
     #[inline]
     fn allow_direct_fallback(err: &std::io::Error) -> bool {
-        matches!(
-            err.raw_os_error(),
-            Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
-        )
+        matches!(err.raw_os_error(), Some(libc::EINVAL | libc::EOPNOTSUPP))
     }
 
     pub fn load(path: impl AsRef<Path>) -> IoResult<Vec<u8>> {

@@ -564,7 +564,7 @@ impl ServerlessLLMIndex {
         &self,
         base_path: impl AsRef<Path>,
     ) -> ReaderResult<HashMap<String, Vec<u8>>> {
-        let tensor_names: Vec<&str> = self.tensors.keys().map(|s| s.as_str()).collect();
+        let tensor_names: Vec<&str> = self.tensors.keys().map(String::as_str).collect();
         self.load_tensors_batch_sync(base_path, &tensor_names)
     }
 
@@ -728,10 +728,8 @@ impl AsyncReader for ServerlessLLMIndex {
     type Output = Self;
 
     #[inline]
-    async fn load(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let data = backends::async_backend()
-            .load(path.as_ref())
-            .await?;
+    async fn load(path: &Path) -> ReaderResult<Self::Output> {
+        let data = backends::async_backend().load(path).await?;
         parse_index_impl(&data)
     }
 }
@@ -740,8 +738,8 @@ impl SyncReader for ServerlessLLMIndex {
     type Output = Self;
 
     #[inline]
-    fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self::Output> {
-        let data = backends::sync_backend().load(path.as_ref())?;
+    fn load_sync(path: &Path) -> ReaderResult<Self::Output> {
+        let data = backends::sync_backend().load(path)?;
         parse_index_impl(&data)
     }
 }
@@ -967,7 +965,7 @@ impl ServerlessLLM {
         let index = ServerlessLLMIndex::load(&index_path).await?;
 
         // Load all tensors using async batching with zero-copy
-        let tensor_names: Vec<&str> = index.tensors.keys().map(|s| s.as_str()).collect();
+        let tensor_names: Vec<&str> = index.tensors.keys().map(String::as_str).collect();
         let tensor_data = index
             .load_tensors_batch_zero_copy(&data_path, &tensor_names)
             .await?;
@@ -1081,13 +1079,13 @@ impl ServerlessLLM {
 /// Parse `ServerlessLLM` tensor index asynchronously.
 #[inline]
 pub async fn parse_index(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMIndex> {
-    ServerlessLLMIndex::load(path).await
+    ServerlessLLMIndex::load(path.as_ref()).await
 }
 
 /// Parse `ServerlessLLM` tensor index synchronously (mmap on Linux).
 #[inline]
 pub fn parse_index_sync(path: impl AsRef<Path>) -> ReaderResult<ServerlessLLMIndex> {
-    ServerlessLLMIndex::load_sync(path)
+    ServerlessLLMIndex::load_sync(path.as_ref())
 }
 
 /// Load a ServerlessLLM model with eager loading (async).

@@ -54,7 +54,7 @@ pub async fn convert_safetensors_to_serverlessllm(
             ))
         })?;
     let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZeroUsize::get)
         .unwrap_or(4);
     let min_chunks_for_size = file_size.div_ceil(MAX_CHUNK_SIZE);
     let chunks = num_cpus.max(min_chunks_for_size);

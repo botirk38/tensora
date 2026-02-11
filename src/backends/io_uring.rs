@@ -77,7 +77,7 @@ fn statx_file_size(stat: libc::statx) -> IoResult<usize> {
 fn allow_direct_fallback(err: &std::io::Error) -> bool {
     matches!(
         err.raw_os_error(),
-        Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
+        Some(libc::EINVAL | libc::EOPNOTSUPP)
     )
 }
 

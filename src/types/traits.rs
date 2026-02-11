@@ -8,6 +8,9 @@ use std::path::Path;
 // ============================================================================
 
 /// Trait for asynchronous tensor readers.
+///
+/// Note: The returned futures are not required to implement `Send` because some
+/// backends (like `tokio-uring`) use thread-local runtimes.
 #[allow(async_fn_in_trait)]
 pub trait AsyncReader {
     /// The output type produced by this reader.
@@ -18,7 +21,7 @@ pub trait AsyncReader {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or parsed.
-    async fn load(path: impl AsRef<Path>) -> ReaderResult<Self::Output>;
+    async fn load(path: &Path) -> ReaderResult<Self::Output>;
 }
 
 /// Trait for synchronous tensor readers.
@@ -31,7 +34,7 @@ pub trait SyncReader {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or parsed.
-    fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self::Output>;
+    fn load_sync(path: &Path) -> ReaderResult<Self::Output>;
 }
 
 /// Trait for types that provide tensor metadata.
@@ -57,6 +60,9 @@ pub trait TensorMetadata {
 // ============================================================================
 
 /// Trait for asynchronous tensor writers.
+///
+/// Note: The returned futures are not required to implement `Send` because some
+/// backends use thread-local runtimes.
 #[allow(async_fn_in_trait)]
 pub trait AsyncWriter {
     /// The input data type accepted by this writer.
@@ -72,7 +78,7 @@ pub trait AsyncWriter {
     /// # Errors
     ///
     /// Returns an error if the file cannot be written or if the data is invalid.
-    async fn write(path: impl AsRef<Path>, data: &Self::Input) -> WriterResult<()>;
+    async fn write(path: &Path, data: &Self::Input) -> WriterResult<()>;
 }
 
 /// Trait for synchronous tensor writers.
@@ -90,7 +96,7 @@ pub trait SyncWriter {
     /// # Errors
     ///
     /// Returns an error if the file cannot be written or if the data is invalid.
-    fn write_sync(path: impl AsRef<Path>, data: &Self::Input) -> WriterResult<()>;
+    fn write_sync(path: &Path, data: &Self::Input) -> WriterResult<()>;
 }
 
 #[cfg(test)]
