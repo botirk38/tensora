@@ -20,6 +20,14 @@ Fixed clippy warnings: saturating_mul, redundant closures, too_many_arguments (v
 
 All 73 Python tests pass, clippy clean on both core and bindings.
 
+Inlined helper modules into their appropriate places:
+- `validate_path_exists` into safetensors.rs and serverlessllm.rs
+- `load_safetensors_async` and `load_serverlessllm_async` into their respective modules
+- Merged `dtype_map.rs` into `torch.rs`
+- Deleted validation.rs, runtime_async.rs, and dtype_map.rs to reduce abstraction layers
+
+Fixed clippy: PathBuf → Path, removed unused imports.
+
 ## 2025-02-11
 
 Code review day that turned into comprehensive refactoring. Started with clippy warnings, ended up touching 15+ files.
