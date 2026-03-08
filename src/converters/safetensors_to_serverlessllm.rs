@@ -179,7 +179,7 @@ fn calculate_contiguous_stride(shape: &[usize]) -> Vec<usize> {
         let next_stride = stride.get(next_i).copied().unwrap_or(1);
         let next_shape = shape.get(next_i).copied().unwrap_or(1);
         if let Some(s) = stride.get_mut(i) {
-            *s = next_stride.checked_mul(next_shape).unwrap_or(usize::MAX);
+            *s = next_stride.saturating_mul(next_shape);
         }
     }
     stride

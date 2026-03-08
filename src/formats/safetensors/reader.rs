@@ -140,7 +140,7 @@ impl SafeTensorsOwned {
     #[inline]
     pub fn tensor(&self, name: &str) -> ReaderResult<SafeTensorView<'static>> {
         self.tensors.tensor(name)
-            .map(|t| SafeTensorView(t))
+            .map(SafeTensorView)
             .map_err(ReaderError::from)
     }
 
@@ -200,8 +200,6 @@ impl<'a> TensorView for SafeTensorView<'a> {
 }
 
 impl SafeTensorsMmap {
-    /// Creates an mmap-backed `SafeTensors` from a memory-mapped file.
-    ///
     /// # Errors
     ///
     /// Returns an error if the mapped data cannot be parsed as `SafeTensors` format.
@@ -229,7 +227,7 @@ impl SafeTensorsMmap {
     #[inline]
     pub fn tensor(&self, name: &str) -> ReaderResult<SafeTensorView<'static>> {
         self.tensors.tensor(name)
-            .map(|t| SafeTensorView(t))
+            .map(SafeTensorView)
             .map_err(ReaderError::from)
     }
 

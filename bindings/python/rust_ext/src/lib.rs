@@ -1,9 +1,8 @@
 //! tensor_store Python bindings (PyTorch-first, performance-oriented).
 
 mod api;
-mod bridge;
+mod convert;
 mod errors;
-mod torch;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;

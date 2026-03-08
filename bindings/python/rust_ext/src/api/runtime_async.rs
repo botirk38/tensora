@@ -4,53 +4,55 @@
 //! We run them in spawn_blocking so our outer future is Send and works with future_into_py.
 
 use std::path::PathBuf;
+use tensor_store::formats::{safetensors, serverlessllm};
+use tensor_store::ReaderError;
 
 /// Run SafeTensors async load in a blocking thread with platform-appropriate runtime.
 pub async fn load_safetensors_async(
     path: PathBuf,
-) -> Result<tensor_store::safetensors::SafeTensorsOwned, tensor_store::ReaderError> {
+) -> Result<safetensors::SafeTensorsOwned, ReaderError> {
     tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "linux")]
         {
-            tokio_uring::start(async move { tensor_store::safetensors::load(&path).await })
+            tokio_uring::start(async move { safetensors::load(&path).await })
         }
         #[cfg(not(target_os = "linux"))]
         {
             let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                tensor_store::ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
-            rt.block_on(tensor_store::safetensors::load(&path))
+            rt.block_on(safetensors::load(&path))
         }
     })
     .await
-    .map_err(|e| tensor_store::ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+    .map_err(|e| ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
 }
 
 /// Run ServerlessLLM async load in a blocking thread with platform-appropriate runtime.
 pub async fn load_serverlessllm_async(
     path: PathBuf,
-) -> Result<tensor_store::serverlessllm::ServerlessLLMOwned, tensor_store::ReaderError> {
+) -> Result<serverlessllm::ServerlessLLMOwned, ReaderError> {
     tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "linux")]
         {
-            tokio_uring::start(async move { tensor_store::serverlessllm::load(&path).await })
+            tokio_uring::start(async move { serverlessllm::load(&path).await })
         }
         #[cfg(not(target_os = "linux"))]
         {
             let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                tensor_store::ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
-            rt.block_on(tensor_store::serverlessllm::load(&path))
+            rt.block_on(serverlessllm::load(&path))
         }
     })
     .await
-    .map_err(|e| tensor_store::ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+    .map_err(|e| ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor_store::safetensors::{Dtype, SafeTensorsWriter, TensorView};
+    use safetensors::{Dtype, SafeTensorsWriter, TensorView};
 
     fn sample_safetensors_bytes() -> Vec<u8> {
         let data = vec![0u8; 24];

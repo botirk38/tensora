@@ -39,7 +39,13 @@ mod tests {
         assert_eq!(safetensors_dtype_to_torch_name("U8"), Some("uint8"));
         assert_eq!(safetensors_dtype_to_torch_name("unknown"), None);
         assert_eq!(safetensors_dtype_to_torch_name(""), None);
-        assert_eq!(safetensors_dtype_to_torch_name("torch.float32"), Some("float32"));
-        assert_eq!(safetensors_dtype_to_torch_name("torch.int64"), Some("int64"));
+        assert_eq!(
+            safetensors_dtype_to_torch_name("torch.float32"),
+            Some("float32")
+        );
+        assert_eq!(
+            safetensors_dtype_to_torch_name("torch.int64"),
+            Some("int64")
+        );
     }
 }

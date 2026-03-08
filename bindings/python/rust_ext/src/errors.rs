@@ -26,6 +26,11 @@ pub fn map_reader_error(e: ReaderError) -> PyErr {
     PyErr::new::<PyException, _>(msg)
 }
 
+/// Map a missing tensor to a Python ValueError.
+pub fn tensor_not_found(name: &str) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("tensor not found: {name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

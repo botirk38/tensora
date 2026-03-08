@@ -1,39 +1,37 @@
-//! PyTorch tensor conversion from raw tensor views.
+//! PyTorch tensor conversion.
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::bridge::RawTensorView;
 use super::dtype_map::safetensors_dtype_to_torch_name;
 
 /// Builds a torch.Tensor from raw tensor data.
 pub fn raw_to_torch_tensor(
     py: Python<'_>,
-    view: &RawTensorView,
+    shape: Vec<usize>,
+    dtype: String,
+    data: Vec<u8>,
     device: &str,
 ) -> PyResult<PyObject> {
     let torch = py.import("torch")?;
 
-    let dtype_name = safetensors_dtype_to_torch_name(&view.dtype).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(format!(
-            "unsupported dtype for torch: {}",
-            view.dtype
-        ))
+    let dtype_name = safetensors_dtype_to_torch_name(&dtype).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("unsupported dtype for torch: {}", dtype))
     })?;
 
     let torch_dtype = torch.getattr(dtype_name)?;
     let torch_uint8 = torch.getattr("uint8")?;
 
-    let shape: Vec<i64> = view.shape.clone();
-    let numel: i64 = shape.iter().product();
+    let shape_i64: Vec<i64> = shape.iter().map(|&x| x as i64).collect();
+    let numel: i64 = shape_i64.iter().product();
 
     let tensor = if numel == 0 {
-        let shape_py: PyObject = shape.into_pyobject(py)?.unbind();
+        let shape_py: PyObject = shape_i64.into_pyobject(py)?.unbind();
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("dtype", torch_dtype)?;
         torch.call_method("zeros", (shape_py,), Some(&kwargs))?
     } else {
-        let data_bytes = PyBytes::new(py, &view.data);
+        let data_bytes = PyBytes::new(py, &data);
         let buf = data_bytes.as_any();
 
         let kwargs = pyo3::types::PyDict::new(py);
@@ -59,7 +57,7 @@ pub fn raw_to_torch_tensor(
             tensor = tensor.call_method("view", (), Some(&view_kwargs))?;
         }
 
-        let shape_py: PyObject = shape.into_pyobject(py)?.unbind();
+        let shape_py: PyObject = shape_i64.into_pyobject(py)?.unbind();
         tensor.call_method1("reshape", (shape_py,))?
     };
 
@@ -72,5 +70,3 @@ pub fn raw_to_torch_tensor(
 
     Ok(result.into())
 }
-
-// Tests for raw_to_torch_tensor require Python/torch and are run via pytest (test_init.py).
