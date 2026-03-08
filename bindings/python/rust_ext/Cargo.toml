@@ -1,0 +1,21 @@
+[package]
+name = "tensor-store-py"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+
+[lib]
+name = "_tensor_store_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+tensor_store = { path = "../../.." }
+tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "fs", "macros"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = "0.5"
+
+[dev-dependencies]
+tempfile = "3.14"

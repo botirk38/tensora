@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Maturin / build
+*.egg-info/
+*.egg
+dist/
+build/
+
+# mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/

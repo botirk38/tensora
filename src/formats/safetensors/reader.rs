@@ -31,10 +31,10 @@
 //! ```
 
 use crate::backends;
-use crate::types::error::{ReaderError, ReaderResult};
-use crate::types::traits::{AsyncReader, SyncReader, TensorMetadata};
+use crate::formats::error::{ReaderError, ReaderResult};
+use crate::formats::traits::{AsyncReader, SyncReader, TensorMetadata, TensorView};
 pub use safetensors::SafeTensorError;
-pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as Tensor};
+pub use safetensors::tensor::{Dtype, SafeTensors};
 use std::ops::Deref;
 use std::path::Path;
 
@@ -138,8 +138,10 @@ impl SafeTensorsOwned {
 
     /// Returns a tensor view by name using `ReaderError` for convenience.
     #[inline]
-    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
-        self.tensors.tensor(name).map_err(ReaderError::from)
+    pub fn tensor(&self, name: &str) -> ReaderResult<SafeTensorView<'static>> {
+        self.tensors.tensor(name)
+            .map(|t| SafeTensorView(t))
+            .map_err(ReaderError::from)
     }
 
     /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
@@ -174,6 +176,29 @@ impl Deref for SafeTensorsOwned {
     }
 }
 
+/// Newtype wrapper around safetensors tensor view to implement TensorView trait.
+pub struct SafeTensorView<'a>(pub(super) safetensors::tensor::TensorView<'a>);
+
+impl<'a> TensorView for SafeTensorView<'a> {
+    #[inline]
+    fn shape(&self) -> &[usize] {
+        // safetensors already uses usize for shapes - return directly
+        self.0.shape()
+    }
+
+    #[inline]
+    fn dtype(&self) -> &str {
+        // Convert Dtype enum to string (e.g., Dtype::F32 -> "float32")
+        // Leak the String to return a static str - dtype strings are tiny
+        Box::leak(self.0.dtype().to_string().into_boxed_str())
+    }
+
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.0.data()
+    }
+}
+
 impl SafeTensorsMmap {
     /// Creates an mmap-backed `SafeTensors` from a memory-mapped file.
     ///
@@ -202,8 +227,10 @@ impl SafeTensorsMmap {
 
     /// Returns a tensor view by name using `ReaderError` for convenience.
     #[inline]
-    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
-        self.tensors.tensor(name).map_err(ReaderError::from)
+    pub fn tensor(&self, name: &str) -> ReaderResult<SafeTensorView<'static>> {
+        self.tensors.tensor(name)
+            .map(|t| SafeTensorView(t))
+            .map_err(ReaderError::from)
     }
 
     /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
@@ -415,13 +442,14 @@ pub fn load_mmap(path: impl AsRef<Path>) -> ReaderResult<SafeTensorsMmap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::traits::TensorView;
     use safetensors::serialize;
-    use safetensors::tensor::TensorView;
+    use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
 
     fn sample_bytes() -> Vec<u8> {
         let data = vec![1u8, 2, 3, 4];
-        let view = TensorView::new(Dtype::U8, vec![4], &data).expect("create tensor view");
+        let view = StTensorView::new(Dtype::U8, vec![4], &data).expect("create tensor view");
         serialize([("tensor", view)], None).expect("serialize")
     }
 
@@ -454,7 +482,7 @@ mod tests {
         assert!(owned.contains("tensor"));
         assert_eq!(owned.tensor_names(), vec!["tensor"]);
         assert!(!owned.is_empty());
-        assert_eq!(owned.tensor("tensor").unwrap().dtype(), Dtype::U8);
+        assert_eq!(owned.tensor("tensor").unwrap().dtype(), "U8");
     }
 
     #[test]
@@ -492,7 +520,7 @@ mod tests {
         let mmap = load_mmap(&path).expect("load mmap");
         assert_eq!(mmap.len(), 1);
         assert!(mmap.contains("tensor"));
-        assert_eq!(mmap.tensor("tensor").unwrap().dtype(), Dtype::U8);
+        assert_eq!(mmap.tensor("tensor").unwrap().dtype(), "U8");
     }
 
     // ---------------------------------------------------------------------------

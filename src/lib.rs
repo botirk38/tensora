@@ -3,26 +3,24 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub mod backends;
 pub mod converters;
-pub mod safetensors;
-pub mod serverlessllm;
-pub mod types;
+pub mod formats;
 
 // ============================================================================
 // Convenience re-exports for common types and functions
 // ============================================================================
 
 // Error types
-pub use types::error::{ReaderError, ReaderResult};
-pub use types::error::{WriterError, WriterResult};
+pub use formats::error::{ReaderError, ReaderResult};
+pub use formats::error::{WriterError, WriterResult};
 
 // Traits
-pub use types::traits::{AsyncReader, AsyncWriter, SyncReader, SyncWriter, TensorMetadata};
+pub use formats::traits::{AsyncReader, AsyncWriter, SyncReader, SyncWriter, TensorMetadata, TensorView};
 
 // SafeTensors types
-pub use safetensors::{SafeTensorsMmap, SafeTensorsOwned, SafeTensorsWriter};
+pub use formats::safetensors::{SafeTensorsMmap, SafeTensorsOwned, SafeTensorsWriter};
 
 // ServerlessLLM types
-pub use serverlessllm::{
+pub use formats::serverlessllm::{
     ServerlessLLMIndex, ServerlessLLMMmap, ServerlessLLMOwned, ServerlessLlmWriter, Tensor,
     TensorEntry, TensorMmap,
 };

@@ -7,7 +7,7 @@ pub mod writer;
 
 // Re-export reader types
 pub use reader::{
-    Dtype, SafeTensorError, SafeTensorsMmap, SafeTensorsOwned, Tensor, load, load_mmap,
+    Dtype, SafeTensorError, SafeTensorsMmap, SafeTensorsOwned, SafeTensorView, load, load_mmap,
     load_parallel, load_parallel_sync, load_range_sync, load_sync,
 };
 

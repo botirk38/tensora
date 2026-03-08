@@ -1,0 +1,27 @@
+[project]
+name = "tensor-store-py"
+version = "0.1.0"
+description = "Python bindings for tensor_store (PyTorch-first)"
+requires-python = ">=3.9"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "tensor_store contributors" }]
+dependencies = ["torch>=2.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "pytest-benchmark>=4.0", "safetensors>=0.4", "numpy>=1.21"]
+
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "rust_ext/Cargo.toml"
+python-source = "."
+module-name = "tensor_store_py._tensor_store_rust"
+bindings = "pyo3"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

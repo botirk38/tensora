@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tensor_store::serverlessllm;
-use tensor_store::types::traits::TensorMetadata;
+use tensor_store::formats::serverlessllm;
+use tensor_store::formats::traits::TensorMetadata;
 
 use crate::config::{DemoConfig, DemoError, DemoResult, format_bytes};
 

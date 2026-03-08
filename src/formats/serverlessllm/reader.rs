@@ -64,9 +64,9 @@
 //! ```
 //!
 use crate::backends;
-use crate::serverlessllm::types::TensorEntry;
-use crate::types::error::{ReaderError, ReaderResult};
-use crate::types::traits::{AsyncReader, SyncReader, TensorMetadata};
+use super::types::TensorEntry;
+use crate::formats::error::{ReaderError, ReaderResult};
+use crate::formats::traits::{AsyncReader, SyncReader, TensorMetadata, TensorView};
 use futures::future;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -813,14 +813,14 @@ impl TensorMmap {
     /// Returns the tensor's shape.
     #[inline]
     #[must_use]
-    pub fn shape(&self) -> &[i64] {
+    pub fn shape(&self) -> &[usize] {
         &self.entry.shape
     }
 
     /// Returns the tensor's stride.
     #[inline]
     #[must_use]
-    pub fn stride(&self) -> &[i64] {
+    pub fn stride(&self) -> &[usize] {
         &self.entry.stride
     }
 
@@ -905,14 +905,14 @@ impl Tensor {
     /// Returns the tensor's shape.
     #[inline]
     #[must_use]
-    pub fn shape(&self) -> &[i64] {
+    pub fn shape(&self) -> &[usize] {
         &self.entry.shape
     }
 
     /// Returns the tensor's stride.
     #[inline]
     #[must_use]
-    pub fn stride(&self) -> &[i64] {
+    pub fn stride(&self) -> &[usize] {
         &self.entry.stride
     }
 
@@ -965,6 +965,40 @@ impl Tensor {
         let start = self.offset;
         let end = start + self.len;
         self.data[start..end].to_vec()
+    }
+}
+
+impl TensorView for Tensor {
+    #[inline]
+    fn shape(&self) -> &[usize] {
+        &self.entry.shape
+    }
+
+    #[inline]
+    fn dtype(&self) -> &str {
+        &self.entry.dtype
+    }
+
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.data()
+    }
+}
+
+impl TensorView for TensorMmap {
+    #[inline]
+    fn shape(&self) -> &[usize] {
+        &self.entry.shape
+    }
+
+    #[inline]
+    fn dtype(&self) -> &str {
+        &self.entry.dtype
+    }
+
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.data()
     }
 }
 
@@ -1541,16 +1575,16 @@ pub fn parse_index_impl(data: &[u8]) -> ReaderResult<ServerlessLLMIndex> {
             5 => {
                 let offset = to_u64(arr.first().expect("array has 5 elements"), &name)?;
                 let size = to_u64(arr.get(1).expect("array has 5 elements"), &name)?;
-                let shape = to_i64_vec(arr.get(2).expect("array has 5 elements"), &name)?;
-                let stride = to_i64_vec(arr.get(3).expect("array has 5 elements"), &name)?;
+                let shape = to_usize_vec(arr.get(2).expect("array has 5 elements"), &name)?;
+                let stride = to_usize_vec(arr.get(3).expect("array has 5 elements"), &name)?;
                 let dtype = to_string(arr.get(4).expect("array has 5 elements"), &name)?;
                 (offset, size, shape, stride, dtype, 0usize)
             }
             6 => {
                 let offset = to_u64(arr.first().expect("array has 6 elements"), &name)?;
                 let size = to_u64(arr.get(1).expect("array has 6 elements"), &name)?;
-                let shape = to_i64_vec(arr.get(2).expect("array has 6 elements"), &name)?;
-                let stride = to_i64_vec(arr.get(3).expect("array has 6 elements"), &name)?;
+                let shape = to_usize_vec(arr.get(2).expect("array has 6 elements"), &name)?;
+                let stride = to_usize_vec(arr.get(3).expect("array has 6 elements"), &name)?;
                 let dtype = to_string(arr.get(4).expect("array has 6 elements"), &name)?;
                 let partition_id = to_usize(arr.get(5).expect("array has 6 elements"), &name)?;
                 (offset, size, shape, stride, dtype, partition_id)
@@ -1613,7 +1647,7 @@ fn to_string(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Strin
         })
 }
 
-fn to_i64_vec(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Vec<i64>> {
+fn to_usize_vec(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Vec<usize>> {
     let arr = value.as_array().ok_or_else(|| {
         ReaderError::ServerlessLlm(format!(
             "expected array in tensor '{tensor_name}', got {value:?}"
@@ -1621,11 +1655,11 @@ fn to_i64_vec(value: &serde_json::Value, tensor_name: &str) -> ReaderResult<Vec<
     })?;
     let mut out = Vec::with_capacity(arr.len());
     for v in arr {
-        out.push(v.as_i64().ok_or_else(|| {
+        out.push(v.as_u64().ok_or_else(|| {
             ReaderError::ServerlessLlm(format!(
                 "expected integer in tensor '{tensor_name}', got {v:?}"
             ))
-        })?);
+        })? as usize);
     }
     Ok(out)
 }
@@ -1654,8 +1688,8 @@ mod tests {
         TensorEntry {
             offset,
             size,
-            shape,
-            stride,
+            shape: shape.into_iter().map(|s| s as usize).collect(),
+            stride: stride.into_iter().map(|s| s as usize).collect(),
             dtype: dtype.to_owned(),
             partition_id,
         }
@@ -1864,7 +1898,7 @@ mod tests {
                 let entry = TensorEntry {
                     offset,
                     size,
-                    shape: vec![size as i64],
+                    shape: vec![size as usize],
                     stride: vec![1],
                     dtype: "f32".to_owned(),
                     partition_id: 0,

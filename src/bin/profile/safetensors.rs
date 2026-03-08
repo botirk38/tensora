@@ -3,7 +3,7 @@ use std::hint::black_box;
 use std::path::PathBuf;
 
 use ::safetensors::SafeTensors;
-use tensor_store::safetensors;
+use tensor_store::formats::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 

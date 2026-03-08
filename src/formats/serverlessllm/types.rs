@@ -17,10 +17,10 @@ pub struct TensorEntry {
     pub size: u64,
 
     /// Shape of the tensor (dimensions)
-    pub shape: Vec<i64>,
+    pub shape: Vec<usize>,
 
     /// Stride information for the tensor
-    pub stride: Vec<i64>,
+    pub stride: Vec<usize>,
 
     /// Data type of the tensor (e.g., "float32", "int64")
     pub dtype: String,

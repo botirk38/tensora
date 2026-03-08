@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tensor_store::safetensors;
+use tensor_store::formats::safetensors;
 
 use crate::config::{DemoConfig, DemoError, DemoResult, format_bytes};
 

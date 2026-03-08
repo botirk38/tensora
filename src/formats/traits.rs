@@ -1,6 +1,6 @@
 //! Traits for tensor readers and writers.
 
-use crate::types::error::{ReaderResult, WriterResult};
+use crate::formats::error::{ReaderResult, WriterResult};
 use std::path::Path;
 
 // ============================================================================
@@ -97,6 +97,23 @@ pub trait SyncWriter {
     ///
     /// Returns an error if the file cannot be written or if the data is invalid.
     fn write_sync(path: &Path, data: &Self::Input) -> WriterResult<()>;
+}
+
+// ============================================================================
+// Tensor View Trait
+// ============================================================================
+
+/// Uniform read-only view of a single tensor's data.
+///
+/// Both format families implement this so callers can work with tensors
+/// without knowing which format produced them.
+pub trait TensorView {
+    /// Shape in elements.
+    fn shape(&self) -> &[usize];
+    /// Dtype as a canonical string (e.g. `"float32"`, `"int64"`).
+    fn dtype(&self) -> &str;
+    /// Raw bytes of the tensor data.
+    fn data(&self) -> &[u8];
 }
 
 #[cfg(test)]

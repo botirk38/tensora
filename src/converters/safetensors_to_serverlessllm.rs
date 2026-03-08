@@ -23,10 +23,10 @@
 //! ).await?;
 //! ```
 
-use crate::safetensors::Dtype;
-use crate::serverlessllm::ServerlessLlmWriter;
-use crate::serverlessllm::TensorEntry;
-use crate::types::error::{WriterError, WriterResult};
+use crate::formats::safetensors::Dtype;
+use crate::formats::serverlessllm::ServerlessLlmWriter;
+use crate::formats::serverlessllm::TensorEntry;
+use crate::formats::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -60,7 +60,7 @@ pub async fn convert_safetensors_to_serverlessllm(
     let chunks = num_cpus.max(min_chunks_for_size);
 
     // Use parallel loading for better I/O performance
-    let owned = crate::safetensors::load_parallel(input_path, chunks)
+    let owned = crate::formats::safetensors::load_parallel(input_path, chunks)
         .await
         .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
     let tensors = owned.tensors();
@@ -70,11 +70,7 @@ pub async fn convert_safetensors_to_serverlessllm(
     for name in names {
         let view = tensors.tensor(name).map_err(WriterError::SafeTensors)?;
         let data = view.data().to_vec();
-        let shape: Vec<i64> = view
-            .shape()
-            .iter()
-            .map(|&d| i64::try_from(d).unwrap_or(i64::MAX))
-            .collect();
+        let shape: Vec<usize> = view.shape().to_vec();
         let stride = calculate_contiguous_stride(&shape);
         let dtype = dtype_to_serverlessllm(view.dtype())?.to_owned();
         blobs.push(TensorBlob {
@@ -172,18 +168,18 @@ fn dtype_to_serverlessllm(dtype: Dtype) -> WriterResult<&'static str> {
     Ok(mapped)
 }
 
-fn calculate_contiguous_stride(shape: &[i64]) -> Vec<i64> {
+fn calculate_contiguous_stride(shape: &[usize]) -> Vec<usize> {
     if shape.is_empty() {
         return Vec::new();
     }
 
-    let mut stride = vec![1i64; shape.len()];
+    let mut stride = vec![1usize; shape.len()];
     for i in (0..shape.len().saturating_sub(1)).rev() {
         let next_i = i + 1;
         let next_stride = stride.get(next_i).copied().unwrap_or(1);
         let next_shape = shape.get(next_i).copied().unwrap_or(1);
         if let Some(s) = stride.get_mut(i) {
-            *s = next_stride.checked_mul(next_shape).unwrap_or(i64::MAX);
+            *s = next_stride.checked_mul(next_shape).unwrap_or(usize::MAX);
         }
     }
     stride
@@ -193,8 +189,8 @@ fn calculate_contiguous_stride(shape: &[i64]) -> Vec<i64> {
 struct TensorBlob {
     name: String,
     data: Vec<u8>,
-    shape: Vec<i64>,
-    stride: Vec<i64>,
+    shape: Vec<usize>,
+    stride: Vec<usize>,
     dtype: String,
 }
 
@@ -205,9 +201,9 @@ struct TensorBlob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::safetensors::{Dtype, TensorView};
-    use crate::serverlessllm::parse_index_sync;
-    use crate::types::traits::TensorMetadata;
+    use crate::formats::safetensors::{Dtype, TensorView};
+    use crate::formats::serverlessllm::parse_index_sync;
+    use crate::formats::traits::TensorMetadata;
     use safetensors::serialize;
     use std::fs;
     use tempfile::TempDir;
@@ -259,7 +255,7 @@ mod tests {
     #[test]
     fn test_calculate_contiguous_stride_empty() {
         let stride = calculate_contiguous_stride(&[]);
-        assert_eq!(stride, Vec::<i64>::new());
+        assert_eq!(stride, Vec::<usize>::new());
     }
 
     #[test]

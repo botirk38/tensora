@@ -33,12 +33,12 @@
 //! ```
 
 use crate::backends;
-use crate::types::error::{WriterError, WriterResult};
+use crate::formats::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
 
 // Re-export shared TensorEntry type for backwards compatibility
-pub use crate::serverlessllm::types::TensorEntry;
+pub use super::types::TensorEntry;
 
 /// High-level writer for the `ServerlessLLM` checkpoint format.
 #[derive(Debug, Default, Clone, Copy)]

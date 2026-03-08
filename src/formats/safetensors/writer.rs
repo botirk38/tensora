@@ -26,7 +26,7 @@
 //! ```
 
 use crate::backends;
-use crate::types::error::WriterResult;
+use crate::formats::error::WriterResult;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;

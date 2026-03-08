@@ -32,7 +32,7 @@
 
 use std::hint::black_box;
 use std::time::Instant;
-use tensor_store::serverlessllm;
+use tensor_store::formats::serverlessllm;
 
 #[derive(Debug)]
 enum ProfileMode {
