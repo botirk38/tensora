@@ -84,7 +84,7 @@ pub fn raw_to_tensorflow_tensor(
                         .split(':')
                         .next()
                         .unwrap_or("GPU"),
-                    device.split(':').last().unwrap_or("0")
+                    device.split(':').next_back().unwrap_or("0")
                 )
             } else {
                 format!("/{}:0", device.replace("cuda", "GPU").replace("gpu", "GPU"))
@@ -113,7 +113,7 @@ pub fn tf_tensor_to_raw(
     _py: Python<'_>,
     tensor: &Bound<'_, PyAny>,
 ) -> PyResult<(Vec<usize>, String, Vec<u8>)> {
-    Python::with_gil(|py| {
+    Python::with_gil(|_py| {
         let numpy_method = tensor.getattr("numpy")?;
         let numpy_arr = numpy_method.call0()?;
 

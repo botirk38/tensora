@@ -1,13 +1,12 @@
-"""ServerlessLLM benchmarks: load_file and open+get_tensor per backend (sync, mmap, async).
+"""ServerlessLLM benchmarks: load_file and open+get_tensor per backend (default, sync, mmap).
 Also benchmarks parallel loading with multiple partitions.
 """
-
-import asyncio
 
 import pytest
 
 from benchmarks.fixtures import drop_page_cache, touch_tensor
 from tensor_store_py._tensor_store_rust import (
+    load_serverlessllm,
     load_serverlessllm_sync,
     open_serverlessllm,
     open_serverlessllm_mmap,
@@ -33,6 +32,31 @@ def test_load_sync_cold(benchmark, serverlessllm_dir):
     def run():
         drop_page_cache(serverlessllm_dir)
         result = load_serverlessllm_sync(serverlessllm_dir)
+        sum(touch_tensor(t) for t in result.values())
+        return result
+
+    result = benchmark(run)
+    assert len(result) > 0
+
+
+def test_load_default_warm(benchmark, serverlessllm_dir):
+    """Benchmark load_serverlessllm (default backend, warm cache)."""
+
+    def run():
+        result = load_serverlessllm(serverlessllm_dir)
+        sum(touch_tensor(t) for t in result.values())
+        return result
+
+    result = benchmark(run)
+    assert len(result) > 0
+
+
+def test_load_default_cold(benchmark, serverlessllm_dir):
+    """Benchmark load_serverlessllm (default backend, cold cache)."""
+
+    def run():
+        drop_page_cache(serverlessllm_dir)
+        result = load_serverlessllm(serverlessllm_dir)
         sum(touch_tensor(t) for t in result.values())
         return result
 
@@ -86,33 +110,27 @@ def test_open_get_tensor_mmap_cold(benchmark, serverlessllm_dir):
     benchmark(run)
 
 
-def test_open_get_tensor_async_warm(benchmark, serverlessllm_dir):
-    """Benchmark open_serverlessllm (async) + get_tensor (warm, touch all pages)."""
+def test_open_get_tensor_default_warm(benchmark, serverlessllm_dir):
+    """Benchmark open_serverlessllm (default) + get_tensor (warm, touch all pages)."""
 
-    async def run():
-        handle = await open_serverlessllm(serverlessllm_dir)
+    def run():
+        handle = open_serverlessllm(serverlessllm_dir)
         for k in handle.keys():
             touch_tensor(handle.get_tensor(k))
 
-    def run_sync():
-        asyncio.run(run())
-
-    benchmark(run_sync)
+    benchmark(run)
 
 
-def test_open_get_tensor_async_cold(benchmark, serverlessllm_dir):
-    """Benchmark open_serverlessllm (async) + get_tensor (cold cache)."""
+def test_open_get_tensor_default_cold(benchmark, serverlessllm_dir):
+    """Benchmark open_serverlessllm (default) + get_tensor (cold cache)."""
 
-    async def run():
-        handle = await open_serverlessllm(serverlessllm_dir)
-        for k in handle.keys():
-            touch_tensor(handle.get_tensor(k))
-
-    def run_sync():
+    def run():
         drop_page_cache(serverlessllm_dir)
-        asyncio.run(run())
+        handle = open_serverlessllm(serverlessllm_dir)
+        for k in handle.keys():
+            touch_tensor(handle.get_tensor(k))
 
-    benchmark(run_sync)
+    benchmark(run)
 
 
 # =============================================================================

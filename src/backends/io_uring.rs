@@ -21,6 +21,25 @@ use tokio_uring::fs::File as UringFile;
 /// Files larger than this automatically use parallel chunked reading.
 const MAX_SINGLE_READ: usize = 512 * 1024 * 1024; // 512MB
 
+/// Target queue depth for parallel io_uring operations.
+/// This saturates NVMe devices without overwhelming the kernel.
+const DEFAULT_QUEUE_DEPTH: usize = 64;
+
+/// Minimum chunk size in bytes (16MB).
+/// Prevents oversplitting small files into tiny requests.
+const MIN_CHUNK_SIZE: usize = 16 * 1024 * 1024;
+
+/// Maximum chunk size in bytes (64MB).
+/// Prevents undersplitting large files.
+const MAX_CHUNK_SIZE: usize = 64 * 1024 * 1024;
+
+#[inline]
+fn calculate_chunks(file_size: usize) -> usize {
+    let min_chunks = file_size.div_ceil(MAX_CHUNK_SIZE);
+    let max_chunks = file_size.div_ceil(MIN_CHUNK_SIZE);
+    min_chunks.max(1).clamp(1, max_chunks.min(DEFAULT_QUEUE_DEPTH))
+}
+
 /// Async backend powered by io_uring.
 #[derive(Clone, Copy, Debug)]
 pub struct IoUringBackend;
@@ -196,9 +215,7 @@ pub async fn load(path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
     }
 
     if file_size > MAX_SINGLE_READ {
-        let num_cpus = num_cpus::get();
-        let min_chunks_for_size = file_size.div_ceil(MAX_SINGLE_READ);
-        let chunks = std::cmp::max(num_cpus, min_chunks_for_size);
+        let chunks = calculate_chunks(file_size);
         return load_parallel(path_buf, chunks).await;
     }
 

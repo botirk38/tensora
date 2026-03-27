@@ -1,27 +1,10 @@
-"""Test fixtures: create_gpt2 and ServerlessLLM writer (pure Python, no external binaries)."""
+"""Test fixtures: create_gpt2 and format writers."""
 
-import json
 from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
-
-# dtype string used by tensor_store ServerlessLLM format
-_DTYPE_MAP = {
-    torch.float32: "torch.float32",
-    torch.float16: "torch.float16",
-    torch.bfloat16: "torch.bfloat16",
-    torch.float64: "torch.float64",
-    torch.int32: "torch.int32",
-    torch.int64: "torch.int64",
-    torch.int16: "torch.int16",
-    torch.int8: "torch.int8",
-    torch.uint8: "torch.uint8",
-    torch.uint16: "torch.uint16",
-    torch.uint32: "torch.uint32",
-    torch.uint64: "torch.uint64",
-    torch.bool: "torch.bool",
-}
+from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
 
 
 def create_gpt2(n_layers: int = 2) -> dict[str, torch.Tensor]:
@@ -55,66 +38,20 @@ def create_gpt2(n_layers: int = 2) -> dict[str, torch.Tensor]:
     return tensors
 
 
-def _contiguous_stride(shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Row-major contiguous stride."""
-    stride = []
-    s = 1
-    for dim in reversed(shape):
-        stride.append(s)
-        s *= dim
-    return tuple(reversed(stride))
-
-
 def write_serverlessllm_dir(
     tensors: dict[str, torch.Tensor], out_dir: Path, num_partitions: int = 1
 ) -> Path:
-    """Write tensors to ServerlessLLM format (tensor_index.json + tensor.data_N).
-
-    Args:
-        tensors: Dictionary of tensor name -> tensor
-        out_dir: Output directory
-        num_partitions: Number of partitions to split tensors across
-    """
+    """Write tensors to ServerlessLLM format via Rust bindings."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    index = {}
-    tensor_items = list(tensors.items())
-    tensors_per_partition = (len(tensor_items) + num_partitions - 1) // num_partitions
-
-    # Write each partition
-    for partition_id in range(num_partitions):
-        partition_data = bytearray()
-        partition_offset = 0
-
-        start_idx = partition_id * tensors_per_partition
-        end_idx = min(start_idx + tensors_per_partition, len(tensor_items))
-
-        for name, t in tensor_items[start_idx:end_idx]:
-            t = t.contiguous()
-            shape = list(t.shape)
-            stride = list(_contiguous_stride(t.shape))
-            dtype_str = _DTYPE_MAP.get(t.dtype)
-            if dtype_str is None:
-                raise ValueError(f"unsupported dtype: {t.dtype}")
-            data = t.numpy().tobytes()
-            size = len(data)
-
-            index[name] = [
-                partition_offset,
-                size,
-                shape,
-                stride,
-                dtype_str,
-                partition_id,
-            ]
-            partition_data.extend(data)
-            partition_offset += size
-
-        if partition_data:
-            (out_dir / f"tensor.data_{partition_id}").write_bytes(partition_data)
-
-    (out_dir / "tensor_index.json").write_text(json.dumps(index))
+    safetensors_path = out_dir / "_source.safetensors"
+    save_file(tensors, safetensors_path)
+    convert_safetensors_to_serverlessllm(
+        str(safetensors_path),
+        str(out_dir),
+        num_partitions,
+    )
+    safetensors_path.unlink()
     return out_dir
 
 

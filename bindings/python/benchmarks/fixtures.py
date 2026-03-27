@@ -1,27 +1,11 @@
-"""Benchmark-specific fixtures: create GPT-2-like tensors and write SafeTensors/ServerlessLLM."""
+"""Benchmark-specific fixtures: create GPT-2-like tensors and write model formats."""
 
-import json
 import os
 from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
-
-_DTYPE_MAP = {
-    torch.float32: "torch.float32",
-    torch.float16: "torch.float16",
-    torch.bfloat16: "torch.bfloat16",
-    torch.float64: "torch.float64",
-    torch.int32: "torch.int32",
-    torch.int64: "torch.int64",
-    torch.int16: "torch.int16",
-    torch.int8: "torch.int8",
-    torch.uint8: "torch.uint8",
-    torch.uint16: "torch.uint16",
-    torch.uint32: "torch.uint32",
-    torch.uint64: "torch.uint64",
-    torch.bool: "torch.bool",
-}
+from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
 
 
 def create_gpt2(n_layers: int = 2) -> dict[str, torch.Tensor]:
@@ -55,65 +39,20 @@ def create_gpt2(n_layers: int = 2) -> dict[str, torch.Tensor]:
     return tensors
 
 
-def _contiguous_stride(shape: tuple[int, ...]) -> tuple[int, ...]:
-    stride = []
-    s = 1
-    for dim in reversed(shape):
-        stride.append(s)
-        s *= dim
-    return tuple(reversed(stride))
-
-
 def write_serverlessllm_dir(
     tensors: dict[str, torch.Tensor], out_dir: Path, num_partitions: int = 1
 ) -> Path:
-    """Write tensors to ServerlessLLM format (tensor_index.json + tensor.data_N).
-
-    Args:
-        tensors: Dictionary of tensor name -> tensor
-        out_dir: Output directory
-        num_partitions: Number of partitions to split tensors across
-    """
+    """Write tensors to ServerlessLLM format via Rust bindings."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    index = {}
-    tensor_items = list(tensors.items())
-    tensors_per_partition = (len(tensor_items) + num_partitions - 1) // num_partitions
-
-    # Write each partition
-    for partition_id in range(num_partitions):
-        partition_data = bytearray()
-        partition_offset = 0
-
-        start_idx = partition_id * tensors_per_partition
-        end_idx = min(start_idx + tensors_per_partition, len(tensor_items))
-
-        for name, t in tensor_items[start_idx:end_idx]:
-            t = t.contiguous()
-            shape = list(t.shape)
-            stride = list(_contiguous_stride(t.shape))
-            dtype_str = _DTYPE_MAP.get(t.dtype)
-            if dtype_str is None:
-                raise ValueError(f"unsupported dtype: {t.dtype}")
-            data = t.numpy().tobytes()
-            size = len(data)
-
-            index[name] = [
-                partition_offset,
-                size,
-                shape,
-                stride,
-                dtype_str,
-                partition_id,
-            ]
-            partition_data.extend(data)
-            partition_offset += size
-
-        if partition_data:
-            (out_dir / f"tensor.data_{partition_id}").write_bytes(partition_data)
-
-    (out_dir / "tensor_index.json").write_text(json.dumps(index))
+    safetensors_path = out_dir / "_source.safetensors"
+    save_file(tensors, safetensors_path)
+    convert_safetensors_to_serverlessllm(
+        str(safetensors_path),
+        str(out_dir),
+        num_partitions,
+    )
+    safetensors_path.unlink()
     return out_dir
 
 
@@ -144,3 +83,63 @@ def drop_page_cache(path: str | Path) -> None:
                     os.posix_fadvise(fp.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
     except OSError:
         pass
+
+
+def repo_dir_name(repo_id: str) -> str:
+    """Convert a HuggingFace repo ID into a filesystem-friendly directory name."""
+    return repo_id.replace("/", "-").lower()
+
+
+def download_model_if_missing(model_name: str, fixtures_dir: Path) -> str:
+    """Download model from HuggingFace if not already cached.
+
+    Args:
+        model_name: HuggingFace model ID (e.g., 'gpt2', 'Qwen/Qwen2-0.5B')
+        fixtures_dir: Directory to store downloaded models
+
+    Returns:
+        Path to the downloaded SafeTensors file
+    """
+    from huggingface_hub import snapshot_download
+
+    fixtures_dir = Path(fixtures_dir)
+    model_dir = fixtures_dir / repo_dir_name(model_name)
+    safetensors_path = model_dir / "model.safetensors"
+
+    if safetensors_path.exists():
+        return str(safetensors_path)
+
+    print(f"Downloading {model_name} to {model_dir}...")
+
+    download_dir = snapshot_download(
+        repo_id=model_name,
+        local_dir=str(model_dir),
+        allow_patterns=["*.safetensors"],
+        ignore_patterns=[
+            "*.bin",
+            "*.msgpack",
+            "*.h5",
+            "*.pb",
+            "*.onnx",
+            "*.tflite",
+        ],
+    )
+
+    safetensors_files = list(Path(download_dir).glob("*.safetensors"))
+    if not safetensors_files:
+        raise FileNotFoundError(f"No .safetensors files found in {download_dir}")
+
+    if len(safetensors_files) > 1:
+        main_file = max(safetensors_files, key=lambda f: f.stat().st_size)
+    else:
+        main_file = safetensors_files[0]
+
+    if main_file.name != "model.safetensors":
+        import shutil
+
+        shutil.copy2(main_file, safetensors_path)
+    else:
+        safetensors_path = main_file
+
+    print(f"Downloaded {model_name} to {safetensors_path}")
+    return str(safetensors_path)

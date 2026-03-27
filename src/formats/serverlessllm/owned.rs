@@ -84,7 +84,8 @@ impl Model {
             .map(|&id| (id, PathBuf::from(format!("{}_{}", base_path_str, id))))
             .collect();
 
-        let chunks_per_partition = num_cpus::get().max(1);
+        const GLOBAL_QUEUE_BUDGET: usize = 64;
+        let chunks_per_partition = GLOBAL_QUEUE_BUDGET.div_ceil(partition_paths.len());
         let partition_data: Vec<(usize, Vec<u8>)> = future::try_join_all(
             partition_paths
                 .iter()
@@ -140,7 +141,8 @@ impl Model {
             .map(|&id| (id, format!("{}_{}", base_path_str, id)))
             .collect();
 
-        let chunks_per_partition = num_cpus::get().max(1);
+        const GLOBAL_QUEUE_BUDGET: usize = 64;
+        let chunks_per_partition = GLOBAL_QUEUE_BUDGET.div_ceil(partition_paths.len());
         let partition_data: Vec<(usize, Vec<u8>)> = partition_paths
             .par_iter()
             .map(|(partition_id, path)| {

@@ -29,11 +29,11 @@ def get_keys_mmap(path, fmt):
     return set(d.keys())
 
 
-async def get_keys_async(path, fmt):
+def get_keys_default(path, fmt):
     if fmt == "safetensors":
-        d = await load_safetensors(path)
+        d = load_safetensors(path)
     else:
-        d = await load_serverlessllm(path)
+        d = load_serverlessllm(path)
     return set(d.keys())
 
 
@@ -53,11 +53,11 @@ def get_shapes_mmap(path, fmt):
     return {k: tuple(d[k].shape) for k in sorted(d.keys())}
 
 
-async def get_shapes_async(path, fmt):
+def get_shapes_default(path, fmt):
     if fmt == "safetensors":
-        d = await load_safetensors(path)
+        d = load_safetensors(path)
     else:
-        d = await load_serverlessllm(path)
+        d = load_serverlessllm(path)
     return {k: tuple(d[k].shape) for k in sorted(d.keys())}
 
 

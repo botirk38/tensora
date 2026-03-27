@@ -32,10 +32,13 @@ def _partition_count(total_bytes: int) -> int:
 
 def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
     from tensor_store_py._tensor_store_rust import (
+        load_safetensors,
         load_safetensors_mmap,
         load_safetensors_sync,
     )
 
+    if backend == "default":
+        return load_safetensors(path)
     if backend == "sync":
         return load_safetensors_sync(path)
     if backend == "mmap":
@@ -45,10 +48,13 @@ def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
 
 def _load_serverlessllm(path: str, backend: str) -> dict[str, torch.Tensor]:
     from tensor_store_py._tensor_store_rust import (
+        load_serverlessllm,
         load_serverlessllm_mmap,
         load_serverlessllm_sync,
     )
 
+    if backend == "default":
+        return load_serverlessllm(path)
     if backend == "sync":
         return load_serverlessllm_sync(path)
     if backend == "mmap":
@@ -105,7 +111,7 @@ def register_tensor_store_loader() -> None:
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
                 raise ValueError(f"unsupported tensor_store format: {fmt}")
-            if backend not in {"sync", "mmap"}:
+            if backend not in {"default", "sync", "mmap"}:
                 raise ValueError(f"unsupported tensor_store backend: {backend}")
 
             original_load_format = self.load_config.load_format

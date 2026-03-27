@@ -22,7 +22,7 @@ except ImportError:
 def load_file(
     path: Union[str, "os.PathLike"], device: str = "/CPU:0"
 ) -> Dict[str, tf.Tensor]:
-    """Load a safetensors file into a dict of TensorFlow tensors.
+    """Load a safetensors file into a dict of TensorFlow tensors using default backend.
 
     Args:
         path: Path to the safetensors file.
@@ -31,7 +31,7 @@ def load_file(
     Returns:
         Dict mapping tensor names to tf.Tensor values.
     """
-    return load_safetensors_sync(path, framework="tensorflow", device=device)
+    return load_safetensors(path, framework="tensorflow", device=device)
 
 
 def load_file_mmap(
@@ -47,21 +47,6 @@ def load_file_mmap(
         Dict mapping tensor names to tf.Tensor values.
     """
     return load_safetensors_mmap(path, framework="tensorflow", device=device)
-
-
-async def load_file_async(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Async load a safetensors file into a dict of TensorFlow tensors.
-
-    Args:
-        path: Path to the safetensors file.
-        device: Device to load tensors to (e.g., "/CPU:0", "/GPU:0").
-
-    Returns:
-        Dict mapping tensor names to tf.Tensor values.
-    """
-    return await load_safetensors(path, framework="tensorflow", device=device)
 
 
 def open_file(path: Union[str, "os.PathLike"]) -> SafeTensorsHandlePy:
@@ -113,7 +98,6 @@ def save_file_bytes(
 __all__ = [
     "load_file",
     "load_file_mmap",
-    "load_file_async",
     "open_file",
     "save_file",
     "save_file_bytes",

@@ -6,14 +6,15 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tensor_store::formats::safetensors::{self, Dtype, MmapModel, Model};
 use tensor_store::formats::safetensors::TensorView as SafetensorTensorView;
+use tensor_store::formats::safetensors::{self, Dtype, MmapModel, Model};
 use tensor_store::serialize;
-use tensor_store::ReaderError;
 use tensor_store::TensorView;
 
 use crate::convert::{convert_tensor, extract_tensor_raw, TensorData};
 use crate::errors::map_reader_error;
+
+type TensorTuple = (String, Vec<usize>, Dtype, Vec<u8>);
 
 fn validate_path_exists(path: &Path) -> PyResult<()> {
     if !path.exists() {
@@ -23,26 +24,6 @@ fn validate_path_exists(path: &Path) -> PyResult<()> {
         )));
     }
     Ok(())
-}
-
-async fn load_safetensors_async(
-    path: PathBuf,
-) -> Result<Model, ReaderError> {
-    tokio::task::spawn_blocking(move || {
-        #[cfg(target_os = "linux")]
-        {
-            tokio_uring::start(async move { safetensors::Model::load(&path).await })
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-            })?;
-            rt.block_on(safetensors::Model::load(&path))
-        }
-    })
-    .await
-    .map_err(|e| ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
 }
 
 // --- SafeTensors Handle ---
@@ -76,13 +57,23 @@ impl SafeTensorsHandlePy {
 
     fn keys(&self) -> Vec<String> {
         match &self.inner {
-            SafeTensorsHandleInner::Mmap(h) => h.tensor_names().into_iter().map(String::from).collect(),
-            SafeTensorsHandleInner::Owned(h) => h.tensor_names().into_iter().map(String::from).collect(),
+            SafeTensorsHandleInner::Mmap(h) => {
+                h.tensor_names().into_iter().map(String::from).collect()
+            }
+            SafeTensorsHandleInner::Owned(h) => {
+                h.tensor_names().into_iter().map(String::from).collect()
+            }
         }
     }
 
     #[pyo3(signature = (name, framework="torch", device="cpu"))]
-    fn get_tensor(&self, py: Python<'_>, name: &str, framework: &str, device: &str) -> PyResult<PyObject> {
+    fn get_tensor(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        framework: &str,
+        device: &str,
+    ) -> PyResult<PyObject> {
         let view = match &self.inner {
             SafeTensorsHandleInner::Mmap(h) => h.tensor(name).map_err(map_reader_error)?,
             SafeTensorsHandleInner::Owned(h) => h.tensor(name).map_err(map_reader_error)?,
@@ -105,22 +96,31 @@ impl SafeTensorsHandlePy {
 
 #[pyfunction]
 #[pyo3(signature = (path,))]
-pub fn open_safetensors(py: Python<'_>, path: PathBuf) -> PyResult<PyObject> {
-    let awaitable = pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        validate_path_exists(&path)?;
-        let owned = load_safetensors_async(path)
-            .await
-            .map_err(map_reader_error)?;
-        Python::with_gil(|py| {
-            Ok(Py::new(py, SafeTensorsHandlePy {
-                inner: SafeTensorsHandleInner::Owned(owned),
-            })?
-            .into_pyobject(py)?
-            .into_any()
-            .unbind())
+pub fn open_safetensors(path: PathBuf) -> PyResult<PyObject> {
+    validate_path_exists(&path)?;
+    let owned = Python::with_gil(|py| {
+        py.allow_threads(|| {
+            #[cfg(target_os = "linux")]
+            {
+                tokio_uring::start(async move { safetensors::Model::load(&path).await })
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+                })?;
+                rt.block_on(safetensors::Model::load(&path))
+            }
         })
+        .map_err(map_reader_error)
     })?;
-    Ok(awaitable.unbind())
+    Python::with_gil(|py| {
+        let handle = SafeTensorsHandlePy {
+            inner: SafeTensorsHandleInner::Owned(owned),
+        };
+        let handle_py = Py::new(py, handle)?;
+        Ok(handle_py.into_pyobject(py)?.into_any().unbind())
+    })
 }
 
 #[pyfunction]
@@ -159,47 +159,47 @@ pub fn open_safetensors_mmap(path: PathBuf) -> PyResult<PyObject> {
 
 #[pyfunction]
 #[pyo3(signature = (path, framework="torch", device="cpu"))]
-pub fn load_safetensors(py: Python<'_>, path: PathBuf, framework: &str, device: &str) -> PyResult<PyObject> {
+pub fn load_safetensors(
+    py: Python<'_>,
+    path: PathBuf,
+    framework: &str,
+    device: &str,
+) -> PyResult<PyObject> {
     validate_path_exists(&path)?;
-    let path = path.to_path_buf();
-    let framework = framework.to_string();
-    let device = device.to_string();
+    let builtins = py.import("builtins")?;
+    let result = builtins.getattr("dict")?.call0()?;
 
-    let awaitable = pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let owned: Model = load_safetensors_async(path)
-            .await
-            .map_err(map_reader_error)?;
-        let keys: Vec<String> = owned.tensor_names().into_iter().map(String::from).collect();
+    let path_ref = path.as_path();
+    let owned: Model = py.allow_threads(|| {
+        #[cfg(target_os = "linux")]
+        {
+            tokio_uring::start(async move { safetensors::Model::load(path_ref).await })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                ReaderError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
+            })?;
+            rt.block_on(safetensors::Model::load(path_ref))
+        }
+    }).map_err(map_reader_error)?;
 
-        let tensors_data: Vec<(String, Vec<usize>, String, Vec<u8>)> = keys
-            .iter()
-            .map(|k| {
-                let view = owned.tensor(k).map_err(map_reader_error)?;
-                Ok((
-                    k.clone(),
-                    view.shape().to_vec(),
-                    view.dtype().to_string(),
-                    view.data().to_vec(),
-                ))
-            })
-            .collect::<PyResult<_>>()?;
-
-        Python::with_gil(|py| {
-            let builtins = py.import("builtins")?;
-            let result = builtins.getattr("dict")?.call0()?;
-            for (k, shape, dtype, data) in tensors_data {
-                let tensor = convert_tensor(
-                    py,
-                    &framework,
-                    TensorData { shape: &shape, dtype: &dtype, data: &data },
-                    &device,
-                )?;
-                result.call_method1("__setitem__", (k, tensor))?;
-            }
-            Ok(result.unbind())
-        })
-    })?;
-    Ok(awaitable.unbind())
+    let keys: Vec<String> = owned.tensor_names().into_iter().map(String::from).collect();
+    for k in keys {
+        let view = owned.tensor(&k).map_err(map_reader_error)?;
+        let tensor = convert_tensor(
+            py,
+            framework,
+            TensorData {
+                shape: view.shape(),
+                dtype: view.dtype(),
+                data: view.data(),
+            },
+            device,
+        )?;
+        result.call_method1("__setitem__", (&k, tensor))?;
+    }
+    Ok(result.into())
 }
 
 #[pyfunction]
@@ -297,16 +297,16 @@ fn tensors_to_raw(
     py: Python<'_>,
     tensors: &Bound<'_, PyDict>,
     framework: &str,
-) -> PyResult<Vec<(String, Vec<usize>, Dtype, Vec<u8>)>> {
+) -> PyResult<Vec<TensorTuple>> {
     let mut result = Vec::new();
-    
+
     for (key, value) in tensors.iter() {
         let name: String = key.extract()?;
         let (shape, dtype_str, data) = extract_tensor_raw(py, framework, &value)?;
         let dtype = str_to_dtype(&dtype_str)?;
         result.push((name, shape, dtype, data));
     }
-    
+
     Ok(result)
 }
 
@@ -333,8 +333,7 @@ pub fn save_safetensors(
     let serialized = serialize(views.iter().map(|(n, v)| (n.as_str(), v)), metadata)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    std::fs::write(&path, serialized)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
+    std::fs::write(&path, serialized).map_err(pyo3::exceptions::PyIOError::new_err)?;
 
     Ok(())
 }

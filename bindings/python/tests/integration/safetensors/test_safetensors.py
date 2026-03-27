@@ -1,6 +1,5 @@
-"""SafeTensors format integration tests (backend, parity, async concurrency)."""
+"""SafeTensors format integration tests (backend parity)."""
 
-import asyncio
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -13,6 +12,21 @@ from tensor_store_py._tensor_store_rust import (
     open_safetensors_mmap,
     open_safetensors_sync,
 )
+
+
+# --- Backend: default ---
+
+
+def test_open_default(safetensors_path, hidden_dim):
+    handle = open_safetensors(safetensors_path)
+    assert "wte" in handle.keys() and "wpe" in handle.keys()
+    assert handle.get_tensor("wte").shape == (1024, hidden_dim)
+
+
+def test_load_safetensors_default(safetensors_path, hidden_dim):
+    d = load_safetensors(safetensors_path)
+    assert "wte" in d and "wpe" in d
+    assert d["wte"].shape == (1024, hidden_dim)
 
 
 # --- Backend: sync ---
@@ -45,112 +59,34 @@ def test_load_safetensors_mmap(safetensors_path, hidden_dim):
     assert d["wte"].shape == (1024, hidden_dim)
 
 
-# --- Backend: async ---
-
-
-@pytest.mark.asyncio
-async def test_open_async(safetensors_path, hidden_dim):
-    handle = await open_safetensors(safetensors_path)
-    assert "wte" in handle.keys() and "wpe" in handle.keys()
-    assert handle.get_tensor("wte").shape == (1024, hidden_dim)
-
-
-@pytest.mark.asyncio
-async def test_load_safetensors_async(safetensors_path, hidden_dim):
-    d = await load_safetensors(safetensors_path)
-    assert "wte" in d and "wpe" in d
-    assert d["wte"].shape == (1024, hidden_dim)
-
-
-# --- Backend parity (sync/mmap/async consistency) ---
+# --- Backend parity (default/sync/mmap consistency) ---
 
 
 def test_load_keys_parity(safetensors_path):
+    keys_default = set(load_safetensors(safetensors_path).keys())
     keys_sync = set(load_safetensors_sync(safetensors_path).keys())
     keys_mmap = set(load_safetensors_mmap(safetensors_path).keys())
-    assert keys_sync == keys_mmap
-
-
-@pytest.mark.asyncio
-async def test_load_keys_parity_async(safetensors_path):
-    keys_sync = set(load_safetensors_sync(safetensors_path).keys())
-    keys_async = set((await load_safetensors(safetensors_path)).keys())
-    assert keys_sync == keys_async
+    assert keys_default == keys_sync == keys_mmap
 
 
 def test_load_shapes_parity(safetensors_path):
+    d_default = load_safetensors(safetensors_path)
     d_sync = load_safetensors_sync(safetensors_path)
     d_mmap = load_safetensors_mmap(safetensors_path)
-    assert {k: tuple(d_sync[k].shape) for k in d_sync} == {
-        k: tuple(d_mmap[k].shape) for k in d_mmap
-    }
-
-
-@pytest.mark.asyncio
-async def test_load_shapes_parity_async(safetensors_path):
-    d_sync = load_safetensors_sync(safetensors_path)
-    d_async = await load_safetensors(safetensors_path)
-    assert {k: tuple(d_sync[k].shape) for k in d_sync} == {
-        k: tuple(d_async[k].shape) for k in d_async
-    }
+    assert (
+        {k: tuple(d_default[k].shape) for k in d_default}
+        == {k: tuple(d_sync[k].shape) for k in d_sync}
+        == {k: tuple(d_mmap[k].shape) for k in d_mmap}
+    )
 
 
 def test_open_handle_parity(safetensors_path):
+    h_default = open_safetensors(safetensors_path)
     h_sync = open_safetensors_sync(safetensors_path)
     h_mmap = open_safetensors_mmap(safetensors_path)
-    assert set(h_sync.keys()) == set(h_mmap.keys())
-    for k in h_sync.keys():
-        assert h_sync.get_tensor(k).shape == h_mmap.get_tensor(k).shape
-        assert torch.equal(h_sync.get_tensor(k), h_mmap.get_tensor(k))
-
-
-@pytest.mark.asyncio
-async def test_open_handle_parity_async(safetensors_path):
-    h_sync = open_safetensors_sync(safetensors_path)
-    h_async = await open_safetensors(safetensors_path)
-    assert set(h_sync.keys()) == set(h_async.keys())
-    for k in h_sync.keys():
-        assert h_sync.get_tensor(k).shape == h_async.get_tensor(k).shape
-        assert torch.equal(h_sync.get_tensor(k), h_async.get_tensor(k))
-
-
-# --- Async concurrency ---
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_parallel_open_safetensors(safetensors_path, hidden_dim):
-    handles = await asyncio.gather(
-        open_safetensors(safetensors_path),
-        open_safetensors(safetensors_path),
-        open_safetensors(safetensors_path),
-    )
-    for h in handles:
-        assert "wte" in h.keys()
-        assert h.get_tensor("wte").shape == (1024, hidden_dim)
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_parallel_load_safetensors(safetensors_path):
-    results = await asyncio.gather(
-        load_safetensors(safetensors_path),
-        load_safetensors(safetensors_path),
-    )
-    d1, d2 = results
-    assert set(d1.keys()) == set(d2.keys())
-    for k in d1:
-        assert torch.equal(d1[k], d2[k])
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_concurrent_get_tensor_on_shared_handle(safetensors_path):
-    handle = await open_safetensors(safetensors_path)
-    keys = list(handle.keys())[:5]
-    tensors = await asyncio.gather(
-        *[asyncio.to_thread(handle.get_tensor, k) for k in keys]
-    )
-    for k, t in zip(keys, tensors):
-        assert t.shape == handle.get_tensor(k).shape
-        assert torch.equal(t, handle.get_tensor(k))
+    assert set(h_default.keys()) == set(h_sync.keys()) == set(h_mmap.keys())
+    for k in h_default.keys():
+        assert h_default.get_tensor(k).shape == h_sync.get_tensor(k).shape
+        assert torch.equal(h_default.get_tensor(k), h_sync.get_tensor(k))
+        assert h_default.get_tensor(k).shape == h_mmap.get_tensor(k).shape
+        assert torch.equal(h_default.get_tensor(k), h_mmap.get_tensor(k))

@@ -1,6 +1,5 @@
 """API contract and export regression tests."""
 
-import asyncio
 import importlib
 
 import pytest
@@ -53,8 +52,7 @@ def test_tensor_store_error_is_exception():
     assert issubclass(TensorStoreError, Exception)
 
 
-@pytest.mark.asyncio
-async def test_async_functions_return_awaitables_and_work(tmp_path):
+def test_default_functions_work(tmp_path):
     torch = pytest.importorskip("torch")
 
     safetensors_path = write_safetensors(
@@ -62,33 +60,37 @@ async def test_async_functions_return_awaitables_and_work(tmp_path):
     )
     serverless_path = write_serverlessllm_dir({"x": torch.zeros(1)}, tmp_path / "s")
 
-    # Test open functions
-    handle = await open_safetensors(str(safetensors_path))
+    # Test open functions (default backend)
+    handle = open_safetensors(str(safetensors_path))
     assert isinstance(handle, SafeTensorsHandlePy)
     assert "x" in handle.keys()
 
-    handle = await open_serverlessllm(str(serverless_path))
+    handle = open_serverlessllm(str(serverless_path))
     assert isinstance(handle, ServerlessLLMHandlePy)
     assert "x" in handle.keys()
 
-    # Test load functions
-    result = await load_safetensors(str(safetensors_path))
+    # Test load functions (default backend)
+    result = load_safetensors(str(safetensors_path))
     assert isinstance(result, dict)
     assert "x" in result
 
-    result = await load_serverlessllm(str(serverless_path))
+    result = load_serverlessllm(str(serverless_path))
     assert isinstance(result, dict)
     assert "x" in result
 
 
-def test_sync_and_mmap_functions_are_callable():
+def test_all_backend_functions_are_callable():
     for fn in (
+        open_safetensors,
         open_safetensors_mmap,
         open_safetensors_sync,
+        open_serverlessllm,
         open_serverlessllm_mmap,
         open_serverlessllm_sync,
+        load_safetensors,
         load_safetensors_mmap,
         load_safetensors_sync,
+        load_serverlessllm,
         load_serverlessllm_mmap,
         load_serverlessllm_sync,
     ):

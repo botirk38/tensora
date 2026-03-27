@@ -28,7 +28,7 @@ bindings = "pyo3"
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "benchmarks"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -40,7 +40,10 @@ dev = [
     "pytest-benchmark>=5.2.3",
     "safetensors>=0.7.0",
     "torch>=2.1",
+    "huggingface_hub>=0.20.0",
+    "vllm>=0.6.0",
 ]
 benchmark-torch = ["torch>=2.1"]
 benchmark-tensorflow = ["tensorflow>=2.11.0"]
 benchmark-all = ["torch>=2.1", "tensorflow>=2.11.0"]
+benchmark-vllm = ["vllm>=0.6.0", "torch>=2.1", "huggingface_hub>=0.20.0"]

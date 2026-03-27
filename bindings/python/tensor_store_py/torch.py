@@ -22,7 +22,7 @@ except ImportError:
 def load_file(
     path: Union[str, "os.PathLike"], device: str = "cpu"
 ) -> Dict[str, torch.Tensor]:
-    """Load a safetensors file into a dict of PyTorch tensors.
+    """Load a safetensors file into a dict of PyTorch tensors using io_uring.
 
     Args:
         path: Path to the safetensors file.
@@ -31,7 +31,7 @@ def load_file(
     Returns:
         Dict mapping tensor names to torch.Tensor values.
     """
-    return load_safetensors_sync(path, framework="torch", device=device)
+    return load_safetensors(path, framework="torch", device=device)
 
 
 def load_file_mmap(
@@ -47,21 +47,6 @@ def load_file_mmap(
         Dict mapping tensor names to torch.Tensor values.
     """
     return load_safetensors_mmap(path, framework="torch", device=device)
-
-
-async def load_file_async(
-    path: Union[str, "os.PathLike"], device: str = "cpu"
-) -> Dict[str, torch.Tensor]:
-    """Async load a safetensors file into a dict of PyTorch tensors.
-
-    Args:
-        path: Path to the safetensors file.
-        device: Device to load tensors to (e.g., "cpu", "cuda:0").
-
-    Returns:
-        Dict mapping tensor names to torch.Tensor values.
-    """
-    return await load_safetensors(path, framework="torch", device=device)
 
 
 def open_file(path: Union[str, "os.PathLike"]) -> SafeTensorsHandlePy:
@@ -113,7 +98,6 @@ def save_file_bytes(
 __all__ = [
     "load_file",
     "load_file_mmap",
-    "load_file_async",
     "open_file",
     "save_file",
     "save_file_bytes",

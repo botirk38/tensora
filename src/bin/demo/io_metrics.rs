@@ -64,14 +64,16 @@ mod imp {
 
     use super::IoMetrics;
 
+    type DiskStats = (u64, u64, u64, u64, u64, u64, u64);
+
     /// /proc/diskstats: major minor name read_ios read_merges read_sectors read_ticks
     ///                 write_ios write_merges write_sectors write_ticks in_flight io_ticks time_in_queue
     #[derive(Debug, Clone)]
     pub struct DiskSnapshot {
-        pub(super) stats: BTreeMap<String, (u64, u64, u64, u64, u64, u64, u64)>,
+        pub(super) stats: BTreeMap<String, DiskStats>,
     }
 
-    fn parse_proc_diskstats(s: &str) -> BTreeMap<String, (u64, u64, u64, u64, u64, u64, u64)> {
+    fn parse_proc_diskstats(s: &str) -> BTreeMap<String, DiskStats> {
         let mut stats = BTreeMap::new();
         for line in s.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -406,7 +408,7 @@ mod imp {
     }
 }
 
-pub use imp::{DiskSnapshot, capture_disk_snapshot, compute_metrics};
+pub use imp::{capture_disk_snapshot, compute_metrics, DiskSnapshot};
 
 pub fn display_io_metrics_delta(before: Option<DiskSnapshot>, duration: Duration) {
     match before {

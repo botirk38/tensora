@@ -45,11 +45,10 @@ def test_embedding_lookup_mmap(serverlessllm_dir, hidden_dim):
     assert embedded.shape == (1, 5, hidden_dim)
 
 
-@pytest.mark.asyncio
-async def test_embedding_lookup_async(serverlessllm_dir, hidden_dim):
-    """Test embedding lookup with async-loaded weights."""
+def test_embedding_lookup_default(serverlessllm_dir, hidden_dim):
+    """Test embedding lookup with default-loaded weights."""
     torch.manual_seed(FIXED_SEED)
-    weights = await load_serverlessllm(serverlessllm_dir)
+    weights = load_serverlessllm(serverlessllm_dir)
     wte = weights["wte"]
     input_ids = torch.tensor([[1, 2, 3, 4, 5]])
     embedded = torch.nn.functional.embedding(input_ids, wte)
@@ -89,10 +88,9 @@ def test_attention_computation_mmap(serverlessllm_dir, hidden_dim):
     assert output.shape == (1, 10, hidden_dim)
 
 
-@pytest.mark.asyncio
-async def test_attention_computation_async(serverlessllm_dir, hidden_dim):
-    """Test attention computation with async-loaded weights."""
-    weights = await load_serverlessllm(serverlessllm_dir)
+def test_attention_computation_default(serverlessllm_dir, hidden_dim):
+    """Test attention computation with default-loaded weights."""
+    weights = load_serverlessllm(serverlessllm_dir)
     output = _attention_computation(weights, hidden_dim=hidden_dim)
     assert output.shape == (1, 10, hidden_dim)
 
@@ -175,11 +173,10 @@ def test_full_layer_forward_mmap(serverlessllm_dir, hidden_dim):
     assert not torch.isinf(output).any()
 
 
-@pytest.mark.asyncio
-async def test_full_layer_forward_async(serverlessllm_dir, hidden_dim):
-    """Test full layer forward with async-loaded weights."""
+def test_full_layer_forward_default(serverlessllm_dir, hidden_dim):
+    """Test full layer forward with default-loaded weights."""
     output = _full_layer_forward(
-        await load_serverlessllm(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir), hidden_dim=hidden_dim
     )
     assert output.shape == (2, 5, hidden_dim)
     assert not torch.isnan(output).any()
@@ -234,12 +231,11 @@ def test_gradient_flow_mmap(serverlessllm_dir, hidden_dim):
     assert c_proj_grad.shape == (hidden_dim, hidden_dim)
 
 
-@pytest.mark.asyncio
-async def test_gradient_flow_async(serverlessllm_dir, hidden_dim):
-    """Test gradient flow with async-loaded weights."""
+def test_gradient_flow_default(serverlessllm_dir, hidden_dim):
+    """Test gradient flow with default-loaded weights."""
     intermediate_dim = hidden_dim * 3
     x_grad, c_attn_grad, c_proj_grad = _gradient_test(
-        await load_serverlessllm(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir), hidden_dim=hidden_dim
     )
     assert x_grad.shape == (1, 10, hidden_dim)
     assert c_attn_grad.shape == (hidden_dim, intermediate_dim)
