@@ -1,5 +1,75 @@
 # Project Development Diary
 
+## 2026-03-27
+
+Making Python bindings blocking by default with io_uring backend. This was prompted by discovering that vLLM's model loader interface is fundamentally synchronous - the existing async path was a fragile hack (manual event loop inside sync callback) that didn't integrate properly.
+
+Key changes:
+- Made `open_safetensors`, `load_safetensors`, `open_serverlessllm`, `load_serverlessllm` blocking at Python boundary - no more awaitables
+- Default path uses io_uring on Linux, falls back to tokio elsewhere
+- Added hybrid I/O heuristic for io_uring: queue depth 64, chunk sizes bounded between 16MB and 64MB
+- ServerlessLLM: global queue budget (64) divided across partitions instead of per-partition CPU count
+- Renamed backend labels from "async" to "default" for clarity - now have `default`, `sync`, `mmap`
+- Removed `load_file_async` from torch.py and tensorflow.py convenience APIs
+- vllm_loaders.py now supports `default` backend
+- Rewrote all async tests to sync, added default backend tests for parity checking
+
+Fixed various clippy warnings: redundant closures, double_ended_iterator_last, type_complexity, manual_clamp.
+
+Testing: 174 Rust lib tests pass, 72 Python tests pass, clippy clean on both core and bindings.
+
+The core insight: checkpoint loading is often submission-bound, not bandwidth-bound. The hybrid heuristic (QD 64, 16-64MB chunks) is a data-driven improvement over CPU-count chunking.
+
+## 2026-03-26
+
+Discovered that vLLM's BaseModelLoader interface is fundamentally synchronous. The existing async path was a fragile hack - it was bridging Python async machinery inside a sync callback using `_run_async()`, which caused intermittent failures.
+
+Removed async from vLLM benchmark loaders:
+- Deleted ts_safetensors_async and ts_serverlessllm_async from benchmark matrix
+- Removed async backend branch from loaders
+- Deleted _run_async() helper
+- Validated only 'sync' and 'mmap' backends in TensorStoreLoader
+- Added AGENTS.md documenting benchmark architecture
+
+Public async Python APIs remain unchanged for normal async Python callers - this was specifically about vLLM integration.
+
+## 2026-03-26
+
+Made framework dependencies (torch/tensorflow) optional in pyproject.toml using extras. Added auto-parallel loading for ServerlessLLM when >1 partition. Added pytest-benchmark tests for 4/8 partition parallel loading. Used pytest.importorskip() for optional framework tests. Used smaller fixture dimensions (126 hidden dim, divisible by 3).
+
+## 2026-03-26
+
+Added TensorFlow support to Python bindings:
+- Add TensorFlow tensor conversion (load/save) for safetensors format
+- Add PyTorch save support alongside existing load functionality
+- Fix numpy dtype conversion in TensorFlow load (use direct view not astype)
+- Fix TensorFlow dtype extraction (property not method in Keras 3)
+- Add framework parameter to safetensors API (torch/tensorflow)
+- Remove jemalloc to fix static TLS memory allocation issues
+- Parameterize tests with hidden_dim fixture for maintainability
+- Fix event loop closed warning by properly awaiting async tests
+
+99 passing tests across safetensors and serverlessllm formats.
+
+## 2026-03-09
+
+Big refactor: removed unused traits, consolidated API to associated methods only, renamed safetensors types. Split monolithic serverlessllm/reader.rs into separate modules: helpers.rs, index.rs, mmap.rs, owned.rs, tensor.rs. This reduced reader.rs from 1969 lines to something more manageable. The module split makes the codebase navigable again.
+
+## 2026-03-08
+
+Refactored Python bindings to use borrowed data instead of unnecessary copies:
+- Changed TensorData to use borrowed references (&[usize], &str, &[u8]) instead of owned vecs/strings
+- Updated convert/torch.rs to accept borrowed inputs
+- Modified sync paths to use borrowed data
+- Inlined load_safetensors_async function into open_safetensors
+- Removed .to_vec() calls to reduce memory allocations and copying overhead
+
+Also added pytest-asyncio to dev dependencies. All tests pass, benchmarks show stable performance.
+
+## 2026-03-08
+
+Cleanup: fixed profiling scripts, pyproject.toml, benchmarks import paths.
+
 ## 2026-03-08
 
 Refactored Python bindings to align with new architecture. Deleted the `bridge/` module which was unnecessarily normalizing tensor data. Renamed `torch/` to `convert/` with a `TensorData` struct to reduce function arguments.
