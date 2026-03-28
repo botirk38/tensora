@@ -76,9 +76,6 @@ fixtures/**
 *.svg
 !assets/**/*.svg
 
-# Claude temporary files
-.claude/plans/
 vllm/
-report/
 bindings/python/.venv/
 bindings/python/benchmarks/.cache/
