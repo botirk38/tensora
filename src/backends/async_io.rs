@@ -20,7 +20,7 @@ const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
 const ASYNC_QUEUE_DEPTH: usize = 64;
 
 #[cfg(target_os = "linux")]
-const MIN_CHUNK_SIZE: usize = 16 * 1024 * 1024;
+const MIN_CHUNK_SIZE: usize = 32 * 1024 * 1024;
 
 #[cfg(target_os = "linux")]
 #[inline]

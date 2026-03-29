@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio_uring::fs::File as UringFile;
 
 const ASYNC_QUEUE_DEPTH: usize = 64;
-const MIN_CHUNK_SIZE: usize = 16 * 1024 * 1024;
+const MIN_CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
 
 #[inline]
