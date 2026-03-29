@@ -8,6 +8,8 @@ use super::{AsyncBackend, AsyncBackendFuture, BatchRequest, IoResult};
 use super::{buffer_slice::BufferSlice, get_buffer_pool};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
+use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 
 /// Tokio-based async backend (cross-platform fallback).
@@ -357,7 +359,7 @@ mod linux {
     #[inline]
     pub async fn load_range_batch(
         requests: &[(impl AsRef<Path> + Send + Sync, u64, usize)],
-    ) -> IoResult<Vec<(Vec<u8>, usize, usize)>> {
+    ) -> IoResult<Vec<(Arc<[u8]>, usize, usize)>> {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
@@ -369,7 +371,8 @@ mod linux {
                 let path_ref = path.clone();
                 async move {
                     let data = load_range(&path_ref, req.offset, req.len).await?;
-                    IoResult::Ok((req.idx, data, 0, req.len))
+                    let owned: Arc<[u8]> = data.into();
+                    IoResult::Ok((req.idx, owned, 0, req.len))
                 }
             });
 
@@ -390,8 +393,11 @@ mod linux {
 
 #[cfg(not(target_os = "linux"))]
 mod non_linux {
-    use super::super::batch::{flatten_results, group_requests_by_file};
+    use super::super::batch::group_requests_by_file;
     use super::*;
+    use std::sync::Arc;
+
+    type IndexedLoadResult = (usize, Arc<[u8]>, usize, usize);
     use tokio::fs::File as TokioFile;
 
     /// Loads an entire file into memory.
@@ -452,34 +458,54 @@ mod non_linux {
     #[inline]
     pub async fn load_range_batch(
         requests: &[(impl AsRef<Path> + Send + Sync, u64, usize)],
-    ) -> IoResult<Vec<(Vec<u8>, usize, usize)>> {
+    ) -> IoResult<Vec<(Arc<[u8]>, usize, usize)>> {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
 
         let grouped = group_requests_by_file(requests);
 
-        let file_futures = grouped.into_iter().map(|(path, reqs)| async move {
-            let read_futures = reqs.into_iter().map(|req| {
-                let path_ref = path.clone();
+        let file_futures: Vec<_> = grouped
+            .into_iter()
+            .map(|(path, indexed_reqs)| {
+                let path_buf = path.clone();
                 async move {
-                    let data = load_range(&path_ref, req.offset, req.len).await?;
-                    IoResult::Ok((req.idx, data, 0, req.len))
+                    tokio::task::spawn_blocking(move || -> Result<Vec<IndexedLoadResult>, std::io::Error> {
+                        use std::io::{Seek, SeekFrom, Read};
+                        let mut file = std::fs::File::open(&path_buf)?;
+                        let mut results = Vec::with_capacity(indexed_reqs.len());
+                        let mut sorted_reqs = indexed_reqs;
+                        sorted_reqs.sort_by_key(|r| r.offset);
+
+                        for req in sorted_reqs {
+                            file.seek(SeekFrom::Start(req.offset))?;
+                            let mut buf = super::super::get_buffer_pool().get(req.len);
+                            file.read_exact(&mut buf[..])?;
+                            let owned: Arc<[u8]> = buf.into_inner().into();
+                            results.push((req.idx, owned, 0, req.len));
+                        }
+
+                        results.sort_by_key(|(idx, _, _, _)| *idx);
+                        Ok(results)
+                    })
+                    .await
+                    .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
                 }
-            });
+            })
+            .collect();
 
-            futures::future::join_all(read_futures)
-                .await
-                .into_iter()
-                .collect::<IoResult<Vec<_>>>()
-        });
-
-        let results = futures::future::join_all(file_futures)
+        let file_results = futures::future::join_all(file_futures)
             .await
             .into_iter()
             .collect::<IoResult<Vec<_>>>()?;
 
-        Ok(flatten_results(results))
+        let mut indexed: Vec<IndexedLoadResult> = file_results.into_iter().flatten().collect();
+        indexed.sort_by_key(|(idx, _, _, _)| *idx);
+
+        Ok(indexed
+            .into_iter()
+            .map(|(_, data, _, len)| (data, 0, len))
+            .collect())
     }
 
     #[inline]
@@ -721,9 +747,9 @@ mod tests {
 
         let results = load_range_batch(&requests).await.unwrap();
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, &data[0..10]);
-        assert_eq!(results[1].0, &data[10..20]);
-        assert_eq!(results[2].0, &data[20..30]);
+        assert_eq!(results[0].0.as_ref(), &data[0..10]);
+        assert_eq!(results[1].0.as_ref(), &data[10..20]);
+        assert_eq!(results[2].0.as_ref(), &data[20..30]);
     }
 
     #[tokio::test]
@@ -743,9 +769,9 @@ mod tests {
 
         let results = load_range_batch(&requests).await.unwrap();
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, b"FILE1");
-        assert_eq!(results[1].0, b"FILE2");
-        assert_eq!(results[2].0, b"DATA");
+        assert_eq!(results[0].0.as_ref(), b"FILE1");
+        assert_eq!(results[1].0.as_ref(), b"FILE2");
+        assert_eq!(results[2].0.as_ref(), b"DATA");
     }
 
     #[tokio::test]

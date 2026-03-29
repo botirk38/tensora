@@ -11,7 +11,7 @@ pub mod mmap;
 pub mod writer;
 
 // Re-export data types
-pub use tensor::{Tensor, TensorMmap, IndexEntry};
+pub use tensor::{Tensor, TensorMmap};
 pub use index::Index;
 pub use owned::Model;
 pub use mmap::MmapModel;

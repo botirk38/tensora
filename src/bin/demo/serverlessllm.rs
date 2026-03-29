@@ -289,7 +289,7 @@ fn demo_parallel_async(config: &DemoConfig) -> DemoResult {
             let io_before = crate::io_metrics::capture_disk_snapshot().ok();
 
             let start = Instant::now();
-            let model = serverlessllm::Model::load_parallel(&dir).await?;
+            let model = serverlessllm::Model::load(&dir).await?;
             let duration = start.elapsed();
 
             println!("  Loaded in: {:.2}ms", duration.as_secs_f64() * 1000.0);
@@ -332,7 +332,7 @@ fn demo_parallel_async(config: &DemoConfig) -> DemoResult {
             println!("  Partitions: {}", partition_count);
 
             let start = Instant::now();
-            let model = serverlessllm::Model::load_parallel(&dir).await?;
+            let model = serverlessllm::Model::load(&dir).await?;
             let duration = start.elapsed();
 
             println!("  Loaded in: {:.2}ms", duration.as_secs_f64() * 1000.0);
@@ -368,7 +368,7 @@ fn demo_parallel_sync(config: &DemoConfig) -> DemoResult {
         let io_before = crate::io_metrics::capture_disk_snapshot().ok();
 
         let start = Instant::now();
-        let model = serverlessllm::Model::load_parallel_sync(&dir)?;
+        let model = serverlessllm::Model::load_sync(&dir)?;
         let duration = start.elapsed();
 
         println!("  Loaded in: {:.2}ms", duration.as_secs_f64() * 1000.0);
@@ -414,7 +414,7 @@ fn demo_metadata(config: &DemoConfig) -> DemoResult {
                     name,
                     tensor.shape(),
                     tensor.dtype(),
-                    format_bytes(tensor.size())
+                    format_bytes(tensor.size() as u64)
                 );
             }
         }

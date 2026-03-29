@@ -1,43 +1,107 @@
 //! Tensor data containers for ServerlessLLM format.
 
+use std::sync::Arc;
+
 use crate::backends;
 use crate::formats::traits::TensorView;
 
-/// Metadata for a single tensor in the ServerlessLLM index.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct IndexEntry {
-    /// Byte offset of the tensor data within the partition file
-    pub offset: u64,
+use super::index::TensorDescriptor;
 
-    /// Size of the tensor data in bytes
-    pub size: u64,
+/// Owned tensor with shared backing buffer.
+/// Multiple tensors from the same partition share the same buffer via Arc.
+#[derive(Debug, Clone)]
+pub struct Tensor {
+    backing: Arc<[u8]>,
+    desc: Arc<TensorDescriptor>,
+}
 
-    /// Shape of the tensor (dimensions)
-    pub shape: Vec<usize>,
+impl Tensor {
+    /// Creates a new Tensor from shared backing and descriptor.
+    #[inline]
+    #[must_use]
+    pub fn from_shared(backing: Arc<[u8]>, desc: Arc<TensorDescriptor>) -> Self {
+        Self { backing, desc }
+    }
 
-    /// Stride information for the tensor
-    pub stride: Vec<usize>,
+    /// Returns the raw tensor data as a slice (zero-copy).
+    /// Slices from the shared backing buffer using the descriptor's offset.
+    /// Panics if offset + size overflows or exceeds buffer bounds.
+    #[inline]
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        let start = usize::try_from(self.desc.offset).expect("offset overflow");
+        let end = start
+            .checked_add(self.desc.size)
+            .expect("offset + size overflow");
+        &self.backing[start..end]
+    }
 
-    /// Data type of the tensor (e.g., "float32", "int64")
-    pub dtype: String,
+    /// Returns the tensor's data type.
+    #[inline]
+    #[must_use]
+    pub fn dtype(&self) -> &str {
+        &self.desc.dtype
+    }
 
-    /// Partition ID where this tensor is stored
-    pub partition_id: usize,
+    /// Returns the tensor's shape.
+    #[inline]
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        &self.desc.shape
+    }
+
+    /// Returns the tensor's stride.
+    #[inline]
+    #[must_use]
+    pub fn stride(&self) -> &[usize] {
+        &self.desc.stride
+    }
+
+    /// Returns the tensor's size in bytes.
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.desc.size
+    }
+
+    /// Returns the partition id containing this tensor.
+    #[inline]
+    #[must_use]
+    pub fn partition_id(&self) -> usize {
+        self.desc.partition_id
+    }
+}
+
+impl TensorView for Tensor {
+    #[inline]
+    fn shape(&self) -> &[usize] {
+        self.shape()
+    }
+
+    #[inline]
+    fn dtype(&self) -> &str {
+        self.dtype()
+    }
+
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.data()
+    }
 }
 
 /// View into a memory-mapped tensor with metadata access (lazy loading).
 #[derive(Debug)]
 pub struct TensorMmap {
     mmap: backends::mmap::Mmap,
-    entry: IndexEntry,
+    desc: Arc<TensorDescriptor>,
 }
 
 impl TensorMmap {
     /// Creates a new TensorMmap from memory-mapped data.
     #[inline]
     #[must_use]
-    pub const fn new(mmap: backends::mmap::Mmap, entry: IndexEntry) -> Self {
-        Self { mmap, entry }
+    pub fn new(mmap: backends::mmap::Mmap, desc: Arc<TensorDescriptor>) -> Self {
+        Self { mmap, desc }
     }
 
     /// Returns the memory-mapped tensor data.
@@ -51,152 +115,40 @@ impl TensorMmap {
     #[inline]
     #[must_use]
     pub fn dtype(&self) -> &str {
-        &self.entry.dtype
+        &self.desc.dtype
     }
 
     /// Returns the tensor's shape.
     #[inline]
     #[must_use]
     pub fn shape(&self) -> &[usize] {
-        &self.entry.shape
+        &self.desc.shape
     }
 
     /// Returns the tensor's stride.
     #[inline]
     #[must_use]
     pub fn stride(&self) -> &[usize] {
-        &self.entry.stride
+        &self.desc.stride
     }
 
     /// Returns the tensor's size in bytes.
     #[inline]
     #[must_use]
-    pub const fn size(&self) -> u64 {
-        self.entry.size
+    pub fn size(&self) -> usize {
+        self.desc.size
     }
 }
 
 impl TensorView for TensorMmap {
     #[inline]
     fn shape(&self) -> &[usize] {
-        &self.entry.shape
+        self.shape()
     }
 
     #[inline]
     fn dtype(&self) -> &str {
-        &self.entry.dtype
-    }
-
-    #[inline]
-    fn data(&self) -> &[u8] {
-        self.data()
-    }
-}
-
-/// Owned tensor with data loaded into memory.
-///
-/// Supports zero-copy access by holding a reference to shared buffers
-/// with offset/length metadata.
-#[derive(Debug, Clone)]
-pub struct Tensor {
-    data: Vec<u8>,
-    offset: usize,
-    len: usize,
-    entry: IndexEntry,
-}
-
-impl Tensor {
-    /// Creates a new Tensor from buffer data and metadata.
-    #[inline]
-    #[must_use]
-    pub const fn new(data: Vec<u8>, offset: usize, len: usize, entry: IndexEntry) -> Self {
-        Self {
-            data,
-            offset,
-            len,
-            entry,
-        }
-    }
-
-    /// Creates a new Tensor from owned data.
-    #[inline]
-    #[must_use]
-    pub const fn from_owned(data: Vec<u8>, entry: IndexEntry) -> Self {
-        let len = data.len();
-        Self {
-            data,
-            offset: 0,
-            len,
-            entry,
-        }
-    }
-
-    /// Returns the raw tensor data as a slice (zero-copy).
-    #[inline]
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        &self.data[self.offset..self.offset + self.len]
-    }
-
-    /// Consumes the tensor and returns the raw tensor data.
-    ///
-    /// If this tensor covers the entire buffer, returns the owned `Vec<u8>`.
-    /// Otherwise, returns a copy of the slice.
-    #[inline]
-    #[must_use]
-    pub fn into_data(self) -> Vec<u8> {
-        if self.offset == 0 && self.len == self.data.len() {
-            self.data
-        } else {
-            self.data[self.offset..self.offset + self.len].to_vec()
-        }
-    }
-
-    /// Returns the tensor's data type.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> &str {
-        &self.entry.dtype
-    }
-
-    /// Returns the tensor's shape.
-    #[inline]
-    #[must_use]
-    pub fn shape(&self) -> &[usize] {
-        &self.entry.shape
-    }
-
-    /// Returns the tensor's stride.
-    #[inline]
-    #[must_use]
-    pub fn stride(&self) -> &[usize] {
-        &self.entry.stride
-    }
-
-    /// Returns the tensor's size in bytes.
-    #[inline]
-    #[must_use]
-    pub const fn size(&self) -> u64 {
-        self.entry.size
-    }
-
-    /// Returns the partition id containing this tensor.
-    #[inline]
-    #[must_use]
-    pub const fn partition_id(&self) -> usize {
-        self.entry.partition_id
-    }
-}
-
-impl TensorView for Tensor {
-    #[inline]
-    fn shape(&self) -> &[usize] {
-        &self.entry.shape
-    }
-
-    #[inline]
-    fn dtype(&self) -> &str {
-        &self.entry.dtype
+        self.dtype()
     }
 
     #[inline]

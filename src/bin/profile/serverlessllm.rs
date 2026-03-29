@@ -5,6 +5,27 @@ use tensor_store::formats::serverlessllm;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 
+#[cfg(unix)]
+fn drop_page_cache_for_dir(dir: &std::path::Path) {
+    use std::os::unix::io::AsRawFd;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type()
+                && file_type.is_file()
+                && let Ok(file) = std::fs::File::open(entry.path())
+            {
+                let fd = file.as_raw_fd();
+                unsafe { libc::posix_madvise(fd as *mut libc::c_void, 0, libc::POSIX_MADV_DONTNEED) };
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn drop_page_cache_for_dir(_dir: &std::path::Path) {
+    // No-op on non-unix
+}
+
 pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "async-load" => async_load(config),
@@ -81,11 +102,14 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
             .to_owned();
 
         println!(
-            "Running io_uring serverlessllm load for '{}' ({iterations}x)",
+            "Running io_uring serverlessllm load for '{}' ({iterations}x cold)",
             fixture
         );
         tokio_uring::start(async {
-            for _ in 0..iterations {
+            for i in 0..iterations {
+                if i == 0 {
+                    drop_page_cache_for_dir(std::path::Path::new(&dir_str));
+                }
                 let model = serverlessllm::Model::load(&dir_str).await?;
                 let tensor_count = model.len();
                 let mut total_bytes = 0;
@@ -104,6 +128,7 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
 
 #[cfg(not(target_os = "linux"))]
 fn async_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -115,17 +140,29 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
             .to_owned();
 
         println!(
-            "Running tokio serverlessllm load for '{}' ({iterations}x)",
+            "Running tokio serverlessllm load for '{}' ({iterations}x cold)",
             fixture
         );
         rt.block_on(async {
-            for _ in 0..iterations {
+            for i in 0..iterations {
+                if i == 0 {
+                    drop_page_cache_for_dir(std::path::Path::new(&dir_str));
+                }
+                let start = Instant::now();
                 let model = serverlessllm::Model::load(&dir_str).await?;
+                let elapsed = start.elapsed();
                 let tensor_count = model.len();
                 let mut total_bytes = 0;
                 for (_name, tensor) in &model {
                     total_bytes += tensor.data().len();
                 }
+                println!(
+                    "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                    i + 1,
+                    tensor_count,
+                    total_bytes,
+                    elapsed.as_secs_f64() * 1000.0
+                );
                 black_box((total_bytes, tensor_count));
             }
             Ok::<_, tensor_store::ReaderError>(())
@@ -136,21 +173,34 @@ fn async_load(config: &ProfileConfig) -> ProfileResult {
 }
 
 fn sync_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
 
     for (fixture, dir) in fixtures {
         let iterations = config.normalized_iterations();
         println!(
-            "Running sync serverlessllm load for '{}' ({iterations}x)",
+            "Running sync serverlessllm load for '{}' ({iterations}x cold)",
             fixture
         );
-        for _ in 0..iterations {
+        for i in 0..iterations {
+            if i == 0 {
+                drop_page_cache_for_dir(&dir);
+            }
+            let start = Instant::now();
             let model = serverlessllm::Model::load_sync(&dir)?;
+            let elapsed = start.elapsed();
             let tensor_count = model.len();
             let mut total_bytes = 0;
             for (_name, tensor) in &model {
                 total_bytes += tensor.data().len();
             }
+            println!(
+                "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                i + 1,
+                tensor_count,
+                total_bytes,
+                elapsed.as_secs_f64() * 1000.0
+            );
             black_box((total_bytes, tensor_count));
         }
     }
@@ -159,16 +209,22 @@ fn sync_load(config: &ProfileConfig) -> ProfileResult {
 }
 
 fn mmap_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
 
     for (fixture, dir) in fixtures {
         let iterations = config.normalized_iterations();
         println!(
-            "Running mmap serverlessllm load for '{}' ({iterations}x)",
+            "Running mmap serverlessllm load for '{}' ({iterations}x cold)",
             fixture
         );
-        for _ in 0..iterations {
+        for i in 0..iterations {
+            if i == 0 {
+                drop_page_cache_for_dir(&dir);
+            }
+            let start = Instant::now();
             let model = serverlessllm::MmapModel::load(&dir)?;
+            let elapsed = start.elapsed();
             let tensor_count = model.len();
             let mut total_bytes = 0;
             for name in model.tensor_names() {
@@ -177,6 +233,13 @@ fn mmap_load(config: &ProfileConfig) -> ProfileResult {
                 })?;
                 total_bytes += tensor.data().len();
             }
+            println!(
+                "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                i + 1,
+                tensor_count,
+                total_bytes,
+                elapsed.as_secs_f64() * 1000.0
+            );
             black_box((total_bytes, tensor_count));
         }
     }

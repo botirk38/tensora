@@ -22,7 +22,31 @@ use crate::formats::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::tensor::IndexEntry;
+use super::index::TensorDescriptor;
+
+/// Entry for writing tensors to index.
+#[derive(Debug, Clone)]
+pub struct TensorWriteEntry {
+    pub offset: u64,
+    pub size: u64,
+    pub shape: Vec<usize>,
+    pub stride: Vec<usize>,
+    pub dtype: String,
+    pub partition_id: usize,
+}
+
+impl From<&TensorDescriptor> for TensorWriteEntry {
+    fn from(desc: &TensorDescriptor) -> Self {
+        Self {
+            offset: desc.offset,
+            size: desc.size as u64,
+            shape: desc.shape.to_vec(),
+            stride: desc.stride.to_vec(),
+            dtype: desc.dtype.to_string(),
+            partition_id: desc.partition_id,
+        }
+    }
+}
 
 /// Write `tensor_index.json` asynchronously.
 ///
@@ -36,7 +60,7 @@ use super::tensor::IndexEntry;
 /// Returns an error if the file cannot be written or if serialization fails.
 pub async fn write_index(
     output_path: impl AsRef<Path>,
-    tensors: &HashMap<String, IndexEntry>,
+    tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
@@ -85,7 +109,7 @@ pub async fn write_partition(
 #[inline]
 pub fn write_index_sync(
     output_path: impl AsRef<Path>,
-    tensors: &HashMap<String, IndexEntry>,
+    tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
     ensure_parent_dir_sync(path)?;
@@ -112,7 +136,7 @@ pub fn write_partition_sync(output_path: impl AsRef<Path>, data: &[u8]) -> Write
 }
 
 // Helper function to serialize tensors to JSON format
-fn serialize_index(tensors: &HashMap<String, IndexEntry>) -> WriterResult<Vec<u8>> {
+fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<Vec<u8>> {
     if tensors.is_empty() {
         return Err(WriterError::InvalidInput(
             "Cannot write empty tensor index".to_owned(),
@@ -166,12 +190,12 @@ mod tests {
     use serde_json::Value;
     use tempfile::TempDir;
     use crate::formats::serverlessllm::writer::{serialize_index, write_index, write_partition, write_index_sync, write_partition_sync};
-    use crate::formats::serverlessllm::IndexEntry;
+    use super::TensorWriteEntry;
 
-    fn sample_entries() -> HashMap<String, IndexEntry> {
+    fn sample_entries() -> HashMap<String, TensorWriteEntry> {
          HashMap::from([(
              "w".to_owned(),
-             IndexEntry {
+             TensorWriteEntry {
                  offset: 0,
                  size: 4,
                  shape: vec![2, 2],
@@ -184,7 +208,7 @@ mod tests {
 
      #[test]
      fn serialize_index_rejects_empty() {
-         let map: HashMap<String, IndexEntry> = HashMap::new();
+         let map: HashMap<String, TensorWriteEntry> = HashMap::new();
         let err = serialize_index(&map).unwrap_err();
         assert!(matches!(err, WriterError::InvalidInput(_)));
     }

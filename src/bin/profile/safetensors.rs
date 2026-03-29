@@ -7,6 +7,20 @@ use tensor_store::formats::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 
+#[cfg(unix)]
+fn drop_page_cache(path: &std::path::Path) {
+    use std::os::unix::io::AsRawFd;
+    if let Ok(file) = std::fs::File::open(path) {
+        let fd = file.as_raw_fd();
+        unsafe { libc::posix_madvise(fd as *mut libc::c_void, 0, libc::POSIX_MADV_DONTNEED) };
+    }
+}
+
+#[cfg(not(unix))]
+fn drop_page_cache(_path: &std::path::Path) {
+    // No-op on non-unix
+}
+
 pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "io-uring-load" => io_uring_load(config),
@@ -183,6 +197,7 @@ fn io_uring_prewarmed(_config: &ProfileConfig) -> ProfileResult {
 
 #[cfg(not(target_os = "linux"))]
 fn tokio_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -194,14 +209,27 @@ fn tokio_load(config: &ProfileConfig) -> ProfileResult {
             .to_owned();
 
         println!(
-            "Running tokio safetensors load for '{}' ({iterations}x)",
+            "Running tokio safetensors load for '{}' ({iterations}x cold)",
             fixture
         );
         rt.block_on(async {
-            for _ in 0..iterations {
+            for i in 0..iterations {
+                if i == 0 {
+                    drop_page_cache(std::path::Path::new(&path_str));
+                }
+                let start = Instant::now();
                 let data = safetensors::Model::load(&path_str).await?;
+                let elapsed = start.elapsed();
                 let tensor_count = data.names().len();
-                black_box((data, tensor_count));
+                let bytes = data.into_bytes();
+                println!(
+                    "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                    i + 1,
+                    tensor_count,
+                    bytes.len(),
+                    elapsed.as_secs_f64() * 1000.0
+                );
+                black_box((bytes, tensor_count));
             }
             Ok::<_, tensor_store::ReaderError>(())
         })?;
@@ -297,18 +325,32 @@ fn tokio_prewarmed(_config: &ProfileConfig) -> ProfileResult {
 }
 
 fn sync_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
 
     for (fixture, path) in fixtures {
         let iterations = config.normalized_iterations();
         println!(
-            "Running sync safetensors load for '{}' ({iterations}x)",
+            "Running sync safetensors load for '{}' ({iterations}x cold)",
             fixture
         );
-        for _ in 0..iterations {
+        for i in 0..iterations {
+            if i == 0 {
+                drop_page_cache(&path);
+            }
+            let start = Instant::now();
             let data = safetensors::Model::load_sync(&path)?;
+            let elapsed = start.elapsed();
             let tensor_count = data.names().len();
-            black_box((data.into_bytes(), tensor_count));
+            let bytes = data.into_bytes();
+            println!(
+                "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                i + 1,
+                tensor_count,
+                bytes.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+            black_box((bytes, tensor_count));
         }
     }
 
@@ -316,17 +358,37 @@ fn sync_load(config: &ProfileConfig) -> ProfileResult {
 }
 
 fn mmap_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
 
     for (fixture, path) in fixtures {
         let iterations = config.normalized_iterations();
         println!(
-            "Running mmap safetensors load for '{}' ({iterations}x)",
+            "Running mmap safetensors load for '{}' ({iterations}x cold)",
             fixture
         );
-        for _ in 0..iterations {
+        for i in 0..iterations {
+            if i == 0 {
+                drop_page_cache(&path);
+            }
+            let start = Instant::now();
             let data = safetensors::MmapModel::load(&path)?;
+            // Access all tensor data (simulates what Python conversion does)
+            let mut bytes = 0;
+            for name in data.tensors().names() {
+                if let Ok(tensor) = data.tensors().tensor(name) {
+                    bytes += tensor.data().len();
+                }
+            }
+            let elapsed = start.elapsed();
             let tensor_count = data.tensors().names().len();
+            println!(
+                "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                i + 1,
+                tensor_count,
+                bytes,
+                elapsed.as_secs_f64() * 1000.0
+            );
             black_box((data, tensor_count));
         }
     }
@@ -335,18 +397,31 @@ fn mmap_load(config: &ProfileConfig) -> ProfileResult {
 }
 
 fn original_load(config: &ProfileConfig) -> ProfileResult {
+    use std::time::Instant;
     let fixtures = fixtures(config)?;
 
     for (fixture, path) in fixtures {
         let iterations = config.normalized_iterations();
         println!(
-            "Running original safetensors load for '{}' ({iterations}x)",
+            "Running original safetensors load for '{}' ({iterations}x cold)",
             fixture
         );
-        for _ in 0..iterations {
+        for i in 0..iterations {
+            if i == 0 {
+                drop_page_cache(&path);
+            }
+            let start = Instant::now();
             let bytes = fs::read(&path)?;
             let data = SafeTensors::deserialize(&bytes)?;
             let tensor_count = data.names().len();
+            let elapsed = start.elapsed();
+            println!(
+                "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+                i + 1,
+                tensor_count,
+                bytes.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
             black_box((tensor_count, bytes.len()));
         }
     }

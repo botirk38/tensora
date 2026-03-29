@@ -1,7 +1,24 @@
 //! Synchronous blocking I/O using std::fs
 
-use super::{IoResult, SyncBackend, buffer_slice::BufferSlice, get_buffer_pool};
+use super::{buffer_slice::BufferSlice, get_buffer_pool, IoResult, SyncBackend};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+
+static RAYON_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+
+type IndexedLoadResult = (usize, Arc<[u8]>, usize, usize);
+
+fn get_rayon_pool() -> &'static rayon::ThreadPool {
+    RAYON_POOL.get_or_init(|| {
+        let num_threads = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap()
+    })
+}
 
 /// Ceiling division: (a + b - 1) / b
 #[inline]
@@ -46,8 +63,8 @@ impl SyncBackend for DefaultSyncBackend {
 mod linux {
 
     use super::super::odirect::{
-        BLOCK_SIZE, alloc_aligned, can_use_direct_read, can_use_direct_write, is_block_aligned,
-        open_direct_read_sync, open_direct_write_sync,
+        alloc_aligned, can_use_direct_read, can_use_direct_write, is_block_aligned,
+        open_direct_read_sync, open_direct_write_sync, BLOCK_SIZE,
     };
     use super::*;
     use rayon::prelude::*;
@@ -298,11 +315,8 @@ mod linux {
             return Ok(Vec::new());
         }
 
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
-            .build()
-            .unwrap();
-        let mut results: Vec<(usize, Vec<u8>, usize, usize)> = pool.install(|| {
+        let pool = get_rayon_pool();
+        let results: Vec<(usize, Vec<u8>, usize, usize)> = pool.install(|| {
             requests
                 .par_iter()
                 .enumerate()
@@ -311,12 +325,16 @@ mod linux {
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
-        results.sort_by_key(|(idx, _, _, _)| *idx);
 
-        Ok(results
-            .into_iter()
-            .map(|(_, data, _, len)| (data, 0, len))
-            .collect())
+        // Preallocate output in original order
+        let mut output = Vec::with_capacity(results.len());
+        let mut sorted = results;
+        sorted.sort_by_key(|(idx, _, _, _)| *idx);
+        for (_, data, _, len) in sorted {
+            output.push((data, 0, len));
+        }
+
+        Ok(output)
     }
 
     /// Write an entire buffer to a file synchronously using Direct I/O when possible.
@@ -485,6 +503,26 @@ mod non_linux {
         Ok(buf.to_vec())
     }
 
+    fn load_range_from_file(
+        file: &mut File,
+        requests: &[super::super::batch::IndexedRequest],
+    ) -> IoResult<Vec<IndexedLoadResult>> {
+        let mut results = Vec::with_capacity(requests.len());
+        let mut sorted_reqs = requests.to_vec();
+        sorted_reqs.sort_by_key(|r| r.offset);
+
+        for req in sorted_reqs {
+            file.seek(SeekFrom::Start(req.offset))?;
+            let mut buf = get_buffer_pool().get(req.len);
+            file.read_exact(&mut buf[..])?;
+            let owned: Arc<[u8]> = buf.into_inner().into();
+            results.push((req.idx, owned, 0, req.len));
+        }
+
+        results.sort_by_key(|(idx, _, _, _)| *idx);
+        Ok(results)
+    }
+
     pub fn load_range_batch(
         requests: &[(impl AsRef<Path> + Send + Sync, u64, usize)],
     ) -> IoResult<Vec<super::super::batch::FlattenedResult>> {
@@ -492,22 +530,23 @@ mod non_linux {
             return Ok(Vec::new());
         }
 
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
-            .build()
-            .unwrap();
-        let mut results: Vec<(usize, Vec<u8>, usize, usize)> = pool.install(|| {
-            requests
+        let grouped = super::super::batch::group_requests_by_file(requests);
+
+        let pool = get_rayon_pool();
+        let file_results: Vec<Vec<IndexedLoadResult>> = pool.install(|| {
+            grouped
                 .par_iter()
-                .enumerate()
-                .map(|(idx, (path, offset, len))| {
-                    load_range(path, *offset, *len).map(|data| (idx, data, 0, *len))
+                .map(|(path, indexed_reqs)| {
+                    let mut file = File::open(path)?;
+                    load_range_from_file(&mut file, indexed_reqs)
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
-        results.sort_by_key(|(idx, _, _, _)| *idx);
 
-        Ok(results
+        let mut indexed: Vec<IndexedLoadResult> = file_results.into_iter().flatten().collect();
+        indexed.sort_by_key(|(idx, _, _, _)| *idx);
+
+        Ok(indexed
             .into_iter()
             .map(|(_, data, _, len)| (data, 0, len))
             .collect())
@@ -734,9 +773,9 @@ mod tests {
 
         let results = load_range_batch(&requests).unwrap();
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, &data[0..10]);
-        assert_eq!(results[1].0, &data[10..20]);
-        assert_eq!(results[2].0, &data[20..30]);
+        assert_eq!(results[0].0.as_ref(), &data[0..10]);
+        assert_eq!(results[1].0.as_ref(), &data[10..20]);
+        assert_eq!(results[2].0.as_ref(), &data[20..30]);
     }
 
     #[test]
@@ -756,9 +795,9 @@ mod tests {
 
         let results = load_range_batch(&requests).unwrap();
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, b"FILE1");
-        assert_eq!(results[1].0, b"FILE2");
-        assert_eq!(results[2].0, b"DATA");
+        assert_eq!(results[0].0.as_ref(), b"FILE1");
+        assert_eq!(results[1].0.as_ref(), b"FILE2");
+        assert_eq!(results[2].0.as_ref(), b"DATA");
     }
 
     #[test]

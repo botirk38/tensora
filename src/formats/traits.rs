@@ -19,8 +19,8 @@ pub trait TensorMetadata {
     /// Returns true if a tensor with the given name exists.
     fn contains(&self, name: &str) -> bool;
 
-    /// Returns the names of all tensors.
-    fn tensor_names(&self) -> Vec<&str>;
+    /// Returns tensor names as a borrowed slice (cached, sorted).
+    fn tensor_names(&self) -> &[std::sync::Arc<str>];
 }
 
 // ============================================================================
@@ -88,8 +88,15 @@ pub trait TensorView {
 #[cfg(test)]
 mod tests {
     use super::TensorMetadata;
+    use std::sync::Arc;
 
-    struct DummyMeta(Vec<String>);
+    struct DummyMeta(Vec<Arc<str>>);
+
+    impl DummyMeta {
+        fn new(names: Vec<&str>) -> Self {
+            Self(names.into_iter().map(|s| s.into()).collect())
+        }
+    }
 
     impl TensorMetadata for DummyMeta {
         fn len(&self) -> usize {
@@ -97,22 +104,24 @@ mod tests {
         }
 
         fn contains(&self, name: &str) -> bool {
-            self.0.iter().any(|n| n == name)
+            self.0.iter().any(|n| n.as_ref() == name)
         }
 
-        fn tensor_names(&self) -> Vec<&str> {
-            self.0.iter().map(String::as_str).collect()
+        fn tensor_names(&self) -> &[Arc<str>] {
+            &self.0
         }
     }
 
     #[test]
     fn tensor_metadata_defaults_work() {
-        let meta = DummyMeta(vec!["a".into(), "b".into()]);
+        let meta = DummyMeta::new(vec!["a", "b"]);
         assert!(!meta.is_empty());
         assert!(meta.contains("a"));
-        assert_eq!(meta.tensor_names(), vec!["a", "b"]);
+        assert_eq!(meta.tensor_names().len(), 2);
+        assert_eq!(meta.tensor_names()[0].as_ref(), "a");
+        assert_eq!(meta.tensor_names()[1].as_ref(), "b");
 
-        let empty = DummyMeta(vec![]);
+        let empty = DummyMeta::new(vec![]);
         assert!(empty.is_empty());
     }
 }

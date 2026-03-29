@@ -38,6 +38,27 @@ pub use safetensors::tensor::{Dtype, SafeTensors};
 use std::ops::Deref;
 use std::path::Path;
 
+#[inline]
+#[must_use]
+fn dtype_to_str(dtype: &Dtype) -> &'static str {
+    match dtype {
+        Dtype::BOOL => "BOOL",
+        Dtype::U8 => "U8",
+        Dtype::I8 => "I8",
+        Dtype::I16 => "I16",
+        Dtype::U16 => "U16",
+        Dtype::F16 => "F16",
+        Dtype::F32 => "F32",
+        Dtype::F64 => "F64",
+        Dtype::I32 => "I32",
+        Dtype::I64 => "I64",
+        Dtype::U32 => "U32",
+        Dtype::U64 => "U64",
+        Dtype::BF16 => "BF16",
+        _ => "UNKNOWN",
+    }
+}
+
 /// SafeTensors reader with mmap-backed storage (lazy loading).
 ///
 /// This reader memory-maps the file and parses the SafeTensors header lazily.
@@ -53,6 +74,7 @@ use std::path::Path;
 pub struct MmapModel {
     tensors: SafeTensors<'static>,
     mmap: backends::mmap::Mmap,
+    tensor_names: std::sync::Arc<[std::sync::Arc<str>]>,
 }
 
 /// Owned SafeTensors reader with buffer-backed storage.
@@ -69,6 +91,7 @@ pub struct MmapModel {
 pub struct Model {
     tensors: SafeTensors<'static>,
     buffer: Box<[u8]>,
+    tensor_names: std::sync::Arc<[std::sync::Arc<str>]>,
 }
 
 impl Model {
@@ -112,7 +135,11 @@ impl Model {
         let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
         let tensors = SafeTensors::deserialize(static_slice)?;
 
-        Ok(Self { tensors, buffer })
+        let mut names: Vec<std::sync::Arc<str>> = tensors.names().iter().map(|s| (*s).into()).collect();
+        names.sort_unstable();
+        let tensor_names: std::sync::Arc<[std::sync::Arc<str>]> = names.into();
+
+        Ok(Self { tensors, buffer, tensor_names })
     }
 
     /// Borrow the underlying serialized bytes.
@@ -144,11 +171,11 @@ impl Model {
             .map_err(ReaderError::from)
     }
 
-    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    /// Returns tensor names (cached, sorted).
     #[inline]
     #[must_use]
-    pub fn tensor_names(&self) -> Vec<&str> {
-        self.tensors.names()
+    pub fn tensor_names(&self) -> &[std::sync::Arc<str>] {
+        &self.tensor_names
     }
 
     /// Returns true when no tensors are loaded.
@@ -284,9 +311,7 @@ impl<'a> TensorView for Tensor<'a> {
 
     #[inline]
     fn dtype(&self) -> &str {
-        // Convert Dtype enum to string (e.g., Dtype::F32 -> "float32")
-        // Leak the String to return a static str - dtype strings are tiny
-        Box::leak(self.0.dtype().to_string().into_boxed_str())
+        dtype_to_str(&self.0.dtype())
     }
 
     #[inline]
@@ -309,7 +334,11 @@ impl MmapModel {
         let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
         let tensors = SafeTensors::deserialize(static_slice)?;
 
-        Ok(Self { tensors, mmap })
+        let mut names: Vec<std::sync::Arc<str>> = tensors.names().iter().map(|s| (*s).into()).collect();
+        names.sort_unstable();
+        let tensor_names: std::sync::Arc<[std::sync::Arc<str>]> = names.into();
+
+        Ok(Self { tensors, mmap, tensor_names })
     }
 
     /// Access the parsed `SafeTensors` structure.
@@ -327,11 +356,11 @@ impl MmapModel {
             .map_err(ReaderError::from)
     }
 
-    /// Returns tensor names without requiring the `TensorMetadata` trait in scope.
+    /// Returns tensor names (cached, sorted).
     #[inline]
     #[must_use]
-    pub fn tensor_names(&self) -> Vec<&str> {
-        self.tensors.names()
+    pub fn tensor_names(&self) -> &[std::sync::Arc<str>] {
+        &self.tensor_names
     }
 
     /// Returns true when no tensors are mapped.
@@ -375,8 +404,8 @@ impl TensorMetadata for MmapModel {
     }
 
     #[inline]
-    fn tensor_names(&self) -> Vec<&str> {
-        self.tensors.names()
+    fn tensor_names(&self) -> &[std::sync::Arc<str>] {
+        MmapModel::tensor_names(self)
     }
 }
 
@@ -401,8 +430,8 @@ impl TensorMetadata for Model {
     }
 
     #[inline]
-    fn tensor_names(&self) -> Vec<&str> {
-        self.tensors.names()
+    fn tensor_names(&self) -> &[std::sync::Arc<str>] {
+        Model::tensor_names(self)
     }
 }
 
@@ -428,12 +457,13 @@ mod tests {
     fn owned_from_bytes_roundtrips_and_clones() {
         let bytes = sample_bytes();
         let owned = Model::from_bytes(bytes.clone()).expect("parse");
-        assert_eq!(owned.tensor_names(), vec!["tensor"]);
+        assert_eq!(owned.tensor_names().len(), 1);
+        assert_eq!(owned.tensor_names()[0].as_ref(), "tensor");
         assert_eq!(owned.as_bytes(), bytes.as_slice());
         assert_eq!(owned.tensor("tensor").unwrap().shape(), &[4]);
         assert!(!owned.is_empty());
         let cloned = owned.clone();
-        assert_eq!(cloned.tensor_names(), vec!["tensor"]);
+        assert_eq!(cloned.tensor_names().len(), 1);
         assert_eq!(cloned.len(), 1);
     }
 
@@ -451,7 +481,8 @@ mod tests {
 
         let owned = Model::load_sync(&path).expect("load sync");
         assert!(owned.contains("tensor"));
-        assert_eq!(owned.tensor_names(), vec!["tensor"]);
+        assert_eq!(owned.tensor_names().len(), 1);
+        assert_eq!(owned.tensor_names()[0].as_ref(), "tensor");
         assert!(!owned.is_empty());
         assert_eq!(owned.tensor("tensor").unwrap().dtype(), "U8");
     }

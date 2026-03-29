@@ -940,9 +940,9 @@ mod tests {
 
                 let results = load_batch(&requests).await.unwrap();
                 assert_eq!(results.len(), 3);
-                assert_eq!(results[0].0, &data[0..10]);
-                assert_eq!(results[1].0, &data[10..20]);
-                assert_eq!(results[2].0, &data[20..30]);
+                assert_eq!(results[0].0.as_ref(), &data[0..10]);
+                assert_eq!(results[1].0.as_ref(), &data[10..20]);
+                assert_eq!(results[2].0.as_ref(), &data[20..30]);
             })
         }
 
@@ -964,9 +964,9 @@ mod tests {
 
                 let results = load_batch(&requests).await.unwrap();
                 assert_eq!(results.len(), 3);
-                assert_eq!(results[0].0, b"FILE1");
-                assert_eq!(results[1].0, b"FILE2");
-                assert_eq!(results[2].0, b"DATA");
+                assert_eq!(results[0].0.as_ref(), b"FILE1");
+                assert_eq!(results[1].0.as_ref(), b"FILE2");
+                assert_eq!(results[2].0.as_ref(), b"DATA");
             })
         }
 

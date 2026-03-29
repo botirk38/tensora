@@ -24,7 +24,7 @@
 //! ```
 
 use crate::formats::safetensors::{Dtype, Model};
-use crate::formats::serverlessllm::{write_index, write_partition, IndexEntry};
+use crate::formats::serverlessllm::{write_index, write_partition, writer::TensorWriteEntry};
 use crate::formats::error::{WriterError, WriterResult};
 use std::collections::HashMap;
 use std::path::Path;
@@ -85,7 +85,7 @@ pub async fn convert_safetensors_to_serverlessllm(
     blobs.sort_by(|a, b| b.data.len().cmp(&a.data.len()));
 
     let mut partitions: Vec<Vec<u8>> = vec![Vec::new(); partition_count];
-    let mut index: HashMap<String, IndexEntry> = HashMap::with_capacity(blobs.len());
+    let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(blobs.len());
 
     for (i, blob) in blobs.into_iter().enumerate() {
         let partition_id = i.checked_rem(partition_count).unwrap_or(0);
@@ -99,7 +99,7 @@ pub async fn convert_safetensors_to_serverlessllm(
 
         index.insert(
             blob.name,
-            IndexEntry {
+            TensorWriteEntry {
                 offset,
                 size,
                 shape: blob.shape,
@@ -391,9 +391,9 @@ mod tests {
 
         // Extract tensor data from partition
         let weight_data = &partition_data
-            [weight_entry.offset as usize..(weight_entry.offset + weight_entry.size) as usize];
+            [weight_entry.offset as usize..(weight_entry.offset + weight_entry.size as u64) as usize];
         let bias_data = &partition_data
-            [bias_entry.offset as usize..(bias_entry.offset + bias_entry.size) as usize];
+            [bias_entry.offset as usize..(bias_entry.offset + bias_entry.size as u64) as usize];
 
         // Verify data matches original
         assert_eq!(weight_data, &[1u8, 2, 3, 4]);
@@ -420,16 +420,16 @@ mod tests {
 
         // Check weight metadata
         let weight = index.get("weight").unwrap();
-        assert_eq!(weight.shape, vec![4]);
-        assert_eq!(weight.stride, vec![1]);
-        assert_eq!(weight.dtype, "torch.uint8");
+        assert_eq!(&*weight.shape, &[4]);
+        assert_eq!(&*weight.stride, &[1]);
+        assert_eq!(&*weight.dtype, "torch.uint8");
         assert_eq!(weight.size, 4);
 
         // Check bias metadata
         let bias = index.get("bias").unwrap();
-        assert_eq!(bias.shape, vec![2, 3]);
-        assert_eq!(bias.stride, vec![3, 1]); // Row-major stride
-        assert_eq!(bias.dtype, "torch.uint8");
+        assert_eq!(&*bias.shape, &[2, 3]);
+        assert_eq!(&*bias.stride, &[3, 1]); // Row-major stride
+        assert_eq!(&*bias.dtype, "torch.uint8");
         assert_eq!(bias.size, 6);
     }
 

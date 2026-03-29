@@ -21,7 +21,7 @@ pub use formats::safetensors::serialize;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
-    Index, Model, MmapModel, Tensor, IndexEntry, TensorMmap,
+    Index, Model, MmapModel, Tensor, TensorMmap,
 };
 
 // Conversion functions

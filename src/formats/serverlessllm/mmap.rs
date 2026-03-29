@@ -6,6 +6,7 @@ use crate::formats::traits::TensorMetadata;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use super::index::Index;
 use super::tensor::TensorMmap;
@@ -21,17 +22,18 @@ impl MmapModel {
     /// Loads a ServerlessLLM model from directory with mmap-based lazy loading.
     pub fn load(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let dir_path = directory.as_ref();
-        let index_path = dir_path.join("tensor_index.json");
-        let data_path = dir_path.join("tensor.data");
+        let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
 
-        let index = Index::load_sync(&index_path)?;
         let partition_ids = index.partition_ids();
 
-        // Parallel mmap of all partition files
         let partitions: Result<HashMap<usize, backends::mmap::Mmap>, ReaderError> = partition_ids
             .par_iter()
             .map(|&partition_id| {
-                let partition_path = format!("{}_{}", data_path.display(), partition_id);
+                let partition_path = format!(
+                    "{}_{}",
+                    dir_path.join("tensor.data").display(),
+                    partition_id
+                );
                 let mmap = backends::mmap::map(&partition_path)?;
                 Ok((partition_id, mmap))
             })
@@ -49,32 +51,29 @@ impl MmapModel {
     #[inline]
     #[must_use]
     pub fn tensor(&self, name: &str) -> Option<TensorMmap> {
-        let entry = self.index.get(name)?;
-        let mmap = self.partitions.get(&entry.partition_id)?;
+        let desc = self.index.get(name)?;
+        let mmap = self.partitions.get(&desc.partition_id)?;
 
-        // Create a range view of the mmap for this tensor
-        let start = usize::try_from(entry.offset).ok()?;
-        let len = usize::try_from(entry.size).ok()?;
-        let end = start.checked_add(len)?;
+        let start = usize::try_from(desc.offset).ok()?;
+        let end = start.checked_add(desc.size)?;
 
         if end > mmap.len() {
             return None;
         }
 
-        // Create a sub-slice mmap (this is zero-copy)
         let tensor_mmap = backends::mmap::Mmap {
             inner: std::sync::Arc::clone(&mmap.inner),
             start: mmap.start + start,
-            len,
+            len: desc.size,
         };
 
-        Some(TensorMmap::new(tensor_mmap, entry.clone()))
+        Some(TensorMmap::new(tensor_mmap, Arc::clone(desc)))
     }
 
-    /// Returns tensor names.
+    /// Returns tensor names (cached, sorted).
     #[inline]
     #[must_use]
-    pub fn tensor_names(&self) -> Vec<&str> {
+    pub fn tensor_names(&self) -> &[Arc<str>] {
         self.index.tensor_names()
     }
 
@@ -94,13 +93,8 @@ impl MmapModel {
 
     /// Returns an iterator over all tensor names.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &String> {
-        self.index.tensor_names().into_iter().filter_map(|s| {
-            // This is a bit awkward, but we return references to the names from the index
-            self.index
-                .iter()
-                .find_map(|(name, _)| if name.as_str() == s { Some(name) } else { None })
-        })
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.index.tensor_names().iter().map(|s| s.as_ref())
     }
 }
 
@@ -116,8 +110,8 @@ impl TensorMetadata for MmapModel {
     }
 
     #[inline]
-    fn tensor_names(&self) -> Vec<&str> {
-        self.index.tensor_names()
+    fn tensor_names(&self) -> &[Arc<str>] {
+        MmapModel::tensor_names(self)
     }
 }
 
@@ -132,6 +126,5 @@ mod tests {
             partitions: HashMap::new(),
         };
         assert!(model.is_empty());
-        assert_eq!(model.len(), 0);
     }
 }

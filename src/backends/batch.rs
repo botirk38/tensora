@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub type BatchResult = (usize, Vec<u8>, usize, usize);
-pub type FlattenedResult = (Vec<u8>, usize, usize);
+pub type BatchResult = (usize, Arc<[u8]>, usize, usize);
+pub type FlattenedResult = (Arc<[u8]>, usize, usize);
 
 #[derive(Debug, Clone)]
 pub struct IndexedRequest {
@@ -32,7 +33,8 @@ pub fn group_requests_by_file(
 
 /// Flattens per-file results into the original request order.
 pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
-    let mut indexed: Vec<(usize, Vec<u8>, usize, usize)> = results.into_iter().flatten().collect();
+    let mut indexed: Vec<(usize, Arc<[u8]>, usize, usize)> =
+        results.into_iter().flatten().collect();
     indexed.sort_unstable_by_key(|(idx, _, _, _)| *idx);
     indexed
         .into_iter()
@@ -42,8 +44,9 @@ pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BatchResult, flatten_results, group_requests_by_file};
+    use super::{flatten_results, group_requests_by_file, BatchResult};
     use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn test_group_requests_by_file_single_file() {
@@ -103,38 +106,41 @@ mod tests {
 
     #[test]
     fn test_flatten_results_all_success() {
-        let results = vec![
-            vec![(0, vec![1, 2, 3], 0, 3), (2, vec![7, 8, 9], 200, 3)],
-            vec![(1, vec![4, 5, 6], 100, 3)],
+        let results: Vec<Vec<BatchResult>> = vec![
+            vec![
+                (0, Arc::new([1u8, 2, 3]), 0, 3),
+                (2, Arc::new([7u8, 8, 9]), 200, 3),
+            ],
+            vec![(1, Arc::new([4u8, 5, 6]), 100, 3)],
         ];
 
         let flattened = flatten_results(results);
 
         assert_eq!(flattened.len(), 3);
-        assert_eq!(flattened[0], (vec![1, 2, 3], 0, 3));
-        assert_eq!(flattened[1], (vec![4, 5, 6], 100, 3));
-        assert_eq!(flattened[2], (vec![7, 8, 9], 200, 3));
+        assert_eq!(flattened[0].0.as_ref(), &[1, 2, 3]);
+        assert_eq!(flattened[1].0.as_ref(), &[4, 5, 6]);
+        assert_eq!(flattened[2].0.as_ref(), &[7, 8, 9]);
     }
 
     #[test]
     fn test_flatten_results_preserves_order() {
-        let results = vec![
-            vec![(3, vec![40], 300, 1), (1, vec![20], 100, 1)],
+        let results: Vec<Vec<BatchResult>> = vec![
+            vec![(3, Arc::new([40u8]), 300, 1), (1, Arc::new([20u8]), 100, 1)],
             vec![
-                (0, vec![10], 0, 1),
-                (2, vec![30], 200, 1),
-                (4, vec![50], 400, 1),
+                (0, Arc::new([10u8]), 0, 1),
+                (2, Arc::new([30u8]), 200, 1),
+                (4, Arc::new([50u8]), 400, 1),
             ],
         ];
 
         let flattened = flatten_results(results);
 
         assert_eq!(flattened.len(), 5);
-        assert_eq!(flattened[0].0, vec![10]);
-        assert_eq!(flattened[1].0, vec![20]);
-        assert_eq!(flattened[2].0, vec![30]);
-        assert_eq!(flattened[3].0, vec![40]);
-        assert_eq!(flattened[4].0, vec![50]);
+        assert_eq!(flattened[0].0.as_ref(), &[10]);
+        assert_eq!(flattened[1].0.as_ref(), &[20]);
+        assert_eq!(flattened[2].0.as_ref(), &[30]);
+        assert_eq!(flattened[3].0.as_ref(), &[40]);
+        assert_eq!(flattened[4].0.as_ref(), &[50]);
     }
 
     #[test]
