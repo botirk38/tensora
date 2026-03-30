@@ -445,6 +445,8 @@ pub async fn load_range_batch(
 
 /// Write an entire buffer to a file, creating or truncating it first.
 ///
+/// Handles large buffers by writing in chunks to ensure complete writes.
+///
 /// # Errors
 ///
 /// - File cannot be created or written to
@@ -452,35 +454,20 @@ pub async fn load_range_batch(
 #[inline]
 pub async fn write_all(path: impl AsRef<Path>, data: Vec<u8>) -> IoResult<()> {
     let path_ref = path.as_ref();
-    if data.is_empty() {
+    let len = data.len();
+
+    if len == 0 {
         let file = open_direct_write_io_uring(path_ref).await?;
         file.sync_all().await?;
         return file.close().await;
     }
 
-    let len = data.len();
+    const MAX_CHUNK_SIZE: usize = 256 * 1024 * 1024; // 256 MB per submission
 
-    let write_with_file = |file: UringFile, buf: Vec<u8>, expected_len: usize| async move {
-        let (res, written_buf) = file.write_at(buf, 0).submit().await;
-        let n = res?;
-        drop(written_buf);
-        if n < expected_len {
-            file.close().await?;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
-                format!("expected to write {} bytes, wrote {}", expected_len, n),
-            ));
-        }
-        file.sync_all().await?;
-        file.close().await
-    };
-
-    if !can_use_direct_write(len) {
-        let file = UringFile::create(path_ref).await?;
-        return write_with_file(file, data, len).await;
-    }
-
-    let aligned_data = if data.as_ptr().align_offset(BLOCK_SIZE) == 0 {
+    // Prepare aligned buffer if needed for direct I/O
+    let use_direct = can_use_direct_write(len);
+    let needs_alignment = data.as_ptr().align_offset(BLOCK_SIZE) != 0;
+    let buffer = if !use_direct || !needs_alignment {
         data
     } else {
         let mut buf = alloc_aligned(len)?;
@@ -488,8 +475,41 @@ pub async fn write_all(path: impl AsRef<Path>, data: Vec<u8>) -> IoResult<()> {
         buf
     };
 
-    let file = open_direct_write_io_uring(path_ref).await?;
-    write_with_file(file, aligned_data, len).await
+    let file = UringFile::create(path_ref).await?;
+    write_chunks_loop(file, &buffer, len, MAX_CHUNK_SIZE).await
+}
+
+async fn write_chunks_loop(
+    file: UringFile,
+    data: &[u8],
+    expected_len: usize,
+    chunk_size: usize,
+) -> IoResult<()> {
+    let mut offset = 0;
+
+    while offset < expected_len {
+        let this_chunk = std::cmp::min(chunk_size, expected_len - offset);
+        let chunk = &data[offset..][..this_chunk];
+
+        let (res, _) = file.write_at(chunk.to_vec(), offset as u64).submit().await;
+        let n = res?;
+
+        if n == 0 {
+            file.close().await?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!(
+                    "write returned zero bytes at offset {} while writing {} bytes",
+                    offset, expected_len
+                ),
+            ));
+        }
+
+        offset += n;
+    }
+
+    file.sync_all().await?;
+    file.close().await
 }
 
 // ---------------------------------------------------------------------------
