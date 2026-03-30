@@ -175,58 +175,6 @@ fn profile_load_mmap(config: &ProfileConfig) -> ProfileResult {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
-    let fixtures = fixtures(config)?;
-    for (fixture, dir) in fixtures {
-        let iterations = config.normalized_iterations();
-        let cache_label = if config.cold_cache { "cold" } else { "warm" };
-        let mut durations = Vec::with_capacity(iterations);
-        let label = if default { "default" } else { "async" };
-
-        println!(
-            "Running {label} serverlessllm load for '{}' ({iterations}x {cache_label})",
-            fixture
-        );
-        let mut builder = tokio_uring::builder();
-        builder.entries(32);
-        builder.start(async {
-            for i in 0..iterations {
-                if config.cold_cache && i == 0 {
-                    drop_page_cache_for_dir(&dir);
-                }
-                let start = Instant::now();
-                let model = if default {
-                    serverlessllm::Model::load(&dir).await?
-                } else {
-                    serverlessllm::Model::load_async(&dir).await?
-                };
-                let elapsed = start.elapsed();
-                durations.push(elapsed);
-                let bytes: usize = (&model).into_iter().map(|(_, t)| t.data().len()).sum();
-                println!(
-                    "  iteration {}: {} tensors, {} bytes, {:.2}ms",
-                    i + 1,
-                    model.len(),
-                    bytes,
-                    elapsed.as_secs_f64() * 1000.0
-                );
-                black_box((model.len(), bytes));
-            }
-
-            if let Some(summary) = summarize(&durations) {
-                println!(
-                    "  summary: mean {:.2}ms | min {:.2}ms | max {:.2}ms",
-                    summary.mean_ms, summary.min_ms, summary.max_ms
-                );
-            }
-            Ok::<_, tensor_store::ReaderError>(())
-        })?;
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
 fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
     let fixtures = fixtures(config)?;
     let rt = tokio::runtime::Runtime::new()?;

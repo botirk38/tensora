@@ -1,4 +1,20 @@
-//! io_uring-based async I/O backend for Linux.
+//! io_uring-based explicit I/O backend for Linux.
+//!
+//! This backend provides specialized Linux I/O using the `io_uring` interface directly,
+//! as opposed to the default `AsyncReader`/`AsyncWriter` which are Tokio-backed on all
+//! platforms.
+//!
+//! Use this directly when you want explicit io_uring behavior on Linux. On other
+//! platforms this module is not available.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use tensor_store::backends::io_uring::Reader;
+//!
+//! let mut reader = Reader::new();
+//! let data = reader.load("model.bin").await?;
+//! ```
 
 use super::odirect::{
     OwnedAlignedBuffer, align_to_block, can_use_direct_read,
@@ -131,14 +147,14 @@ fn build_chunk_requests(
         .collect()
 }
 
-pub(crate) struct IoUringReader;
+pub struct Reader;
 
-impl IoUringReader {
-    pub(crate) const fn new() -> Self {
+impl Reader {
+    pub const fn new() -> Self {
         Self
     }
 
-    pub(crate) async fn load(&mut self, path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
+    pub async fn load(&mut self, path: impl AsRef<Path> + Send) -> IoResult<Vec<u8>> {
         let path_buf = path.as_ref().to_path_buf();
         let stat = tokio_uring::fs::statx(&path_buf).await?;
         let file_size = statx_file_size(stat)?;
@@ -214,7 +230,7 @@ impl IoUringReader {
         buffer.into_vec(file_size)
     }
 
-    pub(crate) async fn load_range(&mut self, path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
+    pub async fn load_range(&mut self, path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<Vec<u8>> {
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -245,7 +261,7 @@ impl IoUringReader {
         Ok(buf.into_inner())
     }
 
-    pub(crate) async fn load_range_batch(&mut self, requests: &[BatchRequest]) -> IoResult<Vec<FlattenedResult>> {
+    pub async fn load_range_batch(&mut self, requests: &[BatchRequest]) -> IoResult<Vec<FlattenedResult>> {
         use super::batch::group_requests_by_file;
 
         if requests.is_empty() {
@@ -316,21 +332,27 @@ impl IoUringReader {
     }
 }
 
+impl Default for Reader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 type ReaderResult<T> = Result<T, std::io::Error>;
 
-pub(crate) struct IoUringWriter {
+pub struct Writer {
     file: Option<UringFile>,
     path: std::path::PathBuf,
 }
 
-impl std::fmt::Debug for IoUringWriter {
+impl std::fmt::Debug for Writer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IoUringWriter").finish_non_exhaustive()
+        f.debug_struct("Writer").finish_non_exhaustive()
     }
 }
 
-impl IoUringWriter {
-    pub(crate) async fn create(path: &Path) -> IoResult<Self> {
+impl Writer {
+    pub async fn create(path: &Path) -> IoResult<Self> {
         if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -338,7 +360,7 @@ impl IoUringWriter {
         Ok(Self { file: Some(file), path: path.to_path_buf() })
     }
 
-    pub(crate) async fn write_all(&mut self, data: Vec<u8>) -> IoResult<()> {
+    pub async fn write_all(&mut self, data: Vec<u8>) -> IoResult<()> {
         let file = self.file.take().ok_or_else(|| std::io::Error::other("writer closed"))?;
         let _ = file.close().await;
         
@@ -364,7 +386,7 @@ impl IoUringWriter {
         Ok(())
     }
 
-    pub(crate) async fn write_at(&mut self, offset: u64, data: Vec<u8>) -> IoResult<()> {
+    pub async fn write_at(&mut self, offset: u64, data: Vec<u8>) -> IoResult<()> {
         let file = self.file.as_mut().ok_or_else(|| std::io::Error::other("writer closed"))?;
         
         let mut written = 0usize;
@@ -382,7 +404,7 @@ impl IoUringWriter {
         Ok(())
     }
 
-    pub(crate) async fn sync_all(&mut self) -> IoResult<()> {
+    pub async fn sync_all(&mut self) -> IoResult<()> {
         let file = self.file.as_ref().ok_or_else(|| std::io::Error::other("writer closed"))?;
         file.sync_all().await
     }

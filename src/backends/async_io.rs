@@ -59,12 +59,16 @@ impl TokioReader {
         for (path, reqs) in grouped {
             for req in reqs {
                 let path_buf = path.clone();
-                let handle = tokio::task::spawn_blocking(move || {
+                let handle = tokio::task::spawn_blocking(move || -> std::io::Result<(usize, Arc<[u8]>, usize, usize)> {
                     let mut file = std::fs::File::open(&path_buf)?;
+                    use std::io::{Read, Seek};
                     file.seek(std::io::SeekFrom::Start(req.offset))?;
                     let mut buf = get_buffer_pool().get(req.len);
-                    std::io::Read::read_exact(&mut file, &mut buf[..])?;
-                    Ok((req.idx, buf.into_inner().into(), 0, req.len))
+                    Read::read_exact(&mut file, &mut buf[..])?;
+                    let idx = req.idx;
+                    let len = req.len;
+                    let data: Arc<[u8]> = buf.into_inner().into();
+                    Ok((idx, data, 0, len))
                 });
                 handles.push(handle);
             }

@@ -112,11 +112,15 @@ fn total_size(dir: &Path) -> std::io::Result<u64> {
 
 #[cfg(target_os = "linux")]
 fn demo_async(config: &DemoConfig) -> DemoResult {
-    println!("=== ServerlessLLM Async Sequential Loading Demo (io_uring) ===\n");
+    println!("=== ServerlessLLM Async Sequential Loading Demo (tokio) ===\n");
 
     let fixtures = fixtures(config)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(num_cpus::get())
+        .enable_all()
+        .build()?;
 
-    tokio_uring::start(async {
+    rt.block_on(async {
         for (name, dir) in fixtures {
             println!("Fixture: {}", name);
 
@@ -143,46 +147,6 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
 
             crate::io_metrics::display_io_metrics_delta(io_before, duration);
             println!();
-        }
-
-        Ok::<_, Box<dyn std::error::Error>>(())
-    })?;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn demo_async(config: &DemoConfig) -> DemoResult {
-    println!("=== ServerlessLLM Async Sequential Loading Demo (tokio) ===\n");
-
-    let fixtures = fixtures(config)?;
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_cpus::get())
-        .enable_all()
-        .build()?;
-
-    rt.block_on(async {
-        for (name, dir) in fixtures {
-            println!("Fixture: {}", name);
-
-            let total_size_bytes = total_size(&dir)?;
-            let partition_count = count_partitions(&dir);
-
-            println!("  Directory: model_serverlessllm/");
-            println!("  Size: {}", format_bytes(total_size_bytes));
-            println!("  Partitions: {}", partition_count);
-
-            let start = Instant::now();
-            let model = serverlessllm::Model::load(&dir).await?;
-            let duration = start.elapsed();
-
-            println!("  Loaded in: {:.2}ms", duration.as_secs_f64() * 1000.0);
-
-            let tensor_count = model.len();
-            println!("  Tensors: {}", tensor_count);
-
-            let throughput = total_size_bytes as f64 / duration.as_secs_f64() / 1e9;
-            println!("  Throughput: {:.2} GB/s\n", throughput);
         }
 
         Ok::<_, Box<dyn std::error::Error>>(())

@@ -3,38 +3,55 @@
 //! This module provides zero-copy I/O operations optimized for large tensor files.
 //! The API is impl-based: readers and writers are concrete types with methods.
 //!
-//! # Platform Support
+//! # Default Async Backend
 //!
-//! - **Linux**: `io_uring` backend for async operations (maximum performance)
-//! - **macOS/Windows**: Async API delegates to tokio-based async
-//! - **Sync operations**: memory-mapped I/O on Linux, standard file I/O elsewhere
+//! `AsyncReader` and `AsyncWriter` are backed by Tokio on all platforms, providing
+//! portable async I/O. They are lightweight wrappers around ` TokioReader` and
+//! `TokioWriter` respectively.
+//!
+//! # Explicit io_uring Backend
+//!
+//! On Linux, an explicit `io_uring`-based backend is available at `backends::io_uring`.
+//! It exposes `Reader` and `Writer` types for specialized Linux workloads. Use it
+//! directly when you need Linux-specific io_uring behavior.
+//!
+//! # Sync Operations
+//!
+//! `SyncReader` and `SyncWriter` use memory-mapped I/O on Linux and standard file
+//! I/O elsewhere.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use tensor_store::backends::{AsyncReader, AsyncWriter};
+//! use tensor_store::backends::{AsyncReader, AsyncWriter, SyncReader};
 //! use std::path::Path;
 //!
-//! // Async reader operations
+//! // Tokio-backed async (portable)
 //! let mut reader = AsyncReader::new();
 //! let data = reader.load(Path::new("model.safetensors")).await?;
 //!
-//! // Async writer operations - stateful and path-bound
+//! // Async writer - stateful and path-bound
 //! let mut writer = AsyncWriter::create(Path::new("output.bin")).await?;
 //! writer.write_at(0, data).await?;
 //! writer.sync_all().await?;
 //!
-//! // Sync equivalents
+//! // Sync reader
 //! let mut sync_reader = SyncReader::new();
 //! let chunk = sync_reader.load_range(Path::new("model.safetensors"), 1024, 512)?;
+//!
+//! // Explicit io_uring backend (Linux only)
+//! #[cfg(target_os = "linux")]
+//! {
+//!     use tensor_store::backends::io_uring::Reader as IoUringReader;
+//!     let mut reader = IoUringReader::new();
+//!     let data = reader.load(Path::new("model.safetensors")).await?;
+//! }
 //! ```
 
-#[cfg(not(target_os = "linux"))]
 mod async_io;
 pub mod batch;
 pub mod buffer_slice;
-#[cfg(target_os = "linux")]
-mod io_uring;
+pub mod io_uring;
 pub mod mmap;
 #[cfg(target_os = "linux")]
 mod odirect;
@@ -66,26 +83,13 @@ pub fn get_buffer_pool() -> &'static BufferPool {
     })
 }
 
-#[cfg(target_os = "linux")]
-pub struct AsyncReader {
-    inner: io_uring::IoUringReader,
-}
-
-#[cfg(not(target_os = "linux"))]
 pub struct AsyncReader {
     inner: async_io::TokioReader,
 }
 
 impl AsyncReader {
     pub fn new() -> Self {
-        #[cfg(target_os = "linux")]
-        {
-            Self { inner: io_uring::IoUringReader::new() }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Self { inner: async_io::TokioReader::new() }
-        }
+        Self { inner: async_io::TokioReader::new() }
     }
 
     pub async fn load(&mut self, path: impl AsRef<std::path::Path> + Send) -> IoResult<Vec<u8>> {
@@ -135,28 +139,14 @@ impl Default for SyncReader {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub struct AsyncWriter {
-    inner: io_uring::IoUringWriter,
-}
-
-#[cfg(not(target_os = "linux"))]
 pub struct AsyncWriter {
     inner: async_io::TokioWriter,
 }
 
 impl AsyncWriter {
     pub async fn create(path: impl AsRef<std::path::Path>) -> IoResult<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            let inner = io_uring::IoUringWriter::create(path.as_ref()).await?;
-            Ok(Self { inner })
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let inner = async_io::TokioWriter::create(path.as_ref()).await?;
-            Ok(Self { inner })
-        }
+        let inner = async_io::TokioWriter::create(path.as_ref()).await?;
+        Ok(Self { inner })
     }
 
     pub async fn write_all(&mut self, data: Vec<u8>) -> IoResult<()> {

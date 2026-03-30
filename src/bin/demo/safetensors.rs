@@ -83,11 +83,15 @@ fn fixtures(config: &DemoConfig) -> Result<Vec<(String, PathBuf)>, DemoError> {
 
 #[cfg(target_os = "linux")]
 fn demo_async(config: &DemoConfig) -> DemoResult {
-    println!("=== SafeTensors Async Sequential Loading Demo (io_uring) ===\n");
+    println!("=== SafeTensors Async Sequential Loading Demo (tokio) ===\n");
 
     let fixtures = fixtures(config)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(num_cpus::get())
+        .enable_all()
+        .build()?;
 
-    tokio_uring::start(async {
+    rt.block_on(async {
         for (name, path) in fixtures {
             println!("Fixture: {}", name);
 
@@ -111,43 +115,6 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
 
             crate::io_metrics::display_io_metrics_delta(io_before, duration);
             println!();
-        }
-
-        Ok::<_, tensor_store::ReaderError>(())
-    })?;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn demo_async(config: &DemoConfig) -> DemoResult {
-    println!("=== SafeTensors Async Sequential Loading Demo (tokio) ===\n");
-
-    let fixtures = fixtures(config)?;
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_cpus::get())
-        .enable_all()
-        .build()?;
-
-    rt.block_on(async {
-        for (name, path) in fixtures {
-            println!("Fixture: {}", name);
-
-            let file_size = std::fs::metadata(path.join("model.safetensors"))?.len();
-            println!("  Dir: {}", path.file_name().unwrap().to_str().unwrap());
-            println!("  Size: {}", format_bytes(file_size));
-
-            let start = Instant::now();
-            let data = safetensors::Model::load(&path).await?;
-            let duration = start.elapsed();
-
-            println!("  Loaded in: {:.2}ms", duration.as_secs_f64() * 1000.0);
-
-            let tensor_count = data.tensor_names().len();
-            println!("  Tensors: {}", tensor_count);
-
-            let throughput = file_size as f64 / duration.as_secs_f64() / 1e9;
-            println!("  Throughput: {:.2} GB/s\n", throughput);
         }
 
         Ok::<_, tensor_store::ReaderError>(())

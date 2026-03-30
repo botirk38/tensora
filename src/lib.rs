@@ -31,20 +31,13 @@ pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverl
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    /// Run an async block. Uses io_uring on Linux, tokio on other platforms.
+    /// Run an async block using Tokio on all platforms.
     pub fn run_async<F>(f: F) -> F::Output
     where
         F: std::future::Future,
     {
-        #[cfg(target_os = "linux")]
-        {
-            tokio_uring::start(f)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            tokio::runtime::Runtime::new()
-                .expect("tokio runtime creation failed")
-                .block_on(f)
-        }
+        tokio::runtime::Runtime::new()
+            .expect("tokio runtime creation failed")
+            .block_on(f)
     }
 }
