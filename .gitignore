@@ -67,6 +67,10 @@ doc/
 fixtures/**
 !fixtures/.gitkeep
 
+# Python binding fixtures
+bindings/python/fixtures/**
+!bindings/python/fixtures/.gitkeep
+
 # Environment and local config
 .env
 .env.local
