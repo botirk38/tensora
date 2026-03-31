@@ -159,6 +159,10 @@ impl AsyncReader {
         self.inner.load(path).await
     }
 
+    pub async fn load_batch(&mut self, paths: &[PathBuf]) -> IoResult<Vec<byte::OwnedBytes>> {
+        self.inner.load_batch(paths).await
+    }
+
     pub async fn load_range(&mut self, path: impl AsRef<std::path::Path> + Send, offset: u64, len: usize) -> IoResult<byte::OwnedBytes> {
         self.inner.load_range(path, offset, len).await
     }
@@ -185,6 +189,10 @@ impl SyncReader {
 
     pub fn load(&mut self, path: impl AsRef<std::path::Path>) -> IoResult<byte::OwnedBytes> {
         self.inner.load(path)
+    }
+
+    pub fn load_batch(&mut self, paths: &[PathBuf]) -> IoResult<Vec<byte::OwnedBytes>> {
+        self.inner.load_batch(paths)
     }
 
     pub fn load_range(&mut self, path: impl AsRef<std::path::Path>, offset: u64, len: usize) -> IoResult<byte::OwnedBytes> {

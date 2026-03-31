@@ -276,6 +276,24 @@ impl SyncReaderEngine {
         }
     }
 
+    pub(crate) fn load_batch(
+        &mut self,
+        paths: &[std::path::PathBuf],
+    ) -> IoResult<Vec<super::byte::OwnedBytes>> {
+        #[cfg(target_os = "linux")]
+        {
+            use rayon::prelude::*;
+
+            paths.par_iter()
+                .map(|path| linux::load(path))
+                .collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            paths.iter().map(|path| portable::load(path)).collect()
+        }
+    }
+
     pub(crate) fn load_range(&mut self, path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<super::byte::OwnedBytes> {
         #[cfg(target_os = "linux")]
         {

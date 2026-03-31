@@ -35,6 +35,43 @@ impl TokioReader {
         .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
+    pub(crate) async fn load_batch(&mut self, paths: &[std::path::PathBuf]) -> IoResult<Vec<OwnedBytes>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut handles: Vec<tokio::task::JoinHandle<std::io::Result<OwnedBytes>>> =
+            Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = path.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                use std::fs::File;
+                use std::io::Read;
+
+                let mut file = File::open(&path)?;
+                let len = usize::try_from(file.metadata()?.len())
+                    .map_err(|_| std::io::Error::other("file too large"))?;
+                if len == 0 {
+                    return Ok(OwnedBytes::Shared(Arc::new([])));
+                }
+                let mut buf = get_buffer_pool().get(len);
+                file.read_exact(&mut buf[..])?;
+                Ok(OwnedBytes::from_pooled(buf))
+            });
+            handles.push(handle);
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            results.push(
+                handle
+                    .await
+                    .map_err(|_| std::io::Error::other("spawn_blocking panicked"))??,
+            );
+        }
+        Ok(results)
+    }
+
     pub(crate) async fn load_range(&mut self, path: impl AsRef<Path> + Send, offset: u64, len: usize) -> IoResult<OwnedBytes> {
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));

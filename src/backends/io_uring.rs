@@ -73,6 +73,27 @@ impl Reader {
         }
     }
 
+    pub fn load_batch(&mut self, paths: &[PathBuf]) -> IoResult<Vec<OwnedBytes>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let requests: Vec<BatchRequest> = paths
+            .iter()
+            .map(|path| {
+                let len = usize::try_from(File::open(path)?.metadata()?.len())
+                    .map_err(|_| std::io::Error::other("file too large"))?;
+                Ok((path.clone(), 0, len))
+            })
+            .collect::<IoResult<_>>()?;
+
+        let results = self.load_range_batch(&requests)?;
+        Ok(results
+            .into_iter()
+            .map(|(data, _, _)| OwnedBytes::Shared(data))
+            .collect())
+    }
+
     /// Load a single range.
     pub fn load_range(
         &mut self,

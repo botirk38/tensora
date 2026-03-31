@@ -6,7 +6,6 @@
 use crate::backends;
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
-use futures::future::try_join_all;
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors};
@@ -431,18 +430,10 @@ impl Model {
         }
 
         let mut reader = backends::io_uring::Reader::new()?;
-        let requests: Vec<backends::BatchRequest> = shard_paths
-            .iter()
-            .map(|shard_path| {
-                let len = usize::try_from(fs::metadata(shard_path)?.len())
-                    .map_err(|_| std::io::Error::other("file too large"))?;
-                Ok((shard_path.clone(), 0, len))
-            })
-            .collect::<ReaderResult<_>>()?;
-        let results = reader.load_range_batch(&requests)?;
-        let shards: ReaderResult<Vec<_>> = results
+        let shard_bytes = reader.load_batch(&shard_paths)?;
+        let shards: ReaderResult<Vec<_>> = shard_bytes
             .into_iter()
-            .map(|(data, _, _)| OwnedShard::from_owned(backends::byte::OwnedBytes::Shared(data)))
+            .map(OwnedShard::from_owned)
             .collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
@@ -468,21 +459,12 @@ impl Model {
             }
         }
 
-        let limit = backends::bounded_async_concurrency(
-            shard_paths.len(),
-            total_bytes,
-            max_shard_bytes,
-        );
+        let limit = backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
+        let mut reader = backends::AsyncReader::new();
         let mut shard_bytes: Vec<backends::byte::OwnedBytes> = Vec::new();
-
         for chunk in shard_paths.chunks(limit) {
-            let chunk_results = try_join_all(
-                chunk
-                    .iter()
-                    .map(|sp| async move { load_bytes_async(sp).await }),
-            )
-            .await?;
-            shard_bytes.extend(chunk_results);
+            let chunk_paths: Vec<_> = chunk.to_vec();
+            shard_bytes.extend(reader.load_batch(&chunk_paths).await?);
         }
 
         let shards: ReaderResult<Vec<_>> = shard_bytes
@@ -504,10 +486,9 @@ impl Model {
             });
         }
 
-        let shards: ReaderResult<Vec<_>> = shard_paths
-            .into_par_iter()
-            .map(|shard_path| OwnedShard::from_owned(load_bytes_sync(&shard_path)?))
-            .collect();
+        let mut reader = backends::SyncReader::new();
+        let shard_bytes = reader.load_batch(&shard_paths)?;
+        let shards: ReaderResult<Vec<_>> = shard_bytes.into_iter().map(OwnedShard::from_owned).collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
         })
