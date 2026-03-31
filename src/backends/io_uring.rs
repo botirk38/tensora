@@ -7,9 +7,10 @@
 //! - Full CQ draining per wakeup
 //! - Alignment-aware direct I/O with buffered fallback
 
+use super::batch::FlattenedResult;
 use super::byte::OwnedBytes;
 use super::odirect::{can_use_direct_read, is_block_aligned, open_direct_read_sync};
-use super::{IoResult, MAX_CHUNK_SIZE};
+use super::{BatchRequest, IoResult, MAX_CHUNK_SIZE, batch::group_requests_by_file};
 use io_uring::cqueue::CompletionQueue;
 use io_uring::{opcode, types, IoUring};
 use std::collections::HashMap;
@@ -100,22 +101,25 @@ impl Reader {
     /// Returns results in the same order as the input requests.
     pub fn load_range_batch(
         &mut self,
-        requests: &[(PathBuf, u64, usize)],
-    ) -> IoResult<Vec<(Arc<[u8]>, usize, usize)>> {
+        requests: &[BatchRequest],
+    ) -> IoResult<Vec<FlattenedResult>> {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
 
+        // Group requests by file
+        let grouped = group_requests_by_file(requests);
+
         // Open all needed files first
         self.files.clear();
-        for (path, _, _) in requests {
+        for path in grouped.keys() {
             if !self.files.contains_key(path) {
                 let file = File::open(path)?;
                 self.files.insert(path.clone(), file);
             }
         }
 
-        // Allocate mutable buffers for each request
+        // Allocate buffers for each request
         let mut buffers: Vec<OwnedBytes> = Vec::with_capacity(requests.len());
         for (_, _, len) in requests {
             buffers.push(OwnedBytes::from_vec(vec![0u8; *len]));
@@ -128,10 +132,9 @@ impl Reader {
             // Fill submission queue
             while submitted < requests.len() && self.ring.submission().capacity() > 0 {
                 let (path, offset, len) = &requests[submitted];
-                let file = self
-                    .files
-                    .get(path)
-                    .ok_or_else(|| std::io::Error::other(format!("file not found: {:?}", path)))?;
+                let file = self.files.get(path).ok_or_else(|| {
+                    std::io::Error::other(format!("file not found: {:?}", path))
+                })?;
                 let fd = file.as_raw_fd();
                 let ptr = buffers[submitted].as_mut_ptr();
 
@@ -179,7 +182,7 @@ impl Reader {
             }
         }
 
-        // Convert to (Arc<[u8]>, offset, len) format
+        // Convert to FlattenedResult: (Arc<[u8]>, offset, len)
         Ok(buffers
             .into_iter()
             .enumerate()
