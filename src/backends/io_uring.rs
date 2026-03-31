@@ -78,20 +78,11 @@ impl Reader {
             return Ok(Vec::new());
         }
 
-        let requests: Vec<BatchRequest> = paths
-            .iter()
-            .map(|path| {
-                let len = usize::try_from(File::open(path)?.metadata()?.len())
-                    .map_err(|_| std::io::Error::other("file too large"))?;
-                Ok((path.clone(), 0, len))
-            })
-            .collect::<IoResult<_>>()?;
-
-        let results = self.load_range_batch(&requests)?;
-        Ok(results
-            .into_iter()
-            .map(|(data, _, _)| OwnedBytes::Shared(data))
-            .collect())
+        let mut results = Vec::with_capacity(paths.len());
+        for path in paths {
+            results.push(self.load(path)?);
+        }
+        Ok(results)
     }
 
     /// Load a single range.
