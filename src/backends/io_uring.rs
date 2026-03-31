@@ -463,10 +463,10 @@ impl Reader {
         }
 
         // Allocate buffers for each request
-        let mut buffers: Vec<OwnedBytes> = requests
-            .iter()
-            .map(|(_, _, len)| super::get_buffer_pool().get(*len))
-            .collect();
+        let mut buffers: Vec<OwnedBytes> = Vec::with_capacity(requests.len());
+        for (_, _, len) in requests {
+            buffers.push(OwnedBytes::Pooled(super::get_buffer_pool().get(*len)));
+        }
 
         let mut pending = requests.len();
         let mut submitted = 0;
