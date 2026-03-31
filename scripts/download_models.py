@@ -309,6 +309,7 @@ def main():
                             str(convert_binary),
                             str(output_dir),
                             str(serverlessllm_dir),
+                            "--partitions",
                             str(partition_count),
                         ],
                         capture_output=True,
