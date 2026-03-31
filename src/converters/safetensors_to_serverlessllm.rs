@@ -566,6 +566,14 @@ async fn write_partition_async(
     ops: &[&CopyOp],
 ) -> WriterResult<()> {
     let path = output_dir.join(format!("tensor.data_{}", partition_id));
+
+    // Pre-size partition file
+    let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
+    {
+        let f = std::fs::File::create(&path)?;
+        f.set_len(total_size)?;
+    }
+
     let mut writer = backends::AsyncWriter::create(&path).await.map_err(WriterError::from)?;
 
     // Group ops by shard to minimize reopens
@@ -582,12 +590,13 @@ async fn write_partition_async(
                 .await
                 .map_err(WriterError::from)?;
             writer
-                .write_all(data.as_ref())
+                .write_at(op.dest_offset as u64, data.as_ref())
                 .await
                 .map_err(WriterError::from)?;
         }
     }
 
+    writer.sync_all().await.map_err(WriterError::from)?;
     Ok(())
 }
 
@@ -597,6 +606,12 @@ fn write_partition_sync_single(
     ops: &[&CopyOp],
 ) -> WriterResult<()> {
     let path = output_dir.join(format!("tensor.data_{}", partition_id));
+
+    // Pre-size partition file
+    let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
+    let f = std::fs::File::create(&path)?;
+    f.set_len(total_size)?;
+
     let mut writer = backends::SyncWriter::create(&path)?;
     let mut reader = backends::SyncReader::new();
 
@@ -610,10 +625,12 @@ fn write_partition_sync_single(
             let data =
                 reader.load_range(shard_path.clone(), op.source_offset, op.size)
                     .map_err(WriterError::from)?;
-            writer.write_all(data.as_ref()).map_err(WriterError::from)?;
+            writer.write_at(op.dest_offset as u64, data.as_ref())
+                .map_err(WriterError::from)?;
         }
     }
 
+    writer.sync_all().map_err(WriterError::from)?;
     Ok(())
 }
 
