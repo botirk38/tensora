@@ -8,7 +8,7 @@
 //! - Alignment-aware direct I/O with buffered fallback
 
 use super::byte::OwnedBytes;
-use super::odirect::{alloc_aligned, can_use_direct_read, is_block_aligned, open_direct_read_sync};
+use super::odirect::{can_use_direct_read, is_block_aligned, open_direct_read_sync};
 use super::{IoResult, MAX_CHUNK_SIZE};
 use io_uring::cqueue::CompletionQueue;
 use io_uring::{opcode, types, IoUring};
