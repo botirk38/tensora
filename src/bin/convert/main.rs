@@ -1,4 +1,3 @@
-use std::env;
 use std::process;
 
 fn default_partition_count(input_dir: &str) -> usize {
@@ -35,29 +34,40 @@ fn default_partition_count(input_dir: &str) -> usize {
     tensor_store::recommended_partition_count(total)
 }
 
-#[cfg(target_os = "linux")]
+#[derive(clap::Parser, Debug)]
+#[command(name = "convert", about = "Convert SafeTensors to ServerlessLLM format")]
+struct Args {
+    /// Input directory containing .safetensors shards
+    input_dir: String,
+
+    /// Output directory for ServerlessLLM format
+    output_dir: String,
+
+    /// Number of partitions (default: auto from model size)
+    #[arg(short, long)]
+    partitions: Option<usize>,
+
+    /// Backend to use for conversion (default: adaptive)
+    #[arg(short, long, default_value = "default")]
+    backend: Backend,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum Backend {
+    Default,
+    Sync,
+    Async,
+    #[cfg(target_os = "linux")]
+    IoUring,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    use clap::Parser;
+    let args = Args::parse();
 
-    if args.len() < 3 || args.len() > 4 {
-        eprintln!(
-            "Usage: {} <input_dir> <output_dir> [partition_count]",
-            args[0]
-        );
-        eprintln!("  input_dir must contain one or more .safetensors shards");
-        process::exit(1);
-    }
-
-    let input_dir = args.get(1).unwrap();
-    let output_dir = args.get(2).unwrap();
-    let partition_count = if args.len() == 4 {
-        args.get(3).unwrap().parse::<usize>().unwrap_or_else(|_| {
-            eprintln!("Error: partition_count must be a positive integer");
-            process::exit(1);
-        })
-    } else {
-        default_partition_count(input_dir)
-    };
+    let partition_count = args
+        .partitions
+        .unwrap_or_else(|| default_partition_count(&args.input_dir));
 
     if partition_count == 0 {
         eprintln!("Error: partition_count must be greater than 0");
@@ -65,39 +75,58 @@ fn main() {
     }
 
     println!("Converting SafeTensors to ServerlessLLM format:");
-    println!("  Input: {}", input_dir);
-    println!("  Output: {}", output_dir);
+    println!("  Input: {}", args.input_dir);
+    println!("  Output: {}", args.output_dir);
     println!("  Partitions: {}", partition_count);
+    println!("  Backend: {:?}", args.backend);
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        match tensor_store::convert_safetensors_to_serverlessllm(
-            input_dir,
-            output_dir,
-            partition_count,
-        )
-        .await
-        {
-            Ok(()) => {
-                println!("✓ Conversion completed successfully!");
-                println!("  Index: {}/tensor_index.json", output_dir);
-                println!(
-                    "  Data files: {}/tensor.data_0 ... {}/tensor.data_{}",
-                    output_dir,
-                    output_dir,
-                    partition_count - 1
-                );
+    let result = rt.block_on(async {
+        match args.backend {
+            Backend::Default => {
+                tensor_store::convert_safetensors_to_serverlessllm(
+                    &args.input_dir,
+                    &args.output_dir,
+                    partition_count,
+                )
+                .await
             }
-            Err(e) => {
-                eprintln!("Error during conversion: {}", e);
-                process::exit(1);
+            Backend::Sync => tensor_store::convert_safetensors_to_serverlessllm_sync(
+                &args.input_dir,
+                &args.output_dir,
+                partition_count,
+            ),
+            Backend::Async => {
+                tensor_store::convert_safetensors_to_serverlessllm_async(
+                    &args.input_dir,
+                    &args.output_dir,
+                    partition_count,
+                )
+                .await
             }
+            #[cfg(target_os = "linux")]
+            Backend::IoUring => tensor_store::convert_safetensors_to_serverlessllm_io_uring(
+                &args.input_dir,
+                &args.output_dir,
+                partition_count,
+            ),
         }
     });
-}
 
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("The convert binary is only available on Linux.");
-    process::exit(1);
+    match result {
+        Ok(()) => {
+            println!("Conversion completed successfully!");
+            println!("  Index: {}/tensor_index.json", args.output_dir);
+            println!(
+                "  Data files: {}/tensor.data_0 ... {}/tensor.data_{}",
+                args.output_dir,
+                args.output_dir,
+                partition_count - 1
+            );
+        }
+        Err(e) => {
+            eprintln!("Error during conversion: {}", e);
+            process::exit(1);
+        }
+    }
 }
