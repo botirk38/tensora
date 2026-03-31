@@ -262,9 +262,11 @@ fn execute_load_plan_io_uring(plan: &LoadPlan) -> ReaderResult<Tensors> {
             });
         }
     }
+
+    let mut reader = backends::io_uring::Reader::new()?;
+
     if plan.partitions.len() == 1 {
         let read = &plan.partitions[0];
-        let mut reader = backends::io_uring::Reader::new();
         let data = reader.load(&read.path).map_err(ReaderError::from)?;
         if data.len() < read.size as usize {
             return Err(ReaderError::PartitionTooSmall {
@@ -281,17 +283,16 @@ fn execute_load_plan_io_uring(plan: &LoadPlan) -> ReaderResult<Tensors> {
         }
         return Ok(tensors);
     }
+
     let requests: Vec<(PathBuf, u64, usize)> = plan
         .partitions
         .iter()
         .map(|p| (p.path.clone(), 0, p.size as usize))
         .collect();
-    let mut reader = backends::io_uring::Reader::new();
     let results = reader.load_range_batch(&requests).map_err(ReaderError::from)?;
     let max_partition_id = plan.partitions.iter().map(|r| r.partition_id).max().unwrap_or(0);
     let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
-    for (read, result) in plan.partitions.iter().zip(results) {
-        let (buf, _, _) = result;
+    for (read, (buf, _, _)) in plan.partitions.iter().zip(results) {
         if buf.len() < read.size as usize {
             return Err(ReaderError::PartitionTooSmall {
                 path: read.path.to_string_lossy().to_string(),

@@ -444,10 +444,11 @@ impl Reader {
 
     /// Load multiple ranges from multiple files in parallel using the ring.
     /// This is the high-throughput path for model loading.
+    /// Returns (Arc<[u8]>, offset, len) for each request in order.
     pub fn load_range_batch(
         &mut self,
         requests: &[(PathBuf, u64, usize)],
-    ) -> IoResult<Vec<(usize, OwnedBytes)>> {
+    ) -> IoResult<Vec<(Arc<[u8]>, usize, usize)>> {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
@@ -524,8 +525,15 @@ impl Reader {
             }
         }
 
-        // Return indexed results
-        Ok(buffers.into_iter().enumerate().collect())
+        // Convert to (Arc<[u8]>, offset, len) format
+        Ok(buffers
+            .into_iter()
+            .enumerate()
+            .map(|(idx, buf)| {
+                let (_, offset, len) = &requests[idx];
+                (buf.into_shared(), *offset as usize, *len)
+            })
+            .collect())
     }
 }
 

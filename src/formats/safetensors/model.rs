@@ -274,8 +274,7 @@ fn load_bytes_sync(path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
 }
 
 #[cfg(target_os = "linux")]
-fn load_bytes_io_uring(path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
-    let mut reader = backends::io_uring::Reader::new();
+fn load_bytes_io_uring(reader: &mut backends::io_uring::Reader, path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
     reader.load(path).map_err(Into::into)
 }
 
@@ -423,16 +422,18 @@ impl Model {
     pub fn load_io_uring(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let shard_paths = normalize_directory(path)?;
         if shard_paths.len() == 1 {
+            let mut reader = backends::io_uring::Reader::new()?;
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(
-                    load_bytes_io_uring(&shard_paths[0])?,
+                    load_bytes_io_uring(&mut reader, &shard_paths[0])?,
                 )?),
             });
         }
 
+        let mut reader = backends::io_uring::Reader::new()?;
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_iter()
-            .map(|shard_path| OwnedShard::from_owned(load_bytes_io_uring(&shard_path)?))
+            .map(|shard_path| OwnedShard::from_owned(load_bytes_io_uring(&mut reader, &shard_path)?))
             .collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
