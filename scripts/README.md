@@ -1,23 +1,23 @@
 # Scripts
 
-Utility scripts for the tensor_store project.
+This directory now keeps only the scripts that were actually useful in the final experiment flow.
 
-## Overview
+## Keepers
 
-This directory contains Python scripts for downloading model fixtures and preparing benchmark data.
-
-## Requirements
-
-- Python 3.12+
-- [uv](https://github.com/astral-sh/uv) package manager
-
-### Dependencies
-
-Managed via `pyproject.toml`:
-- `huggingface-hub` - Downloading models from HuggingFace
-- `safetensors` - Verifying SafeTensors file integrity
-- `numpy` - Numerical operations
-- `requests` - HTTP requests
+- `download_models.py`
+  - downloads SafeTensors fixtures from Hugging Face
+  - optionally converts them to `ServerlessLLM`
+- `run_anchor_reps.sh`
+  - runs 5 cold reps on the Rust anchor set
+  - writes `results/h100/profile/anchor_reps.tsv`
+- `run_full_cold_matrix.sh`
+  - runs the full Rust cold matrix across formats, fixtures, and backends
+  - writes `results/h100/profile/full_cold_matrix.tsv`
+- `run_vllm_full_matrix.sh`
+  - runs the full vLLM matrix across the fixture ladder and all benchmark loaders
+  - writes `results/h100/vllm/full_matrix.tsv`
+- `rerun_failed_vllm.sh`
+  - reruns only the failed rows from the vLLM matrix after harness/config changes
 
 ## Setup
 
@@ -26,131 +26,41 @@ cd scripts
 uv sync
 ```
 
-## Scripts
+## Typical Usage
 
-### download_models.py
-
-Downloads SafeTensors format models from HuggingFace and **automatically converts them to ServerlessLLM format**.
-
-#### Usage
+Download fixtures:
 
 ```bash
-# Download a model (automatically converts to ServerlessLLM)
-uv run python download_models.py Qwen/Qwen2-0.5B
-
-# Download with integrity verification
-uv run python download_models.py Qwen/Qwen2-0.5B --verify
-
-# Download SafeTensors only (skip ServerlessLLM conversion)
-uv run python download_models.py Qwen/Qwen2-0.5B --no-convert
-
-# Download to a custom directory
-uv run python download_models.py Qwen/Qwen2-0.5B --output-dir ./my_fixtures
-
-# Download a private model with token
-uv run python download_models.py meta-llama/Llama-2-7b-hf --token YOUR_HF_TOKEN
-
-# Override auto-calculated partition count
-uv run python download_models.py Qwen/Qwen2-0.5B --partitions 16
+uv run python download_models.py Qwen/Qwen3-8B --verify
 ```
 
-#### Arguments
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `repo` | HuggingFace repository ID (required) | - |
-| `--output-dir` | Output directory for fixtures | `../fixtures` |
-| `--token` | HuggingFace API token for private repos | None |
-| `--no-convert` | Skip ServerlessLLM conversion (SafeTensors only) | False |
-| `--partitions` | Number of partitions for conversion | Auto (based on size) |
-| `--verify` | Verify SafeTensors file integrity after download | False |
-
-#### Partition count heuristic
-
-When `--partitions` is omitted, the script uses the same default as the Rust library:
-
-`max(1, ceil(model_bytes / 512 MiB))`
-
-There is no fixed upper cap (for example 16 or 32). Pass `--partitions` explicitly to override.
-
-#### Output Structure
-
-After downloading a model, the script creates:
-
-```
-fixtures/
-└── qwen-qwen2-0.5b/
-    ├── README.md              # Model metadata and file info
-    ├── *.safetensors           # All downloaded SafeTensors shards
-    └── model_serverlessllm/   # (if --convert flag used)
-        ├── metadata.json
-        └── *.bin              # Partitioned tensor data
-```
-
-#### Features
-
-- **Automatic retry**: Retries downloads up to 3 times on failure
-- **Sharded model support**: Keeps all downloaded shards and converts the full directory
-- **Integrity verification**: Optional SHA256 hash verification
-- **Model metadata**: Creates README with model info from HuggingFace API
-- **Format conversion**: Optional conversion to ServerlessLLM format
-
-## Examples
-
-### Download a small model for testing
+Run Rust anchor reps:
 
 ```bash
-# ~500MiB-class models typically auto-convert to 1 ServerlessLLM partition (512 MiB target size)
-uv run python download_models.py Qwen/Qwen2-0.5B --verify
+./scripts/run_anchor_reps.sh
 ```
 
-### Download a larger model
+Run the full Rust cold matrix:
 
 ```bash
-# Larger models pick higher partition counts automatically (see ceil(bytes / 512 MiB))
-uv run python download_models.py Qwen/Qwen2-1.5B --verify
+./scripts/run_full_cold_matrix.sh
 ```
 
-### Download SafeTensors only
+Run the full vLLM matrix:
 
 ```bash
-# Skip ServerlessLLM conversion
-uv run python download_models.py Qwen/Qwen2-0.5B --no-convert
+./scripts/run_vllm_full_matrix.sh
 ```
 
-### Batch download multiple models (H100 ladder)
+Rerun only failed vLLM rows after a harness update:
 
 ```bash
-# Download H100 fixture ladder
-for model in \
-    "openai-community/gpt2" \
-    "Qwen/Qwen2.5-0.5B-Instruct" \
-    "Qwen/Qwen2.5-1.5B-Instruct" \
-    "Qwen/Qwen2.5-3B-Instruct" \
-    "Qwen/Qwen2.5-7B-Instruct" \
-    "Qwen/Qwen2.5-14B-Instruct" \
-    "Qwen/Qwen2.5-32B-Instruct"; do
-    uv run python download_models.py "$model" --verify
-done
+./scripts/rerun_failed_vllm.sh
 ```
 
-## Environment Variables
+## Notes
 
-- `HF_TOKEN` - HuggingFace API token (alternative to `--token` flag)
-- `HF_HOME` - Custom HuggingFace cache directory
-
-## Troubleshooting
-
-### "No .safetensors files found"
-The model may not have SafeTensors format files. Check the model's HuggingFace page to verify SafeTensors availability.
-
-### "convert binary not found"
-Build the converter first:
-```bash
-cargo build --release --bin convert
-```
-
-### Authentication errors
-For gated models (like Llama 2), you need to:
-1. Accept the model license on HuggingFace
-2. Provide your token via `--token` or `HF_TOKEN` environment variable
+- Results are saved under `results/h100/...`.
+- The one-off debugging runners used during development were removed on purpose.
+- `run_vllm_full_matrix.sh` is resumable: it skips rows that are already recorded.
+- `rerun_failed_vllm.sh` rewrites failed rows in place after a successful retry.
