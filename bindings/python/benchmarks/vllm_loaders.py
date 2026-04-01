@@ -18,38 +18,26 @@ def _cache_root() -> str:
 def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
     from tensor_store_py._tensor_store_rust import (
         load_safetensors,
-        load_safetensors_async,
         load_safetensors_sync,
-        open_safetensors,
     )
 
     if backend == "default":
         return load_safetensors(path)
-    if backend == "async":
-        return load_safetensors_async(path)
     if backend == "sync":
         return load_safetensors_sync(path)
-    if backend == "open":
-        return open_safetensors(path)
     raise ValueError(f"unsupported backend: {backend}")
 
 
 def _load_serverlessllm(path: str, backend: str) -> dict[str, torch.Tensor]:
     from tensor_store_py._tensor_store_rust import (
         load_serverlessllm,
-        load_serverlessllm_async,
         load_serverlessllm_sync,
-        open_serverlessllm,
     )
 
     if backend == "default":
         return load_serverlessllm(path)
-    if backend == "async":
-        return load_serverlessllm_async(path)
     if backend == "sync":
         return load_serverlessllm_sync(path)
-    if backend == "open":
-        return open_serverlessllm(path)
     raise ValueError(f"unsupported backend: {backend}")
 
 
@@ -98,7 +86,7 @@ def register_tensor_store_loader() -> None:
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
                 raise ValueError(f"unsupported tensor_store format: {fmt}")
-            if backend not in {"default", "sync", "mmap"}:
+            if backend not in {"default", "sync"}:
                 raise ValueError(f"unsupported tensor_store backend: {backend}")
 
             original_load_format = self.load_config.load_format
@@ -124,10 +112,9 @@ def register_tensor_store_loader() -> None:
                 self.counter_before_loading_weights = time.perf_counter()
 
             if fmt == "safetensors":
-                for weight_file in sorted(hf_weights_files):
-                    state_dict = _load_safetensors(weight_file, backend)
-                    for name, tensor in state_dict.items():
-                        yield source.prefix + name, tensor
+                state_dict = _load_safetensors(hf_folder, backend)
+                for name, tensor in state_dict.items():
+                    yield source.prefix + name, tensor
                 return
 
             artifact_dir = _ensure_serverlessllm_artifact(

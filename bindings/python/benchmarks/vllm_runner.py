@@ -17,18 +17,18 @@ import time
 BENCHMARK_KINDS = ["load_only", "ttft", "steady_state_decode"]
 LOADERS = [
     "native",
+    "ts_safetensors_default",
     "ts_safetensors_sync",
-    "ts_safetensors_mmap",
+    "ts_serverlessllm_default",
     "ts_serverlessllm_sync",
-    "ts_serverlessllm_mmap",
 ]
 
 LOADER_CONFIG = {
     "native": None,
+    "ts_safetensors_default": {"format": "safetensors", "backend": "default"},
     "ts_safetensors_sync": {"format": "safetensors", "backend": "sync"},
-    "ts_safetensors_mmap": {"format": "safetensors", "backend": "mmap"},
+    "ts_serverlessllm_default": {"format": "serverlessllm", "backend": "default"},
     "ts_serverlessllm_sync": {"format": "serverlessllm", "backend": "sync"},
-    "ts_serverlessllm_mmap": {"format": "serverlessllm", "backend": "mmap"},
 }
 
 

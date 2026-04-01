@@ -13,10 +13,10 @@ import pytest
 
 LOADERS = [
     "native",
+    "ts_safetensors_default",
     "ts_safetensors_sync",
-    "ts_safetensors_mmap",
+    "ts_serverlessllm_default",
     "ts_serverlessllm_sync",
-    "ts_serverlessllm_mmap",
 ]
 
 BENCHMARK_KINDS = ["load_only", "ttft", "steady_state_decode"]
