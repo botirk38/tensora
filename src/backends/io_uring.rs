@@ -35,6 +35,8 @@ const SMALL_READ_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 const IO_URING_CHUNK_SIZE: usize = 512 * 1024 * 1024; // 512 MiB
 
 const WAIT_FOR_COMPLETIONS: usize = RING_DEPTH as usize;
+const COMPLETION_RING_DEPTH: u32 = RING_DEPTH * 2;
+const SQPOLL_IDLE_MS: u32 = 2_000;
 
 /// A persistent io_uring reader that reuses a single ring across operations.
 pub struct Reader {
@@ -675,9 +677,30 @@ impl Default for Writer {
 }
 
 fn build_ring() -> IoResult<IoUring> {
+    match build_ring_with_sqpoll() {
+        Ok(ring) => return Ok(ring),
+        Err(err)
+            if matches!(
+                err.raw_os_error(),
+                Some(libc::EINVAL | libc::EPERM | libc::ENOSYS)
+            ) => {}
+        Err(err) => return Err(err),
+    }
+
     IoUring::builder()
         .setup_single_issuer()
         .setup_coop_taskrun()
         .setup_submit_all()
+        .setup_cqsize(COMPLETION_RING_DEPTH)
+        .build(RING_DEPTH)
+}
+
+fn build_ring_with_sqpoll() -> IoResult<IoUring> {
+    IoUring::builder()
+        .setup_single_issuer()
+        .setup_coop_taskrun()
+        .setup_submit_all()
+        .setup_cqsize(COMPLETION_RING_DEPTH)
+        .setup_sqpoll(SQPOLL_IDLE_MS)
         .build(RING_DEPTH)
 }

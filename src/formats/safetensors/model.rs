@@ -164,21 +164,22 @@ enum LoadBackend {
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        if stats.shard_count <= 1 {
-            let sync_cost = estimate_sync_cost(stats);
-            let io_uring_cost = estimate_io_uring_cost(stats);
-            if io_uring_cost < sync_cost {
-                return LoadBackend::IoUring;
-            }
-            return LoadBackend::Sync;
-        }
         let sync_cost = estimate_sync_cost(stats);
         let async_cost = estimate_async_cost(stats);
         let io_uring_cost = estimate_io_uring_cost(stats);
-        if io_uring_cost < sync_cost && io_uring_cost < async_cost {
+
+        if stats.shard_count > 1 {
+            return LoadBackend::Sync;
+        }
+
+        if stats.total_bytes >= 512 * 1024 * 1024 || stats.max_shard_bytes >= 256 * 1024 * 1024 {
+            return LoadBackend::Sync;
+        }
+
+        if io_uring_cost * 1.10 < sync_cost && io_uring_cost < async_cost {
             return LoadBackend::IoUring;
         }
-        if async_cost < sync_cost {
+        if async_cost * 1.05 < sync_cost {
             return LoadBackend::TokioAsync;
         }
         LoadBackend::Sync
@@ -273,7 +274,10 @@ fn load_bytes_sync(path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
 }
 
 #[cfg(target_os = "linux")]
-fn load_bytes_io_uring(reader: &mut backends::io_uring::Reader, path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
+fn load_bytes_io_uring(
+    reader: &mut backends::io_uring::Reader,
+    path: &Path,
+) -> ReaderResult<backends::byte::OwnedBytes> {
     reader.load(path).map_err(Into::into)
 }
 
@@ -423,9 +427,10 @@ impl Model {
         if shard_paths.len() == 1 {
             let mut reader = backends::io_uring::Reader::new()?;
             return Ok(Self {
-                storage: ModelStorage::Single(OwnedSingleModel::from_owned(
-                    load_bytes_io_uring(&mut reader, &shard_paths[0])?,
-                )?),
+                storage: ModelStorage::Single(OwnedSingleModel::from_owned(load_bytes_io_uring(
+                    &mut reader,
+                    &shard_paths[0],
+                )?)?),
             });
         }
 
@@ -459,7 +464,8 @@ impl Model {
             }
         }
 
-        let limit = backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
+        let limit =
+            backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
         let mut reader = backends::AsyncReader::new();
         let mut shard_bytes: Vec<backends::byte::OwnedBytes> = Vec::new();
         for chunk in shard_paths.chunks(limit) {
@@ -488,7 +494,10 @@ impl Model {
 
         let mut reader = backends::SyncReader::new();
         let shard_bytes = reader.load_batch(&shard_paths)?;
-        let shards: ReaderResult<Vec<_>> = shard_bytes.into_iter().map(OwnedShard::from_owned).collect();
+        let shards: ReaderResult<Vec<_>> = shard_bytes
+            .into_iter()
+            .map(OwnedShard::from_owned)
+            .collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
         })
@@ -567,7 +576,10 @@ impl Clone for Model {
 }
 
 impl ModelTrait for Model {
-    type Tensor<'a> = Tensor<'a> where Self: 'a;
+    type Tensor<'a>
+        = Tensor<'a>
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         Model::len(self)
@@ -739,7 +751,10 @@ impl MmapModel {
 }
 
 impl ModelTrait for MmapModel {
-    type Tensor<'a> = Tensor<'a> where Self: 'a;
+    type Tensor<'a>
+        = Tensor<'a>
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         MmapModel::len(self)
@@ -881,6 +896,23 @@ mod tests {
             shard_count: 16,
             total_bytes: 256 * 1024 * 1024,
             max_shard_bytes: 32 * 1024 * 1024,
+        };
+
+        match choose_load_backend(&stats) {
+            LoadBackend::Sync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => panic!("expected Sync, got IoUring"),
+            LoadBackend::TokioAsync => panic!("expected Sync, got TokioAsync"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn choose_sync_for_large_multi_shard_model() {
+        let stats = LoadStats {
+            shard_count: 4,
+            total_bytes: 16_381_516_776,
+            max_shard_bytes: 4_095_379_194,
         };
 
         match choose_load_backend(&stats) {
