@@ -174,7 +174,9 @@ impl Writer {
             std::fs::create_dir_all(parent)?;
         }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let mut writer = backends::AsyncWriter::create(path_ref).await.map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut writer = backends::AsyncWriter::create(path_ref)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         writer.write_all(&buffer).await.map_err(WriterError::from)
     }
 }
@@ -204,16 +206,15 @@ impl AsyncSerializer for Writer {
             .iter()
             .map(|t| {
                 let dtype = dtype_from_str(&t.dtype).map_err(WriterError::InvalidInput)?;
-                let view = TensorView::new(
-                    dtype,
-                    t.shape.clone(),
-                    t.data.as_slice(),
-                ).map_err(|e| WriterError::InvalidInput(e.to_string()))?;
+                let view = TensorView::new(dtype, t.shape.clone(), t.data.as_slice())
+                    .map_err(|e| WriterError::InvalidInput(e.to_string()))?;
                 Ok::<_, WriterError>((t.name.as_str(), view))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let writer = Writer::new();
-        writer.write_to_file_async(views, data.metadata.clone(), path).await
+        writer
+            .write_to_file_async(views, data.metadata.clone(), path)
+            .await
     }
 }
 
@@ -226,11 +227,8 @@ impl SyncSerializer for Writer {
             .iter()
             .map(|t| {
                 let dtype = dtype_from_str(&t.dtype).map_err(WriterError::InvalidInput)?;
-                let view = TensorView::new(
-                    dtype,
-                    t.shape.clone(),
-                    t.data.as_slice(),
-                ).map_err(|e| WriterError::InvalidInput(e.to_string()))?;
+                let view = TensorView::new(dtype, t.shape.clone(), t.data.as_slice())
+                    .map_err(|e| WriterError::InvalidInput(e.to_string()))?;
                 Ok::<_, WriterError>((t.name.as_str(), view))
             })
             .collect::<Result<Vec<_>, _>>()?;

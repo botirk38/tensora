@@ -70,13 +70,15 @@ const CHECKPOINT_MIN_BUFFER_SIZE: usize = 1024 * 1024;
 pub const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
 pub const MAX_CHUNK_SIZE: usize = 128 * 1024 * 1024;
 pub const MIN_CHUNK_SIZE: usize = 32 * 1024 * 1024;
+pub const MAX_IO_URING_CHUNK_SIZE: usize = 512 * 1024 * 1024;
+pub const MAX_IO_URING_DEPTH: usize = 256;
 
 #[inline]
 pub fn calculate_chunks(file_size: usize) -> usize {
     if file_size == 0 {
         return 1;
     }
-    file_size.div_ceil(MAX_CHUNK_SIZE).max(1)
+    file_chunk_plan(file_size, BackendKind::Sync).chunk_count
 }
 
 /// Desired parallelism for submitting chunked I/O.
@@ -94,11 +96,154 @@ pub struct ChunkPlan {
     pub len: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    Sync,
+    Async,
+    IoUring,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FileIoPlan {
+    pub chunk_size: usize,
+    pub chunk_count: usize,
+    pub target_inflight: usize,
+    pub wait_for: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RangeBatchPlan {
+    pub target_inflight: usize,
+    pub wait_for: usize,
+    pub coalesce_window_bytes: usize,
+}
+
+#[inline]
+fn clamp_chunk_size(size: usize, max_size: usize) -> usize {
+    size.clamp(MIN_CHUNK_SIZE, max_size)
+}
+
+pub fn file_chunk_plan(file_size: usize, backend: BackendKind) -> FileIoPlan {
+    if file_size == 0 {
+        return FileIoPlan {
+            chunk_size: MIN_CHUNK_SIZE,
+            chunk_count: 1,
+            target_inflight: 1,
+            wait_for: 1,
+        };
+    }
+
+    let cpus = chunk_budget();
+    match backend {
+        BackendKind::Sync => {
+            let target_parallelism = cpus.clamp(1, 8);
+            let raw_chunk = file_size.div_ceil(target_parallelism.max(1));
+            let chunk_size = clamp_chunk_size(raw_chunk, MAX_CHUNK_SIZE);
+            let chunk_count = file_size.div_ceil(chunk_size).max(1);
+            let target_inflight = chunk_count.min(target_parallelism).max(1);
+            let wait_for = target_inflight;
+            FileIoPlan {
+                chunk_size,
+                chunk_count,
+                target_inflight,
+                wait_for,
+            }
+        }
+        BackendKind::Async => {
+            let target_parallelism = cpus.clamp(1, 8);
+            let raw_chunk = file_size.div_ceil((target_parallelism * 2).max(1));
+            let chunk_size = clamp_chunk_size(raw_chunk, MAX_CHUNK_SIZE);
+            let chunk_count = file_size.div_ceil(chunk_size).max(1);
+            let target_inflight = chunk_count.min(target_parallelism * 2).max(1);
+            let wait_for = target_inflight.min(target_parallelism).max(1);
+            FileIoPlan {
+                chunk_size,
+                chunk_count,
+                target_inflight,
+                wait_for,
+            }
+        }
+        BackendKind::IoUring => {
+            let target_depth = if file_size < 64 * 1024 * 1024 {
+                8
+            } else if file_size < 512 * 1024 * 1024 {
+                16
+            } else if file_size < 4 * 1024 * 1024 * 1024 {
+                32
+            } else {
+                64
+            };
+            let raw_chunk = file_size.div_ceil(target_depth.max(1));
+            let chunk_size = clamp_chunk_size(raw_chunk, MAX_IO_URING_CHUNK_SIZE);
+            let chunk_count = file_size.div_ceil(chunk_size).max(1);
+            let target_inflight = chunk_count.min(target_depth).clamp(1, MAX_IO_URING_DEPTH);
+            let wait_for = target_inflight.div_ceil(2).max(1);
+            FileIoPlan {
+                chunk_size,
+                chunk_count,
+                target_inflight,
+                wait_for,
+            }
+        }
+    }
+}
+
+pub fn range_batch_plan(
+    request_count: usize,
+    total_bytes: usize,
+    backend: BackendKind,
+) -> RangeBatchPlan {
+    if request_count == 0 {
+        return RangeBatchPlan {
+            target_inflight: 1,
+            wait_for: 1,
+            coalesce_window_bytes: 0,
+        };
+    }
+
+    let cpus = chunk_budget();
+    let avg_bytes = total_bytes.div_ceil(request_count).max(1);
+    match backend {
+        BackendKind::Sync => {
+            let target_inflight = request_count.min(cpus.clamp(1, 8)).max(1);
+            RangeBatchPlan {
+                target_inflight,
+                wait_for: target_inflight,
+                coalesce_window_bytes: avg_bytes.clamp(64 * 1024, 4 * 1024 * 1024),
+            }
+        }
+        BackendKind::Async => {
+            let target_inflight = request_count.min((cpus * 2).clamp(1, 16)).max(1);
+            RangeBatchPlan {
+                target_inflight,
+                wait_for: target_inflight.div_ceil(2).max(1),
+                coalesce_window_bytes: avg_bytes.clamp(128 * 1024, 8 * 1024 * 1024),
+            }
+        }
+        BackendKind::IoUring => {
+            let depth_hint = if avg_bytes <= 256 * 1024 {
+                64
+            } else if avg_bytes <= 2 * 1024 * 1024 {
+                32
+            } else {
+                16
+            };
+            let target_inflight = request_count.min(depth_hint).clamp(1, MAX_IO_URING_DEPTH);
+            RangeBatchPlan {
+                target_inflight,
+                wait_for: target_inflight.div_ceil(2).max(1),
+                coalesce_window_bytes: avg_bytes.clamp(256 * 1024, 16 * 1024 * 1024),
+            }
+        }
+    }
+}
+
 pub fn build_chunk_plan(file_size: usize) -> Vec<ChunkPlan> {
-    let chunks = calculate_chunks(file_size);
-    let chunk_size = file_size.div_ceil(chunks);
+    let plan_meta = file_chunk_plan(file_size, BackendKind::Sync);
+    let chunks = plan_meta.chunk_count;
+    let chunk_size = plan_meta.chunk_size;
     let mut plan = Vec::with_capacity(chunks);
-    
+
     for i in 0..chunks {
         let start = i * chunk_size;
         if start >= file_size {
@@ -152,10 +297,15 @@ pub struct AsyncReader {
 
 impl AsyncReader {
     pub fn new() -> Self {
-        Self { inner: async_io::TokioReader::new() }
+        Self {
+            inner: async_io::TokioReader::new(),
+        }
     }
 
-    pub async fn load(&mut self, path: impl AsRef<std::path::Path> + Send) -> IoResult<byte::OwnedBytes> {
+    pub async fn load(
+        &mut self,
+        path: impl AsRef<std::path::Path> + Send,
+    ) -> IoResult<byte::OwnedBytes> {
         self.inner.load(path).await
     }
 
@@ -163,11 +313,19 @@ impl AsyncReader {
         self.inner.load_batch(paths).await
     }
 
-    pub async fn load_range(&mut self, path: impl AsRef<std::path::Path> + Send, offset: u64, len: usize) -> IoResult<byte::OwnedBytes> {
+    pub async fn load_range(
+        &mut self,
+        path: impl AsRef<std::path::Path> + Send,
+        offset: u64,
+        len: usize,
+    ) -> IoResult<byte::OwnedBytes> {
         self.inner.load_range(path, offset, len).await
     }
 
-    pub async fn load_range_batch(&mut self, requests: &[BatchRequest]) -> IoResult<Vec<batch::FlattenedResult>> {
+    pub async fn load_range_batch(
+        &mut self,
+        requests: &[BatchRequest],
+    ) -> IoResult<Vec<batch::FlattenedResult>> {
         self.inner.load_range_batch(requests).await
     }
 }
@@ -184,7 +342,9 @@ pub struct SyncReader {
 
 impl SyncReader {
     pub fn new() -> Self {
-        Self { inner: sync_io::SyncReaderEngine::new() }
+        Self {
+            inner: sync_io::SyncReaderEngine::new(),
+        }
     }
 
     pub fn load(&mut self, path: impl AsRef<std::path::Path>) -> IoResult<byte::OwnedBytes> {
@@ -195,11 +355,19 @@ impl SyncReader {
         self.inner.load_batch(paths)
     }
 
-    pub fn load_range(&mut self, path: impl AsRef<std::path::Path>, offset: u64, len: usize) -> IoResult<byte::OwnedBytes> {
+    pub fn load_range(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        offset: u64,
+        len: usize,
+    ) -> IoResult<byte::OwnedBytes> {
         self.inner.load_range(path, offset, len)
     }
 
-    pub fn load_range_batch(&mut self, requests: &[BatchRequest]) -> IoResult<Vec<batch::FlattenedResult>> {
+    pub fn load_range_batch(
+        &mut self,
+        requests: &[BatchRequest],
+    ) -> IoResult<Vec<batch::FlattenedResult>> {
         self.inner.load_range_batch(requests)
     }
 }
@@ -258,7 +426,11 @@ impl SyncWriter {
 
 const PARALLELISM_TARGET_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
 
-pub(crate) fn bounded_async_concurrency(item_count: usize, total_bytes: u64, max_item_bytes: u64) -> usize {
+pub(crate) fn bounded_async_concurrency(
+    item_count: usize,
+    total_bytes: u64,
+    max_item_bytes: u64,
+) -> usize {
     if item_count <= 1 {
         return 1;
     }
@@ -281,9 +453,7 @@ pub(crate) fn bounded_async_concurrency(item_count: usize, total_bytes: u64, max
 
     let min_floor = item_count.clamp(2, 4).min(cpu_count);
 
-    (unbounded as usize)
-        .min(cpu_count)
-        .max(min_floor)
+    (unbounded as usize).min(cpu_count).max(min_floor)
 }
 
 #[cfg(test)]
@@ -294,5 +464,24 @@ mod tests {
     fn test_reader_construction() {
         let _ = AsyncReader::new();
         let _ = SyncReader::new();
+    }
+
+    #[test]
+    fn file_chunk_plan_scales_by_backend() {
+        let sync_plan = file_chunk_plan(8 * 1024 * 1024 * 1024, BackendKind::Sync);
+        let uring_plan = file_chunk_plan(8 * 1024 * 1024 * 1024, BackendKind::IoUring);
+
+        assert!(sync_plan.chunk_size <= MAX_CHUNK_SIZE);
+        assert!(uring_plan.chunk_size <= MAX_IO_URING_CHUNK_SIZE);
+        assert!(uring_plan.target_inflight >= sync_plan.target_inflight.min(MAX_IO_URING_DEPTH));
+    }
+
+    #[test]
+    fn range_batch_plan_prefers_deeper_io_uring_queue_for_small_requests() {
+        let sync_plan = range_batch_plan(128, 8 * 1024 * 1024, BackendKind::Sync);
+        let uring_plan = range_batch_plan(128, 8 * 1024 * 1024, BackendKind::IoUring);
+
+        assert!(uring_plan.target_inflight >= sync_plan.target_inflight);
+        assert!(uring_plan.wait_for <= uring_plan.target_inflight);
     }
 }

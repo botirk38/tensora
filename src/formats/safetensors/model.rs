@@ -96,104 +96,35 @@ fn normalize_directory(path: impl AsRef<Path>) -> ReaderResult<Vec<PathBuf>> {
 struct LoadStats {
     shard_count: usize,
     total_bytes: u64,
-    max_shard_bytes: u64,
-}
-
-const SYNC_BASE_COST_NS: f64 = 180_000.0;
-const ASYNC_BASE_COST_NS: f64 = 2_000_000.0;
-const SYNC_PER_SHARD_COST_NS: f64 = 35_000.0;
-const ASYNC_PER_SHARD_COST_NS: f64 = 150_000_000.0;
-const THROUGHPUT_BPS: f64 = 7.5 * 1024.0 * 1024.0 * 1024.0;
-const PARALLELISM_TARGET_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
-
-#[cfg(target_os = "linux")]
-const IO_URING_BASE_COST_NS: f64 = 500_000.0;
-#[cfg(target_os = "linux")]
-const IO_URING_THROUGHPUT_BPS: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
-#[cfg(target_os = "linux")]
-const IO_URING_PER_SHARD_COST_NS: f64 = 50_000.0;
-
-fn bytes_to_ns(bytes: u64, throughput_bps: f64) -> f64 {
-    (bytes as f64 / throughput_bps) * 1_000_000_000.0
-}
-
-fn effective_async_parallelism(stats: &LoadStats) -> f64 {
-    if stats.shard_count <= 1 {
-        return 1.0;
-    }
-
-    let avg_shard_bytes = stats.total_bytes.max(1) as f64 / stats.shard_count as f64;
-    let max_shard_bytes = stats.max_shard_bytes.max(1) as f64;
-    let count_factor = (stats.shard_count as f64).ln_1p();
-    let size_factor = (PARALLELISM_TARGET_BYTES / avg_shard_bytes)
-        .sqrt()
-        .clamp(0.5, 4.0);
-    let skew_factor = (max_shard_bytes / avg_shard_bytes).sqrt().clamp(1.0, 4.0);
-
-    (1.0 + count_factor * size_factor / skew_factor).clamp(1.0, stats.shard_count as f64)
-}
-
-fn estimate_sync_cost(stats: &LoadStats) -> f64 {
-    SYNC_BASE_COST_NS
-        + bytes_to_ns(stats.total_bytes, THROUGHPUT_BPS)
-        + SYNC_PER_SHARD_COST_NS * stats.shard_count as f64
-}
-
-fn estimate_async_cost(stats: &LoadStats) -> f64 {
-    let parallelism = effective_async_parallelism(stats);
-
-    ASYNC_BASE_COST_NS
-        + bytes_to_ns(stats.total_bytes, THROUGHPUT_BPS) / parallelism
-        + ASYNC_PER_SHARD_COST_NS * stats.shard_count as f64
-}
-
-#[cfg(target_os = "linux")]
-fn estimate_io_uring_cost(stats: &LoadStats) -> f64 {
-    IO_URING_BASE_COST_NS
-        + bytes_to_ns(stats.total_bytes, IO_URING_THROUGHPUT_BPS)
-        + IO_URING_PER_SHARD_COST_NS * stats.shard_count as f64
 }
 
 enum LoadBackend {
     Sync,
-    TokioAsync,
     #[cfg(target_os = "linux")]
     IoUring,
 }
 
+/// Backend selection for SafeTensors.
+///
+/// Based on repeated cold-cache measurements on H100 with multi-worker io_uring:
+/// - Single-shard models: sync wins (io_uring ring overhead dominates)
+/// - Multi-shard >= ~4 GB: io_uring wins (parallel shard reads scale well)
+/// - Multi-shard < ~4 GB: sync wins (small enough that ring setup cost outweighs gains)
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        let sync_cost = estimate_sync_cost(stats);
-        let async_cost = estimate_async_cost(stats);
-        let io_uring_cost = estimate_io_uring_cost(stats);
-
-        if stats.shard_count > 1 {
+        if stats.shard_count <= 1 {
             return LoadBackend::Sync;
         }
-
-        if stats.total_bytes >= 512 * 1024 * 1024 || stats.max_shard_bytes >= 256 * 1024 * 1024 {
-            return LoadBackend::Sync;
-        }
-
-        if io_uring_cost * 1.10 < sync_cost && io_uring_cost < async_cost {
+        if stats.total_bytes >= 4 * 1024 * 1024 * 1024 {
             return LoadBackend::IoUring;
-        }
-        if async_cost * 1.05 < sync_cost {
-            return LoadBackend::TokioAsync;
         }
         LoadBackend::Sync
     }
     #[cfg(not(target_os = "linux"))]
     {
-        if stats.shard_count <= 1 {
-            return LoadBackend::Sync;
-        }
-        if estimate_async_cost(stats) < estimate_sync_cost(stats) {
-            LoadBackend::TokioAsync
-        } else {
-            LoadBackend::Sync
-        }
+        let _ = (stats.shard_count, stats.total_bytes);
+        LoadBackend::Sync
     }
 }
 
@@ -398,16 +329,13 @@ impl Model {
     fn directory_stats(path: impl AsRef<Path>) -> ReaderResult<LoadStats> {
         let shard_paths = normalize_directory(path)?;
         let mut total_bytes = 0u64;
-        let mut max_shard_bytes = 0u64;
         for shard_path in &shard_paths {
             let size = fs::metadata(shard_path)?.len();
             total_bytes = total_bytes.saturating_add(size);
-            max_shard_bytes = max_shard_bytes.max(size);
         }
         Ok(LoadStats {
             shard_count: shard_paths.len(),
             total_bytes,
-            max_shard_bytes,
         })
     }
 
@@ -416,7 +344,6 @@ impl Model {
         match choose_load_backend(&stats) {
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => Self::load_io_uring(path),
-            LoadBackend::TokioAsync => Self::load_async(path).await,
             LoadBackend::Sync => Self::load_sync(path),
         }
     }
@@ -425,7 +352,7 @@ impl Model {
     pub fn load_io_uring(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let shard_paths = normalize_directory(path)?;
         if shard_paths.len() == 1 {
-            let mut reader = backends::io_uring::Reader::new()?;
+            let mut reader = backends::io_uring::Reader::new();
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(load_bytes_io_uring(
                     &mut reader,
@@ -434,7 +361,7 @@ impl Model {
             });
         }
 
-        let mut reader = backends::io_uring::Reader::new()?;
+        let mut reader = backends::io_uring::Reader::new();
         let shard_bytes = reader.load_batch(&shard_paths)?;
         let shards: ReaderResult<Vec<_>> = shard_bytes
             .into_iter()
@@ -879,14 +806,12 @@ mod tests {
         let stats = LoadStats {
             shard_count: 1,
             total_bytes: 2 * 1024 * 1024 * 1024,
-            max_shard_bytes: 2 * 1024 * 1024 * 1024,
         };
 
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {}
-            LoadBackend::TokioAsync => panic!("expected Sync or IoUring, got TokioAsync"),
         }
     }
 
@@ -895,31 +820,26 @@ mod tests {
         let stats = LoadStats {
             shard_count: 16,
             total_bytes: 256 * 1024 * 1024,
-            max_shard_bytes: 32 * 1024 * 1024,
         };
 
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => panic!("expected Sync, got IoUring"),
-            LoadBackend::TokioAsync => panic!("expected Sync, got TokioAsync"),
         }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn choose_sync_for_large_multi_shard_model() {
+    fn choose_io_uring_for_large_multi_shard_model() {
         let stats = LoadStats {
             shard_count: 4,
             total_bytes: 16_381_516_776,
-            max_shard_bytes: 4_095_379_194,
         };
 
         match choose_load_backend(&stats) {
-            LoadBackend::Sync => {}
-            #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => panic!("expected Sync, got IoUring"),
-            LoadBackend::TokioAsync => panic!("expected Sync, got TokioAsync"),
+            LoadBackend::IoUring => {}
+            LoadBackend::Sync => panic!("expected IoUring, got Sync"),
         }
     }
 }

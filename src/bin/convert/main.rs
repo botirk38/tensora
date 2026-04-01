@@ -35,7 +35,10 @@ fn default_partition_count(input_dir: &str) -> usize {
 }
 
 #[derive(clap::Parser, Debug)]
-#[command(name = "convert", about = "Convert SafeTensors to ServerlessLLM format")]
+#[command(
+    name = "convert",
+    about = "Convert SafeTensors to ServerlessLLM format"
+)]
 struct Args {
     /// Input directory containing .safetensors shards
     input_dir: String,

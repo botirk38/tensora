@@ -15,7 +15,7 @@
 
 use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
-use crate::formats::serverlessllm::serializer::{write_index, write_index_sync, TensorWriteEntry};
+use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
 use safetensors::SafeTensors;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -493,10 +493,7 @@ fn materialize_io_uring(output_dir: &str, plan: &ConversionPlan) -> WriterResult
     Ok(())
 }
 
-async fn materialize_async_inner(
-    output_dir: &Path,
-    plan: &ConversionPlan,
-) -> WriterResult<()> {
+async fn materialize_async_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
     // Group copy ops by destination partition
     let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
     for op in &plan.copy_ops {
@@ -511,10 +508,7 @@ async fn materialize_async_inner(
     Ok(())
 }
 
-async fn materialize_sync_inner(
-    output_dir: &Path,
-    plan: &ConversionPlan,
-) -> WriterResult<()> {
+async fn materialize_sync_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
     let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
     for op in &plan.copy_ops {
         by_partition.entry(op.dest_partition).or_default().push(op);
@@ -527,10 +521,7 @@ async fn materialize_sync_inner(
     Ok(())
 }
 
-fn materialize_sync_inner_sync(
-    output_dir: &Path,
-    plan: &ConversionPlan,
-) -> WriterResult<()> {
+fn materialize_sync_inner_sync(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
     let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
     for op in &plan.copy_ops {
         by_partition.entry(op.dest_partition).or_default().push(op);
@@ -544,10 +535,7 @@ fn materialize_sync_inner_sync(
 }
 
 #[cfg(target_os = "linux")]
-fn materialize_io_uring_inner(
-    output_dir: &Path,
-    plan: &ConversionPlan,
-) -> WriterResult<()> {
+fn materialize_io_uring_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
     let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
     for op in &plan.copy_ops {
         by_partition.entry(op.dest_partition).or_default().push(op);
@@ -574,7 +562,9 @@ async fn write_partition_async(
         f.set_len(total_size)?;
     }
 
-    let mut writer = backends::AsyncWriter::create(&path).await.map_err(WriterError::from)?;
+    let mut writer = backends::AsyncWriter::create(&path)
+        .await
+        .map_err(WriterError::from)?;
 
     // Group ops by shard to minimize reopens
     let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
@@ -622,10 +612,11 @@ fn write_partition_sync_single(
 
     for (shard_path, shard_ops) in by_shard {
         for op in shard_ops {
-            let data =
-                reader.load_range(shard_path.clone(), op.source_offset, op.size)
-                    .map_err(WriterError::from)?;
-            writer.write_at(op.dest_offset, data.as_ref())
+            let data = reader
+                .load_range(shard_path.clone(), op.source_offset, op.size)
+                .map_err(WriterError::from)?;
+            writer
+                .write_at(op.dest_offset, data.as_ref())
                 .map_err(WriterError::from)?;
         }
     }

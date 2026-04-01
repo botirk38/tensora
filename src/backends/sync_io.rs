@@ -15,7 +15,13 @@ type IndexedLoadResult = (usize, std::sync::Arc<[u8]>, usize, usize);
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::super::{get_buffer_pool, buffer_slice::BufferSlice, IoResult, batch::group_requests_by_file, byte::OwnedBytes};
+    use super::super::{
+        BackendKind, IoResult,
+        batch::{coalesce_requests, group_requests_by_file},
+        buffer_slice::BufferSlice,
+        byte::OwnedBytes,
+        file_chunk_plan, get_buffer_pool, range_batch_plan,
+    };
     use super::IndexedLoadResult;
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
@@ -29,8 +35,10 @@ mod linux {
     }
 
     pub fn load(path: &Path) -> IoResult<OwnedBytes> {
-        use super::super::odirect::{alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync};
-        use super::super::{calculate_chunks, MAX_SINGLE_READ};
+        use super::super::MAX_SINGLE_READ;
+        use super::super::odirect::{
+            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync,
+        };
 
         let mut file = File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
@@ -41,7 +49,7 @@ mod linux {
         }
 
         if len > MAX_SINGLE_READ {
-            return load_chunked(path, calculate_chunks(len));
+            return load_chunked(path, file_chunk_plan(len, BackendKind::Sync).chunk_count);
         }
 
         if can_use_direct_read(len, len) {
@@ -63,7 +71,9 @@ mod linux {
     }
 
     fn load_chunked(path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
-        use super::super::odirect::{alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync};
+        use super::super::odirect::{
+            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync,
+        };
 
         if chunks == 0 {
             return Err(std::io::Error::other("chunks must be > 0"));
@@ -72,7 +82,9 @@ mod linux {
         let file = File::open(path)?;
         let file_size = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
-        let chunk_size = div_ceil(file_size, chunks);
+        let plan = file_chunk_plan(file_size, BackendKind::Sync);
+        let chunks = chunks.min(plan.chunk_count).max(1);
+        let chunk_size = plan.chunk_size.min(div_ceil(file_size, chunks).max(1));
 
         if can_use_direct_read(file_size, chunk_size) {
             match open_direct_read_sync(path) {
@@ -102,7 +114,8 @@ mod linux {
                         .collect();
 
                     for h in handles.into_iter().flatten() {
-                        h.join().map_err(|_| std::io::Error::other("thread panicked"))??;
+                        h.join()
+                            .map_err(|_| std::io::Error::other("thread panicked"))??;
                     }
                     return Ok(OwnedBytes::Aligned(final_buf));
                 }
@@ -133,14 +146,17 @@ mod linux {
             .collect();
 
         for h in handles.into_iter().flatten() {
-            h.join().map_err(|_| std::io::Error::other("thread panicked"))??;
+            h.join()
+                .map_err(|_| std::io::Error::other("thread panicked"))??;
         }
         final_buf.truncate(file_size);
         Ok(OwnedBytes::Pooled(final_buf))
     }
 
     pub fn load_range(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-        use super::super::odirect::{alloc_aligned as alloc_aligned_buf, is_block_aligned, open_direct_read_sync};
+        use super::super::odirect::{
+            alloc_aligned as alloc_aligned_buf, is_block_aligned, open_direct_read_sync,
+        };
 
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
@@ -167,29 +183,56 @@ mod linux {
         Ok(OwnedBytes::Pooled(buf))
     }
 
-    pub fn load_range_batch(requests: &[(PathBuf, u64, usize)]) -> IoResult<Vec<IndexedLoadResult>> {
+    pub fn load_range_batch(
+        requests: &[(PathBuf, u64, usize)],
+    ) -> IoResult<Vec<IndexedLoadResult>> {
         use rayon::prelude::*;
 
         if requests.is_empty() {
             return Ok(Vec::new());
         }
 
-        let grouped = group_requests_by_file(requests);
+        let total_bytes: usize = requests.iter().map(|(_, _, len)| *len).sum();
+        let batch_plan = range_batch_plan(requests.len(), total_bytes, BackendKind::Sync);
+        let coalesced = coalesce_requests(
+            group_requests_by_file(requests),
+            batch_plan.coalesce_window_bytes,
+        );
 
-        let results = grouped
-            .into_par_iter()
-            .map(|(path, reqs)| {
-                reqs.par_iter()
-                    .map(|req| {
-                        let path = path.clone();
-                        let data = load_range(&path, req.offset, req.len)?;
-                        Ok((req.idx, data.into_shared(), 0, req.len))
-                    })
-                    .collect::<Result<Vec<_>, std::io::Error>>()
-            })
-            .collect::<Result<Vec<Vec<IndexedLoadResult>>, std::io::Error>>();
+        let concurrency = batch_plan.target_inflight.min(coalesced.len()).max(1);
+        let mut all_results = Vec::new();
+        for chunk in coalesced.chunks(concurrency) {
+            let results = chunk
+                .par_iter()
+                .map(|group| {
+                    let path = group.path.clone();
+                    let data = load_range(&path, group.offset, group.len)?;
+                    let backing = data.into_shared();
+                    let mut results = Vec::with_capacity(group.members.len());
+                    for member in &group.members {
+                        let start = member.relative_offset;
+                        let end = start.saturating_add(member.len);
+                        let slice = backing.get(start..end).ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                format!(
+                                    "coalesced slice out of bounds for request {}: {}..{} of {}",
+                                    member.idx,
+                                    start,
+                                    end,
+                                    backing.len()
+                                ),
+                            )
+                        })?;
+                        results.push((member.idx, Arc::<[u8]>::from(slice), 0, member.len));
+                    }
+                    Ok(results)
+                })
+                .collect::<Result<Vec<Vec<IndexedLoadResult>>, std::io::Error>>()?;
+            all_results.extend(results);
+        }
 
-        let mut indexed: Vec<IndexedLoadResult> = results?.into_iter().flatten().collect();
+        let mut indexed: Vec<IndexedLoadResult> = all_results.into_iter().flatten().collect();
         indexed.sort_by_key(|(idx, _, _, _)| *idx);
         Ok(indexed)
     }
@@ -201,9 +244,9 @@ mod linux {
 
 #[cfg(not(target_os = "linux"))]
 mod portable {
-    use super::super::get_buffer_pool;
     use super::super::batch::group_requests_by_file;
     use super::super::byte::OwnedBytes;
+    use super::super::get_buffer_pool;
     use super::IndexedLoadResult;
     use super::IoResult;
     use std::fs::File;
@@ -234,7 +277,9 @@ mod portable {
         Ok(OwnedBytes::Pooled(buf))
     }
 
-    pub fn load_range_batch(requests: &[(PathBuf, u64, usize)]) -> IoResult<Vec<IndexedLoadResult>> {
+    pub fn load_range_batch(
+        requests: &[(PathBuf, u64, usize)],
+    ) -> IoResult<Vec<IndexedLoadResult>> {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
@@ -283,10 +328,25 @@ impl SyncReaderEngine {
         #[cfg(target_os = "linux")]
         {
             use rayon::prelude::*;
+            let total_bytes: usize = paths
+                .iter()
+                .filter_map(|path| std::fs::metadata(path).ok())
+                .filter_map(|meta| usize::try_from(meta.len()).ok())
+                .sum();
+            let concurrency = super::file_chunk_plan(total_bytes.max(1), super::BackendKind::Sync)
+                .target_inflight
+                .min(paths.len())
+                .max(1);
 
-            paths.par_iter()
-                .map(|path| linux::load(path))
-                .collect()
+            let mut results = Vec::with_capacity(paths.len());
+            for chunk in paths.chunks(concurrency) {
+                let mut loaded: Vec<_> = chunk
+                    .par_iter()
+                    .map(|path| linux::load(path))
+                    .collect::<IoResult<_>>()?;
+                results.append(&mut loaded);
+            }
+            Ok(results)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -294,7 +354,12 @@ impl SyncReaderEngine {
         }
     }
 
-    pub(crate) fn load_range(&mut self, path: impl AsRef<Path>, offset: u64, len: usize) -> IoResult<super::byte::OwnedBytes> {
+    pub(crate) fn load_range(
+        &mut self,
+        path: impl AsRef<Path>,
+        offset: u64,
+        len: usize,
+    ) -> IoResult<super::byte::OwnedBytes> {
         #[cfg(target_os = "linux")]
         {
             linux::load_range(path.as_ref(), offset, len)
@@ -305,16 +370,25 @@ impl SyncReaderEngine {
         }
     }
 
-    pub(crate) fn load_range_batch(&mut self, requests: &[BatchRequest]) -> IoResult<Vec<super::batch::FlattenedResult>> {
+    pub(crate) fn load_range_batch(
+        &mut self,
+        requests: &[BatchRequest],
+    ) -> IoResult<Vec<super::batch::FlattenedResult>> {
         #[cfg(target_os = "linux")]
         {
             let indexed = linux::load_range_batch(requests)?;
-            Ok(indexed.into_iter().map(|(_, data, offset, len)| (data, offset, len)).collect())
+            Ok(indexed
+                .into_iter()
+                .map(|(_, data, offset, len)| (data, offset, len))
+                .collect())
         }
         #[cfg(not(target_os = "linux"))]
         {
             let indexed = portable::load_range_batch(requests)?;
-            Ok(indexed.into_iter().map(|(_, data, offset, len)| (data, offset, len)).collect())
+            Ok(indexed
+                .into_iter()
+                .map(|(_, data, offset, len)| (data, offset, len))
+                .collect())
         }
     }
 }
@@ -331,7 +405,9 @@ impl std::fmt::Debug for SyncWriterEngine {
 
 impl SyncWriterEngine {
     pub(crate) fn create(path: &Path) -> IoResult<Self> {
-        if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
             std::fs::create_dir_all(parent)?;
         }
         let file = std::fs::File::create(path)?;

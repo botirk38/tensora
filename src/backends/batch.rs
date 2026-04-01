@@ -19,6 +19,21 @@ pub struct IndexedRequest {
     pub len: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct CoalescedRequestMember {
+    pub idx: usize,
+    pub relative_offset: usize,
+    pub len: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CoalescedRequestGroup {
+    pub path: PathBuf,
+    pub offset: u64,
+    pub len: usize,
+    pub members: Vec<CoalescedRequestMember>,
+}
+
 /// Groups user requests by file path and annotates them with their input index.
 pub fn group_requests_by_file(
     requests: &[(impl AsRef<Path>, u64, usize)],
@@ -49,9 +64,74 @@ pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
         .collect()
 }
 
+pub fn coalesce_requests(
+    grouped: HashMap<PathBuf, Vec<IndexedRequest>>,
+    window_bytes: usize,
+) -> Vec<CoalescedRequestGroup> {
+    let mut groups = Vec::new();
+
+    for (path, mut requests) in grouped {
+        requests.sort_unstable_by_key(|req| req.offset);
+
+        let mut current: Option<CoalescedRequestGroup> = None;
+        for req in requests {
+            let req_end = req.offset.saturating_add(req.len as u64);
+
+            match &mut current {
+                Some(group)
+                    if req.offset
+                        <= group
+                            .offset
+                            .saturating_add(group.len as u64)
+                            .saturating_add(window_bytes as u64) =>
+                {
+                    let relative_offset = usize::try_from(req.offset.saturating_sub(group.offset))
+                        .unwrap_or(usize::MAX);
+                    let required_len = relative_offset.saturating_add(req.len);
+                    group.len = group.len.max(required_len);
+                    group.members.push(CoalescedRequestMember {
+                        idx: req.idx,
+                        relative_offset,
+                        len: req.len,
+                    });
+                }
+                _ => {
+                    if let Some(group) = current.take() {
+                        groups.push(group);
+                    }
+                    current = Some(CoalescedRequestGroup {
+                        path: path.clone(),
+                        offset: req.offset,
+                        len: req.len,
+                        members: vec![CoalescedRequestMember {
+                            idx: req.idx,
+                            relative_offset: 0,
+                            len: req.len,
+                        }],
+                    });
+                }
+            }
+
+            if let Some(group) = &mut current {
+                let group_end = group.offset.saturating_add(group.len as u64);
+                if req_end > group_end {
+                    group.len =
+                        usize::try_from(req_end.saturating_sub(group.offset)).unwrap_or(usize::MAX);
+                }
+            }
+        }
+
+        if let Some(group) = current.take() {
+            groups.push(group);
+        }
+    }
+
+    groups
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{flatten_results, group_requests_by_file, BatchResult};
+    use super::{BatchResult, coalesce_requests, flatten_results, group_requests_by_file};
     use std::path::Path;
     use std::sync::Arc;
 
@@ -155,5 +235,23 @@ mod tests {
         let results: Vec<Vec<BatchResult>> = vec![];
         let flattened = flatten_results(results);
         assert_eq!(flattened.len(), 0);
+    }
+
+    #[test]
+    fn test_coalesce_requests_merges_nearby_ranges() {
+        let requests = vec![
+            ("file1.txt", 0u64, 100usize),
+            ("file1.txt", 120, 80),
+            ("file1.txt", 1024, 64),
+        ];
+
+        let groups = coalesce_requests(group_requests_by_file(&requests), 64);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].offset, 0);
+        assert_eq!(groups[0].len, 200);
+        assert_eq!(groups[0].members.len(), 2);
+        assert_eq!(groups[1].offset, 1024);
+        assert_eq!(groups[1].members.len(), 1);
     }
 }

@@ -125,7 +125,10 @@ mod tests {
     }
 
     impl Model for DummyModel {
-        type Tensor<'a> = &'a DummyTensor where Self: 'a;
+        type Tensor<'a>
+            = &'a DummyTensor
+        where
+            Self: 'a;
 
         fn len(&self) -> usize {
             self.tensors.len()
@@ -140,7 +143,8 @@ mod tests {
         }
 
         fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-            self.names.iter()
+            self.names
+                .iter()
                 .position(|n| n.as_ref() == name)
                 .map(|i| &self.tensors[i])
         }
@@ -151,8 +155,16 @@ mod tests {
         let model = DummyModel {
             names: vec!["a".into(), "b".into()],
             tensors: vec![
-                DummyTensor { shape: vec![2], dtype: "f32", data: vec![0; 8] },
-                DummyTensor { shape: vec![3], dtype: "u8", data: vec![1; 3] },
+                DummyTensor {
+                    shape: vec![2],
+                    dtype: "f32",
+                    data: vec![0; 8],
+                },
+                DummyTensor {
+                    shape: vec![3],
+                    dtype: "u8",
+                    data: vec![1; 3],
+                },
             ],
         };
         assert_eq!(model.len(), 2);

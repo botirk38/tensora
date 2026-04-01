@@ -7,23 +7,28 @@
 //! - Full CQ draining per wakeup
 //! - Alignment-aware direct I/O with buffered fallback
 
-use super::batch::{BatchResult, FlattenedResult, flatten_results};
+use super::batch::{
+    BatchResult, CoalescedRequestGroup, FlattenedResult, coalesce_requests, flatten_results,
+};
 use super::byte::OwnedBytes;
 use super::odirect::{alloc_aligned, can_use_direct_read, is_block_aligned, open_direct_read_sync};
 use super::{
-    BatchRequest, IoResult, MAX_CHUNK_SIZE, batch::group_requests_by_file, get_buffer_pool,
+    BackendKind, BatchRequest, IoResult, batch::group_requests_by_file, chunk_budget,
+    file_chunk_plan, get_buffer_pool, range_batch_plan,
 };
 use io_uring::cqueue::CompletionQueue;
 use io_uring::{IoUring, opcode, types};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Seek;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
-/// Ring depth tuned for NVMe/high-throughput workloads.
-const RING_DEPTH: u32 = 256;
+/// Maximum ring depth for NVMe/high-throughput workloads.
+const MAX_RING_DEPTH: u32 = 256;
+const MIN_RING_DEPTH: u32 = 32;
 
 /// Minimum batch size before we bother with io_uring at all.
 const IO_URING_MIN_BATCH_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
@@ -31,17 +36,16 @@ const IO_URING_MIN_BATCH_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 /// Small-read threshold below which sync is faster than io_uring setup.
 const SMALL_READ_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 
-/// io_uring-specific chunk size. Larger than sync to reduce SQE/CQE churn.
-const IO_URING_CHUNK_SIZE: usize = 512 * 1024 * 1024; // 512 MiB
-
-const WAIT_FOR_COMPLETIONS: usize = RING_DEPTH as usize;
-const COMPLETION_RING_DEPTH: u32 = RING_DEPTH * 2;
-const SQPOLL_IDLE_MS: u32 = 2_000;
+const DEFAULT_SQPOLL_IDLE_MS: u32 = 2_000;
 
 /// A persistent io_uring reader that reuses a single ring across operations.
 pub struct Reader {
-    ring: IoUring,
+    ring: Option<IoUring>,
     files: HashMap<PathBuf, File>,
+    ring_depth_override: Option<u32>,
+    cq_depth_override: Option<u32>,
+    enable_sqpoll: bool,
+    sqpoll_idle_ms: u32,
 }
 
 struct ChunkReadOp {
@@ -58,13 +62,44 @@ struct PreparedLoad {
     base_ptr: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ReaderConfig {
+    ring_depth_override: Option<u32>,
+    cq_depth_override: Option<u32>,
+    enable_sqpoll: bool,
+    sqpoll_idle_ms: u32,
+}
+
 impl Reader {
-    pub fn new() -> IoResult<Self> {
-        let ring = build_ring()?;
-        Ok(Self {
-            ring,
+    pub fn new() -> Self {
+        Self {
+            ring: None,
             files: HashMap::new(),
-        })
+            ring_depth_override: None,
+            cq_depth_override: None,
+            enable_sqpoll: true,
+            sqpoll_idle_ms: DEFAULT_SQPOLL_IDLE_MS,
+        }
+    }
+
+    pub fn with_ring_depth(mut self, depth: u32) -> Self {
+        self.ring_depth_override = Some(depth.clamp(MIN_RING_DEPTH, MAX_RING_DEPTH));
+        self
+    }
+
+    pub fn with_cq_depth(mut self, depth: u32) -> Self {
+        self.cq_depth_override = Some(depth.clamp(MIN_RING_DEPTH, MAX_RING_DEPTH * 2));
+        self
+    }
+
+    pub fn with_sqpoll(mut self, enabled: bool) -> Self {
+        self.enable_sqpoll = enabled;
+        self
+    }
+
+    pub fn with_sqpoll_idle_ms(mut self, idle_ms: u32) -> Self {
+        self.sqpoll_idle_ms = idle_ms.max(1);
+        self
     }
 
     /// Load an entire file using the persistent ring.
@@ -83,6 +118,8 @@ impl Reader {
             return self.load_sync(path_ref, file_size);
         }
 
+        self.ensure_ring_for_file_load(file_size, 1, file_size)?;
+
         if can_use_direct_read(file_size, file_size) {
             drop(file);
             self.load_direct(path_ref, file_size)
@@ -96,23 +133,103 @@ impl Reader {
             return Ok(Vec::new());
         }
 
-        let mut results: Vec<Option<OwnedBytes>> = (0..paths.len()).map(|_| None).collect();
+        let total_bytes: usize = paths
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .filter_map(|meta| usize::try_from(meta.len()).ok())
+            .sum();
+        let max_file_bytes = paths
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .filter_map(|meta| usize::try_from(meta.len()).ok())
+            .max()
+            .unwrap_or(0);
+
+        let worker_count = file_worker_count(paths.len(), total_bytes, max_file_bytes);
+        if worker_count > 1 {
+            let indexed_paths: Vec<_> = paths.iter().cloned().enumerate().collect();
+            let mut indexed_results = Vec::with_capacity(paths.len());
+            let config = self.config();
+
+            thread::scope(|scope| -> IoResult<()> {
+                let mut handles = Vec::new();
+                for chunk in indexed_paths.chunks(indexed_paths.len().div_ceil(worker_count)) {
+                    let chunk = chunk.to_vec();
+                    handles.push(scope.spawn(move || {
+                        let mut reader = Reader::from_config(config);
+                        reader.load_batch_indexed(&chunk)
+                    }));
+                }
+
+                for handle in handles {
+                    indexed_results.extend(
+                        handle
+                            .join()
+                            .map_err(|_| std::io::Error::other("io_uring worker panicked"))??,
+                    );
+                }
+                Ok(())
+            })?;
+
+            indexed_results.sort_unstable_by_key(|(idx, _)| *idx);
+            return indexed_results
+                .into_iter()
+                .map(|(_, bytes)| Ok(bytes))
+                .collect();
+        }
+
+        self.ensure_ring_for_file_load(total_bytes, paths.len(), max_file_bytes)?;
+
+        self.load_batch_indexed(&paths.iter().cloned().enumerate().collect::<Vec<_>>())
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|(_, bytes)| bytes)
+                    .collect::<Vec<_>>()
+            })
+    }
+
+    fn load_batch_indexed(
+        &mut self,
+        paths: &[(usize, PathBuf)],
+    ) -> IoResult<Vec<(usize, OwnedBytes)>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let total_bytes: usize = paths
+            .iter()
+            .filter_map(|(_, path)| std::fs::metadata(path).ok())
+            .filter_map(|meta| usize::try_from(meta.len()).ok())
+            .sum();
+        let load_plan = file_chunk_plan(total_bytes.max(1), BackendKind::IoUring);
+        let max_file_bytes = paths
+            .iter()
+            .filter_map(|(_, path)| std::fs::metadata(path).ok())
+            .filter_map(|meta| usize::try_from(meta.len()).ok())
+            .max()
+            .unwrap_or(0);
+
+        self.ensure_ring_for_file_load(total_bytes, paths.len(), max_file_bytes)?;
+
+        let mut results: Vec<Option<(usize, OwnedBytes)>> =
+            (0..paths.len()).map(|_| None).collect();
         let mut plans = Vec::with_capacity(paths.len());
         let mut ops = Vec::new();
 
-        for (request_idx, path) in paths.iter().enumerate() {
+        for (slot_idx, (request_idx, path)) in paths.iter().enumerate() {
             let file = File::open(path)?;
             let file_size = usize::try_from(file.metadata()?.len())
                 .map_err(|_| std::io::Error::other("file too large"))?;
 
             if file_size == 0 {
-                results[request_idx] = Some(OwnedBytes::Shared(Arc::new([])));
+                results[slot_idx] = Some((*request_idx, OwnedBytes::Shared(Arc::new([]))));
                 continue;
             }
 
             if file_size < IO_URING_MIN_BATCH_BYTES {
                 drop(file);
-                results[request_idx] = Some(self.load_sync(path, file_size)?);
+                results[slot_idx] = Some((*request_idx, self.load_sync(path, file_size)?));
                 continue;
             }
 
@@ -131,7 +248,7 @@ impl Reader {
 
             let plan_idx = plans.len();
             let base_ptr = buffer.as_mut_ptr() as usize;
-            let chunk_size = IO_URING_CHUNK_SIZE.min(MAX_CHUNK_SIZE.saturating_mul(4));
+            let chunk_size = file_chunk_plan(file_size, BackendKind::IoUring).chunk_size;
 
             for chunk_start in (0..file_size).step_by(chunk_size) {
                 let len = chunk_size.min(file_size - chunk_start);
@@ -144,7 +261,7 @@ impl Reader {
             }
 
             plans.push(PreparedLoad {
-                request_idx,
+                request_idx: slot_idx,
                 file,
                 buffer,
                 base_ptr,
@@ -154,9 +271,10 @@ impl Reader {
         if !ops.is_empty() {
             let mut completed = 0usize;
             let mut submitted = 0usize;
+            let ring = self.ring_mut()?;
 
             while completed < ops.len() {
-                while submitted < ops.len() && self.ring.submission().capacity() > 0 {
+                while submitted < ops.len() && ring.submission().capacity() > 0 {
                     let op = &ops[submitted];
                     let plan = &plans[op.plan_idx];
                     let fd = plan.file.as_raw_fd();
@@ -168,17 +286,17 @@ impl Reader {
                         .user_data(submitted as u64);
 
                     unsafe {
-                        if self.ring.submission().push(&sqe).is_err() {
+                        if ring.submission().push(&sqe).is_err() {
                             break;
                         }
                     }
                     submitted += 1;
                 }
 
-                let wait_for = (ops.len() - completed).clamp(1, WAIT_FOR_COMPLETIONS);
-                self.ring.submit_and_wait(wait_for)?;
+                let wait_for = load_plan.wait_for.min(ops.len() - completed).max(1);
+                ring.submit_and_wait(wait_for)?;
 
-                let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+                let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
                 for cqe in cq {
                     let op_idx = cqe.user_data() as usize;
                     let result = cqe.result();
@@ -208,7 +326,8 @@ impl Reader {
         }
 
         for plan in plans {
-            results[plan.request_idx] = Some(plan.buffer);
+            let request_idx = paths[plan.request_idx].0;
+            results[plan.request_idx] = Some((request_idx, plan.buffer));
         }
 
         results
@@ -231,6 +350,8 @@ impl Reader {
         if len < SMALL_READ_THRESHOLD {
             return self.load_range_sync(path.as_ref(), offset, len);
         }
+
+        self.ensure_ring_for_range_load(len, 1, len)?;
 
         let path_ref = path.as_ref();
 
@@ -268,42 +389,108 @@ impl Reader {
             }
         }
 
-        let mut planned = Vec::with_capacity(requests.len());
-        for (path, mut reqs) in grouped {
-            reqs.sort_unstable_by_key(|req| req.offset);
-            for req in reqs {
-                planned.push((path.clone(), req));
+        let total_bytes: usize = requests.iter().map(|(_, _, len)| *len).sum();
+        let batch_plan = range_batch_plan(requests.len(), total_bytes, BackendKind::IoUring);
+        let avg_bytes = total_bytes.div_ceil(requests.len()).max(1);
+        let coalesced = coalesce_requests(grouped, batch_plan.coalesce_window_bytes);
+
+        let worker_count = range_worker_count(&coalesced, total_bytes);
+        if worker_count > 1 {
+            let config = self.config();
+            let chunk_size = coalesced.len().div_ceil(worker_count);
+            let mut grouped_results = Vec::new();
+
+            thread::scope(|scope| -> IoResult<()> {
+                let mut handles = Vec::new();
+                for chunk in coalesced.chunks(chunk_size) {
+                    let chunk = chunk.to_vec();
+                    handles.push(scope.spawn(move || {
+                        let mut reader = Reader::from_config(config);
+                        reader.load_range_groups(&chunk)
+                    }));
+                }
+
+                for handle in handles {
+                    grouped_results.push(
+                        handle
+                            .join()
+                            .map_err(|_| std::io::Error::other("io_uring worker panicked"))??,
+                    );
+                }
+                Ok(())
+            })?;
+
+            return Ok(flatten_results(grouped_results));
+        }
+
+        self.ensure_ring_for_range_load(total_bytes, requests.len(), avg_bytes)?;
+
+        Ok(flatten_results(vec![self.load_range_groups(&coalesced)?]))
+    }
+
+    fn load_range_groups(
+        &mut self,
+        groups: &[CoalescedRequestGroup],
+    ) -> IoResult<Vec<BatchResult>> {
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.files.clear();
+        for group in groups {
+            if !self.files.contains_key(&group.path) {
+                let file = File::open(&group.path)?;
+                self.files.insert(group.path.clone(), file);
             }
         }
 
-        // Allocate buffers for each request
-        let mut buffers: Vec<OwnedBytes> = Vec::with_capacity(requests.len());
-        for (_, _, len) in requests {
-            buffers.push(OwnedBytes::from_vec(vec![0u8; *len]));
+        let total_bytes: usize = groups.iter().map(|group| group.len).sum();
+        let total_members: usize = groups.iter().map(|group| group.members.len()).sum();
+        let avg_bytes = total_bytes.div_ceil(groups.len()).max(1);
+        let batch_plan = range_batch_plan(
+            total_members.max(1),
+            total_bytes.max(1),
+            BackendKind::IoUring,
+        );
+
+        self.ensure_ring_for_range_load(total_bytes, total_members.max(1), avg_bytes)?;
+
+        let mut planned: Vec<(RawFd, usize, u64, usize)> = Vec::with_capacity(groups.len());
+        let mut buffers: Vec<OwnedBytes> = Vec::with_capacity(groups.len());
+        let mut members = Vec::with_capacity(groups.len());
+        for group in groups {
+            let fd = self
+                .files
+                .get(&group.path)
+                .ok_or_else(|| std::io::Error::other(format!("file not found: {:?}", group.path)))?
+                .as_raw_fd();
+            planned.push((fd, members.len(), group.offset, group.len));
+            buffers.push(OwnedBytes::from_vec(vec![0u8; group.len]));
+            members.push(group.members.clone());
         }
 
         let mut pending = planned.len();
         let mut submitted = 0;
-        let mut grouped_results: Vec<Vec<BatchResult>> = vec![Vec::new()];
+        let mut completed = 0usize;
+        let ring = self.ring_mut()?;
+        let mut results = Vec::with_capacity(total_members);
 
         while pending > 0 {
             // Fill submission queue
-            while submitted < planned.len() && self.ring.submission().capacity() > 0 {
-                let (path, req) = &planned[submitted];
-                let file = self
-                    .files
-                    .get(path)
-                    .ok_or_else(|| std::io::Error::other(format!("file not found: {:?}", path)))?;
-                let fd = file.as_raw_fd();
-                let ptr = buffers[req.idx].as_mut_ptr();
+            while submitted < planned.len()
+                && ring.submission().capacity() > 0
+                && submitted.saturating_sub(completed) < batch_plan.target_inflight
+            {
+                let (fd, buffer_idx, offset, len) = planned[submitted];
+                let ptr = buffers[buffer_idx].as_mut_ptr();
 
-                let sqe = opcode::Read::new(types::Fd(fd), ptr, req.len as u32)
-                    .offset(req.offset)
+                let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
+                    .offset(offset)
                     .build()
-                    .user_data(req.idx as u64);
+                    .user_data(buffer_idx as u64);
 
                 unsafe {
-                    if self.ring.submission().push(&sqe).is_err() {
+                    if ring.submission().push(&sqe).is_err() {
                         break;
                     }
                 }
@@ -314,11 +501,11 @@ impl Reader {
                 break;
             }
 
-            let wait_for = pending.clamp(1, WAIT_FOR_COMPLETIONS);
-            self.ring.submit_and_wait(wait_for)?;
+            let wait_for = pending.min(batch_plan.wait_for).max(1);
+            ring.submit_and_wait(wait_for)?;
 
             // Drain all completions
-            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
             for cqe in cq {
                 let idx = cqe.user_data() as usize;
                 let result = cqe.result();
@@ -331,7 +518,7 @@ impl Reader {
                 }
 
                 let bytes_read = result as usize;
-                let expected = requests[idx].2;
+                let expected = planned[idx].3;
                 if bytes_read < expected {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
@@ -341,12 +528,30 @@ impl Reader {
                         ),
                     ));
                 }
-                grouped_results[0].push((idx, buffers[idx].as_ref().into(), 0, expected));
+                let backing: Arc<[u8]> = buffers[idx].as_ref().into();
+                for member in &members[idx] {
+                    let start = member.relative_offset;
+                    let end = start.saturating_add(member.len);
+                    let slice = backing.get(start..end).ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            format!(
+                                "coalesced slice out of bounds for request {}: {}..{} of {}",
+                                member.idx,
+                                start,
+                                end,
+                                backing.len()
+                            ),
+                        )
+                    })?;
+                    results.push((member.idx, Arc::<[u8]>::from(slice), 0, member.len));
+                }
                 pending -= 1;
+                completed += 1;
             }
         }
 
-        Ok(flatten_results(grouped_results))
+        Ok(results)
     }
 
     fn load_sync(&self, path: &Path, file_size: usize) -> IoResult<OwnedBytes> {
@@ -360,9 +565,11 @@ impl Reader {
         let mut buffer = OwnedBytes::from_vec(vec![0u8; file_size]);
         let base_ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
+        let ring = self.ring_mut()?;
 
-        let chunk_size = IO_URING_CHUNK_SIZE.min(MAX_CHUNK_SIZE.saturating_mul(4));
-        let chunks = file_size.div_ceil(chunk_size);
+        let plan = file_chunk_plan(file_size, BackendKind::IoUring);
+        let chunk_size = plan.chunk_size;
+        let chunks = plan.chunk_count;
 
         if chunks == 0 {
             return Ok(buffer);
@@ -372,7 +579,7 @@ impl Reader {
         let mut submitted = 0;
 
         while pending > 0 {
-            while submitted < chunks && self.ring.submission().capacity() > 0 {
+            while submitted < chunks && ring.submission().capacity() > 0 {
                 let offset = (submitted * chunk_size) as u64;
                 let len = std::cmp::min(chunk_size, file_size - (submitted * chunk_size));
                 let ptr = unsafe { base_ptr.add(submitted * chunk_size) };
@@ -383,17 +590,17 @@ impl Reader {
                     .user_data(submitted as u64);
 
                 unsafe {
-                    if self.ring.submission().push(&sqe).is_err() {
+                    if ring.submission().push(&sqe).is_err() {
                         break;
                     }
                 }
                 submitted += 1;
             }
 
-            let wait_for = pending.clamp(1, WAIT_FOR_COMPLETIONS);
-            self.ring.submit_and_wait(wait_for)?;
+            let wait_for = pending.min(plan.wait_for).max(1);
+            ring.submit_and_wait(wait_for)?;
 
-            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
             for cqe in cq {
                 let idx = cqe.user_data() as usize;
                 let result = cqe.result();
@@ -431,9 +638,11 @@ impl Reader {
         let mut buffer = OwnedBytes::from_aligned(aligned);
         let base_ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
+        let ring = self.ring_mut()?;
 
-        let chunk_size = IO_URING_CHUNK_SIZE.min(MAX_CHUNK_SIZE.saturating_mul(4));
-        let chunks = file_size.div_ceil(chunk_size);
+        let plan = file_chunk_plan(file_size, BackendKind::IoUring);
+        let chunk_size = plan.chunk_size;
+        let chunks = plan.chunk_count;
 
         if chunks == 0 {
             return Ok(buffer);
@@ -443,7 +652,7 @@ impl Reader {
         let mut submitted = 0;
 
         while pending > 0 {
-            while submitted < chunks && self.ring.submission().capacity() > 0 {
+            while submitted < chunks && ring.submission().capacity() > 0 {
                 let offset = (submitted * chunk_size) as u64;
                 let len = std::cmp::min(chunk_size, file_size - (submitted * chunk_size));
                 let ptr = unsafe { base_ptr.add(submitted * chunk_size) };
@@ -454,17 +663,17 @@ impl Reader {
                     .user_data(submitted as u64);
 
                 unsafe {
-                    if self.ring.submission().push(&sqe).is_err() {
+                    if ring.submission().push(&sqe).is_err() {
                         break;
                     }
                 }
                 submitted += 1;
             }
 
-            let wait_for = pending.clamp(1, WAIT_FOR_COMPLETIONS);
-            self.ring.submit_and_wait(wait_for)?;
+            let wait_for = pending.min(plan.wait_for).max(1);
+            ring.submit_and_wait(wait_for)?;
 
-            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
             for cqe in cq {
                 let idx = cqe.user_data() as usize;
                 let result = cqe.result();
@@ -508,6 +717,7 @@ impl Reader {
         let mut buffer = OwnedBytes::from_aligned(aligned);
         let ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
+        let ring = self.ring_mut()?;
 
         let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
             .offset(offset)
@@ -515,14 +725,13 @@ impl Reader {
             .user_data(0);
 
         unsafe {
-            self.ring
-                .submission()
+            ring.submission()
                 .push(&sqe)
                 .map_err(|_| std::io::Error::other("submission queue is full"))?;
         }
-        self.ring.submit_and_wait(1)?;
+        ring.submit_and_wait(1)?;
 
-        let mut cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+        let mut cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
         let cqe = cq
             .next()
             .ok_or_else(|| std::io::Error::other("completion queue empty"))?;
@@ -552,6 +761,7 @@ impl Reader {
         let mut buffer = OwnedBytes::from_aligned(aligned);
         let ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
+        let ring = self.ring_mut()?;
 
         let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
             .offset(offset)
@@ -559,14 +769,13 @@ impl Reader {
             .user_data(0);
 
         unsafe {
-            self.ring
-                .submission()
+            ring.submission()
                 .push(&sqe)
                 .map_err(|_| std::io::Error::other("submission queue is full"))?;
         }
-        self.ring.submit_and_wait(1)?;
+        ring.submit_and_wait(1)?;
 
-        let mut cq: CompletionQueue<'_, io_uring::cqueue::Entry> = self.ring.completion();
+        let mut cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
         let cqe = cq
             .next()
             .ok_or_else(|| std::io::Error::other("completion queue empty"))?;
@@ -591,11 +800,112 @@ impl Reader {
 
         Ok(buffer)
     }
+
+    fn ring_mut(&mut self) -> IoResult<&mut IoUring> {
+        self.ring
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("io_uring ring not initialized"))
+    }
+
+    fn ensure_ring_for_file_load(
+        &mut self,
+        total_bytes: usize,
+        file_count: usize,
+        max_file_bytes: usize,
+    ) -> IoResult<()> {
+        if self.ring.is_some() {
+            return Ok(());
+        }
+
+        let default_ring_depth = if file_count <= 1 {
+            if max_file_bytes <= 512 * 1024 * 1024 {
+                32
+            } else if max_file_bytes <= 4 * 1024 * 1024 * 1024 {
+                64
+            } else {
+                128
+            }
+        } else if total_bytes <= 4 * 1024 * 1024 * 1024 {
+            64
+        } else if total_bytes <= 32 * 1024 * 1024 * 1024 {
+            128
+        } else {
+            MAX_RING_DEPTH
+        };
+
+        self.ensure_ring(default_ring_depth)
+    }
+
+    fn ensure_ring_for_range_load(
+        &mut self,
+        total_bytes: usize,
+        request_count: usize,
+        avg_request_bytes: usize,
+    ) -> IoResult<()> {
+        if self.ring.is_some() {
+            return Ok(());
+        }
+
+        let default_ring_depth = if request_count <= 1 {
+            32
+        } else if avg_request_bytes <= 256 * 1024 {
+            128
+        } else if total_bytes <= 64 * 1024 * 1024 {
+            64
+        } else {
+            96
+        };
+
+        self.ensure_ring(default_ring_depth)
+    }
+
+    fn ensure_ring(&mut self, default_ring_depth: u32) -> IoResult<()> {
+        if self.ring.is_some() {
+            return Ok(());
+        }
+
+        let ring_depth = self
+            .ring_depth_override
+            .unwrap_or(default_ring_depth)
+            .clamp(MIN_RING_DEPTH, MAX_RING_DEPTH);
+        let cq_depth = self
+            .cq_depth_override
+            .unwrap_or(ring_depth.saturating_mul(2))
+            .clamp(ring_depth, MAX_RING_DEPTH * 2);
+
+        self.ring = Some(build_ring_with_config(
+            ring_depth,
+            cq_depth,
+            self.enable_sqpoll,
+            self.sqpoll_idle_ms,
+        )?);
+        Ok(())
+    }
+
+    fn config(&self) -> ReaderConfig {
+        ReaderConfig {
+            ring_depth_override: self.ring_depth_override,
+            cq_depth_override: self.cq_depth_override,
+            enable_sqpoll: self.enable_sqpoll,
+            sqpoll_idle_ms: self.sqpoll_idle_ms,
+        }
+    }
+
+    fn from_config(config: ReaderConfig) -> Self {
+        Self {
+            ring: None,
+            files: HashMap::new(),
+            ring_depth_override: config.ring_depth_override,
+            cq_depth_override: config.cq_depth_override,
+            enable_sqpoll: config.enable_sqpoll,
+            sqpoll_idle_ms: config.sqpoll_idle_ms,
+        }
+    }
 }
 
 impl Default for Reader {
     fn default() -> Self {
-        Self::new().expect("failed to create io_uring reader")
+        Self::new()
     }
 }
 
@@ -606,7 +916,7 @@ pub struct Writer {
 
 impl Writer {
     pub fn new() -> IoResult<Self> {
-        let ring = build_ring()?;
+        let ring = build_default_ring()?;
         Ok(Self { ring })
     }
 
@@ -676,31 +986,78 @@ impl Default for Writer {
     }
 }
 
-fn build_ring() -> IoResult<IoUring> {
-    match build_ring_with_sqpoll() {
-        Ok(ring) => return Ok(ring),
-        Err(err)
-            if matches!(
-                err.raw_os_error(),
-                Some(libc::EINVAL | libc::EPERM | libc::ENOSYS)
-            ) => {}
-        Err(err) => return Err(err),
+fn build_default_ring() -> IoResult<IoUring> {
+    build_ring_with_config(
+        MAX_RING_DEPTH,
+        MAX_RING_DEPTH * 2,
+        true,
+        DEFAULT_SQPOLL_IDLE_MS,
+    )
+}
+
+fn build_ring_with_config(
+    ring_depth: u32,
+    cq_depth: u32,
+    enable_sqpoll: bool,
+    sqpoll_idle_ms: u32,
+) -> IoResult<IoUring> {
+    if enable_sqpoll {
+        match build_ring_with_sqpoll(ring_depth, cq_depth, sqpoll_idle_ms) {
+            Ok(ring) => return Ok(ring),
+            Err(err)
+                if matches!(
+                    err.raw_os_error(),
+                    Some(libc::EINVAL | libc::EPERM | libc::ENOSYS)
+                ) => {}
+            Err(err) => return Err(err),
+        }
     }
 
     IoUring::builder()
         .setup_single_issuer()
         .setup_coop_taskrun()
         .setup_submit_all()
-        .setup_cqsize(COMPLETION_RING_DEPTH)
-        .build(RING_DEPTH)
+        .setup_cqsize(cq_depth)
+        .build(ring_depth)
 }
 
-fn build_ring_with_sqpoll() -> IoResult<IoUring> {
+fn build_ring_with_sqpoll(
+    ring_depth: u32,
+    cq_depth: u32,
+    sqpoll_idle_ms: u32,
+) -> IoResult<IoUring> {
     IoUring::builder()
         .setup_single_issuer()
         .setup_coop_taskrun()
         .setup_submit_all()
-        .setup_cqsize(COMPLETION_RING_DEPTH)
-        .setup_sqpoll(SQPOLL_IDLE_MS)
-        .build(RING_DEPTH)
+        .setup_cqsize(cq_depth)
+        .setup_sqpoll(sqpoll_idle_ms)
+        .build(ring_depth)
+}
+
+fn file_worker_count(file_count: usize, total_bytes: usize, max_file_bytes: usize) -> usize {
+    if file_count <= 1 || total_bytes < 2 * 1024 * 1024 * 1024 {
+        return 1;
+    }
+
+    let workers = chunk_budget().clamp(1, 8).min(file_count);
+    if max_file_bytes < 512 * 1024 * 1024 {
+        workers.min(4).max(1)
+    } else {
+        workers.max(1)
+    }
+}
+
+fn range_worker_count(groups: &[CoalescedRequestGroup], total_bytes: usize) -> usize {
+    let file_count = groups
+        .iter()
+        .map(|group| &group.path)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+
+    if file_count <= 1 || groups.len() <= 1 || total_bytes < 512 * 1024 * 1024 {
+        return 1;
+    }
+
+    chunk_budget().clamp(1, 8).min(file_count).max(1)
 }

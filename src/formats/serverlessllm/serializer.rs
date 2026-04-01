@@ -119,7 +119,9 @@ pub async fn write_index(
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
     let json = serialize_index(tensors)?;
-    let mut writer = backends::AsyncWriter::create(path).await.map_err(WriterError::from)?;
+    let mut writer = backends::AsyncWriter::create(path)
+        .await
+        .map_err(WriterError::from)?;
     writer.write_all(&json).await.map_err(WriterError::from)
 }
 

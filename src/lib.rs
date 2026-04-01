@@ -21,17 +21,19 @@ pub use formats::safetensors::serialize;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
-    Index, MmapModel as ServerlessLLMMmapModel, Model as ServerlessLLMModel, RECOMMENDED_PARTITION_TARGET_BYTES, Tensor, TensorMmap,
-    recommended_partition_count,
+    Index, MmapModel as ServerlessLLMMmapModel, Model as ServerlessLLMModel,
+    RECOMMENDED_PARTITION_TARGET_BYTES, Tensor, TensorMmap, recommended_partition_count,
 };
 
 // Conversion functions
 pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm;
 pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm_async;
-pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm_sync;
 #[cfg(target_os = "linux")]
 pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm_io_uring;
-pub use converters::safetensors_to_serverlessllm::{ConversionPlan, ConversionStats, CopyOp, TensorSource};
+pub use converters::safetensors_to_serverlessllm::convert_safetensors_to_serverlessllm_sync;
+pub use converters::safetensors_to_serverlessllm::{
+    ConversionPlan, ConversionStats, CopyOp, TensorSource,
+};
 
 #[cfg(test)]
 pub(crate) mod test_utils {
