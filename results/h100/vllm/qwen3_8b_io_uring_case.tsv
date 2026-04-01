@@ -1,0 +1,17 @@
+loader	kind	cache_mode	metric	value
+ts_safetensors_io_uring	load_only	warm	init_ms	32510.441236998304
+ts_safetensors_io_uring	ttft	warm	init_ms	32754.417099997227
+ts_safetensors_io_uring	ttft	warm	first_token_ms	15.161873001488857
+ts_safetensors_io_uring	ttft	warm	ttft_ms	32769.578972998715
+ts_safetensors_io_uring	steady_state_decode	warm	init_ms	32656.59523800423
+ts_safetensors_io_uring	steady_state_decode	warm	decode_avg_ms	59.25711180025246
+ts_safetensors_io_uring	steady_state_decode	warm	decode_min_ms	58.98314500518609
+ts_safetensors_io_uring	steady_state_decode	warm	decode_max_ms	59.83167800150113
+ts_safetensors_io_uring	load_only	cold	init_ms	37653.86480099551
+ts_safetensors_io_uring	ttft	cold	init_ms	36829.13200100302
+ts_safetensors_io_uring	ttft	cold	first_token_ms	22.381861999747343
+ts_safetensors_io_uring	ttft	cold	ttft_ms	36851.513863002765
+ts_safetensors_io_uring	steady_state_decode	cold	init_ms	36768.39838100568
+ts_safetensors_io_uring	steady_state_decode	cold	decode_avg_ms	59.06838059891015
+ts_safetensors_io_uring	steady_state_decode	cold	decode_min_ms	58.77155799680622
+ts_safetensors_io_uring	steady_state_decode	cold	decode_max_ms	59.6213619937771
