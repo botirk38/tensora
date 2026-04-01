@@ -20,6 +20,10 @@ def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
         load_safetensors,
         load_safetensors_sync,
     )
+    if backend == "io-uring":
+        from tensor_store_py._tensor_store_rust import load_safetensors_io_uring
+
+        return load_safetensors_io_uring(path)
 
     if backend == "default":
         return load_safetensors(path)
@@ -33,6 +37,10 @@ def _load_serverlessllm(path: str, backend: str) -> dict[str, torch.Tensor]:
         load_serverlessllm,
         load_serverlessllm_sync,
     )
+    if backend == "io-uring":
+        from tensor_store_py._tensor_store_rust import load_serverlessllm_io_uring
+
+        return load_serverlessllm_io_uring(path)
 
     if backend == "default":
         return load_serverlessllm(path)
@@ -86,7 +94,7 @@ def register_tensor_store_loader() -> None:
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
                 raise ValueError(f"unsupported tensor_store format: {fmt}")
-            if backend not in {"default", "sync"}:
+            if backend not in {"default", "sync", "io-uring"}:
                 raise ValueError(f"unsupported tensor_store backend: {backend}")
 
             original_load_format = self.load_config.load_format
@@ -94,10 +102,9 @@ def register_tensor_store_loader() -> None:
             try:
                 hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
                     source.model_or_path,
-                    source.subfolder,
-                    source.revision,
-                    source.fall_back_to_pt,
-                    source.allow_patterns_overrides,
+                    getattr(source, "revision", None),
+                    getattr(source, "fall_back_to_pt", False),
+                    getattr(source, "allow_patterns_overrides", None),
                 )
             finally:
                 self.load_config.load_format = original_load_format
@@ -120,7 +127,7 @@ def register_tensor_store_loader() -> None:
             artifact_dir = _ensure_serverlessllm_artifact(
                 hf_folder,
                 hf_weights_files,
-                source.revision,
+                getattr(source, "revision", None),
             )
             state_dict = _load_serverlessllm(artifact_dir, backend)
             for name, tensor in state_dict.items():

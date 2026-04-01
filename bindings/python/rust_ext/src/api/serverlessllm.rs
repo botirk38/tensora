@@ -160,3 +160,19 @@ pub fn load_serverlessllm_sync(
         .map_err(map_reader_error)?;
     load_into_dict(py, &model, framework, device)
 }
+
+#[cfg(target_os = "linux")]
+#[pyfunction]
+#[pyo3(signature = (path, framework="torch", device="cpu"))]
+pub fn load_serverlessllm_io_uring(
+    py: Python<'_>,
+    path: PathBuf,
+    framework: &str,
+    device: &str,
+) -> PyResult<PyObject> {
+    validate_path_exists(&path)?;
+    let model = py
+        .allow_threads(|| Model::load_io_uring(path))
+        .map_err(map_reader_error)?;
+    load_into_dict(py, &model, framework, device)
+}

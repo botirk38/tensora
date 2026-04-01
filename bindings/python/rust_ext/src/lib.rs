@@ -21,6 +21,8 @@ use api::{
     open_safetensors, open_serverlessllm, save_safetensors, save_safetensors_bytes,
     SafeTensorsHandlePy, ServerlessLLMHandlePy,
 };
+#[cfg(target_os = "linux")]
+use api::{load_safetensors_io_uring, load_serverlessllm_io_uring};
 
 /// Python module entry point.
 #[pymodule]
@@ -33,9 +35,13 @@ fn _tensor_store_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(load_safetensors_async, m)?)?;
     m.add_function(wrap_pyfunction!(load_safetensors_sync, m)?)?;
+    #[cfg(target_os = "linux")]
+    m.add_function(wrap_pyfunction!(load_safetensors_io_uring, m)?)?;
     m.add_function(wrap_pyfunction!(load_serverlessllm, m)?)?;
     m.add_function(wrap_pyfunction!(load_serverlessllm_async, m)?)?;
     m.add_function(wrap_pyfunction!(load_serverlessllm_sync, m)?)?;
+    #[cfg(target_os = "linux")]
+    m.add_function(wrap_pyfunction!(load_serverlessllm_io_uring, m)?)?;
     m.add_function(wrap_pyfunction!(convert_safetensors_to_serverlessllm, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors_bytes, m)?)?;

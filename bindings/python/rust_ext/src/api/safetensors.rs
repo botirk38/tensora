@@ -170,6 +170,22 @@ pub fn load_safetensors_sync(
     load_dict_from_model(py, &model, framework, device)
 }
 
+#[cfg(target_os = "linux")]
+#[pyfunction]
+#[pyo3(signature = (path, framework="torch", device="cpu"))]
+pub fn load_safetensors_io_uring(
+    py: Python<'_>,
+    path: PathBuf,
+    framework: &str,
+    device: &str,
+) -> PyResult<PyObject> {
+    validate_directory(&path)?;
+    let model = py
+        .allow_threads(|| Model::load_io_uring(path))
+        .map_err(map_reader_error)?;
+    load_dict_from_model(py, &model, framework, device)
+}
+
 fn str_to_dtype(s: &str) -> PyResult<Dtype> {
     match s {
         "F64" | "float64" => Ok(Dtype::F64),

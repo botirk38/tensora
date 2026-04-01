@@ -10,10 +10,14 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 pub use convert::convert_safetensors_to_serverlessllm;
+#[cfg(target_os = "linux")]
+pub use safetensors::load_safetensors_io_uring;
 pub use safetensors::{
     load_safetensors, load_safetensors_async, load_safetensors_sync, open_safetensors,
     save_safetensors, save_safetensors_bytes, SafeTensorsHandlePy,
 };
+#[cfg(target_os = "linux")]
+pub use serverlessllm::load_serverlessllm_io_uring;
 pub use serverlessllm::{
     load_serverlessllm, load_serverlessllm_async, load_serverlessllm_sync, open_serverlessllm,
     ServerlessLLMHandlePy,
