@@ -3,11 +3,11 @@
 
 \section{Overview}
 
-The final results show that backend performance is strongly workload-dependent. No backend is universally best. Instead, the winning backend depends on checkpoint layout, model size, and evaluation layer.
+The final results show that checkpoint loading performance is strongly workload-dependent. The clearest practical framing is an adaptive heuristic: use a simple synchronous path for smaller eager loads, and switch to io\_uring once checkpoint size and shard structure become large enough to justify a deeper submission path.
 
 At the Rust layer, \texttt{SafeTensors} and \texttt{ServerlessLLM} show different backend preferences. At the Python layer, binding overhead and tensor materialisation partially obscure raw Rust backend gains. At the vLLM layer, the effect of backend choice is strongest for model initialisation and time-to-first-token, while steady-state decode is comparatively insensitive.
 
-These results support the main thesis of this project: the practical goal is not to identify one universally superior backend, but to build a workload-aware \texttt{default} policy that stays close to the best explicit choice.
+These results support the main thesis of this project: the practical goal is to build a workload-aware heuristic for LLM checkpoint loading, not to prove that a single backend should replace all others.
 
 \section{Rust-Layer Backend Results}
 
@@ -35,7 +35,7 @@ Qwen3-32B & 15454.45 & 28763.46 & 12119.50 & 12089.05 \\
 \end{tabular}
 \end{table}
 
-For smaller eager whole-file loads, synchronous loading remains highly effective. On SmolLM3-3B and Qwen3-4B, \texttt{sync} is the strongest explicit backend. However, the ranking flips on larger multi-shard checkpoints. On Qwen3-8B, Qwen3-14B, and Qwen3-32B, the multi-worker \texttt{io\_uring} backend is the fastest explicit backend. The margin is substantial at the larger end of the ladder: for Qwen3-32B, \texttt{io\_uring} reduces cold load time from 15.45~s to 12.09~s relative to \texttt{sync}.
+For smaller eager whole-file loads, synchronous loading remains highly effective. On SmolLM3-3B and Qwen3-4B, \texttt{sync} is the strongest explicit backend. However, the ranking flips on larger multi-shard checkpoints. On Qwen3-8B, Qwen3-14B, and Qwen3-32B, the multi-worker \texttt{io\_uring} backend is the fastest explicit backend. The resulting rule is the clearest high-level heuristic in the project: \texttt{sync} for smaller \texttt{SafeTensors} checkpoints, \texttt{io\_uring} for larger ones.
 
 The \texttt{async} backend is consistently the weakest choice for \texttt{SafeTensors}. This matches the workload structure: whole-file shard loading benefits from strong bulk parallelism, not from scheduler-heavy fine-grained async orchestration.
 
@@ -65,13 +65,13 @@ Qwen3-32B & 39822.09 & 29180.89 & 27659.78 & 29779.86 \\
 
 Here, \texttt{sync} is never the best backend. For smaller and mid-sized range-heavy workloads, \texttt{async} is often strong because grouped and coalesced range reads fit its execution model well. For larger cases, \texttt{io\_uring} becomes competitive or best. For example, Qwen3-14B is fastest with \texttt{io\_uring}, while SmolLM3-3B and Qwen3-4B favour \texttt{async}.
 
-The key result is not that one backend dominates, but that the partitioned layout changes the ranking. This is exactly the kind of workload sensitivity that motivates an adaptive \texttt{default} policy.
+The key result is not that one backend dominates, but that the partitioned layout changes the ranking. This is exactly the kind of workload sensitivity that motivates an adaptive \texttt{default} policy built around workload-aware heuristics rather than fixed backend dogma.
 
 \subsection{Selector Behaviour}
 
 The final selector is not perfect on every single Rust matrix row, but it is materially better than the earlier cost-model-based selector. On the Rust matrix, \texttt{default} is exactly best for Qwen3-8B and Qwen3-32B in \texttt{ServerlessLLM}, and very close to best for the large \texttt{SafeTensors} cases. The remaining misses are concentrated around the medium-size crossover region, especially SmolLM3-3B and Qwen3-4B.
 
-The important point is that the selector now follows the correct \emph{regimes}: smaller \texttt{SafeTensors} loads lean toward \texttt{sync}; larger \texttt{SafeTensors} loads lean toward \texttt{io\_uring}; \texttt{ServerlessLLM} switches between \texttt{async} and \texttt{io\_uring} depending on workload size and structure.
+The important point is that the selector now follows the correct \emph{regimes}: smaller \texttt{SafeTensors} loads lean toward \texttt{sync}; larger \texttt{SafeTensors} loads lean toward \texttt{io\_uring}; \texttt{ServerlessLLM} switches between \texttt{async} and \texttt{io\_uring} depending on workload size and structure. In other words, the final selector behaves like a practical checkpoint-loading heuristic rather than a static backend preference.
 
 \section{Python Binding Results}
 
@@ -163,4 +163,4 @@ Three final findings emerge from the completed result set.
 \item At the vLLM layer, backend choice affects initialisation and TTFT far more than steady-state decode, and the best loader depends on model size.
 \end{enumerate}
 
-Taken together, the results support an adaptive, format-aware default policy rather than any universal backend choice.
+Taken together, the results support an adaptive, format-aware checkpoint-loading heuristic. The dominant practical rule is sync for smaller models and io\_uring for larger ones, with additional format-specific adjustments for range-heavy layouts.

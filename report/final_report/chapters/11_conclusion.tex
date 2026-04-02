@@ -44,6 +44,6 @@ The experiments were run on one H100-based Linux environment, so the absolute ti
 
 \section{Final Conclusion}
 
-The final conclusion of the project is simple but stronger than the original hypothesis. There is no universally best checkpoint-loading backend. The best backend depends on workload structure, checkpoint layout, and integration layer. What matters in practice is therefore not proving that one backend always wins, but designing a system that can select the right backend for the workload at hand.
+The final conclusion of the project is simple but stronger than the original hypothesis. The most useful way to think about LLM checkpoint loading is as an adaptive heuristic problem. The backend should not be fixed in advance; it should be selected from workload structure. In the clearest high-level form, the final evidence supports sync for smaller eager checkpoints and io\_uring for larger ones, with format-specific refinements around that rule.
 
 That is the central outcome of this work. The strongest practical policy is an adaptive default, informed by real workload structure and validated across Rust, Python, and vLLM layers.

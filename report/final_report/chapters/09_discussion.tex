@@ -3,11 +3,11 @@
 
 \section{The Main Lesson: No Backend Wins Everywhere}
 
-The final result of this project is not a universal backend ranking. Instead, the evidence shows that backend performance depends on workload shape, checkpoint layout, and integration layer.
+The final result of this project is best understood as an adaptive-heuristic result. Backend performance depends on workload shape, checkpoint layout, and integration layer, which means checkpoint loading should be driven by workload-aware selection rather than by one fixed backend.
 
 This is the most important correction to the early narrative. The project began with the hope that a single backend --- ideally \texttt{io\_uring} on Linux --- might dominate across the board. The final evidence does not support that conclusion. At the Rust layer, \texttt{SafeTensors} and \texttt{ServerlessLLM} prefer different backends in different size regimes. At the Python layer, binding overhead changes the practical ordering. At the vLLM layer, model initialisation dominates while steady-state decode is largely insensitive to the loading backend.
 
-That is why the final system is organised around an adaptive \texttt{default} policy rather than around one hard-coded backend recommendation.
+That is why the final system is organised around an adaptive \texttt{default} policy. In the clearest high-level form, the heuristic is sync for smaller eager loads and io\_uring for larger ones, with format-specific refinements where the access pattern changes.
 
 \section{Why the SafeTensors and ServerlessLLM Stories Diverge}
 
@@ -17,7 +17,7 @@ The results diverge because the two formats induce different I/O structures.
 
 \textbf{ServerlessLLM} is fundamentally a range-heavy partitioned-loading problem. The dominant costs are request grouping, range batching, and fragmented access across partitions. In this regime, the synchronous backend is rarely ideal. The competition is instead between a well-grouped async path and the multi-worker \texttt{io\_uring} path. This is why the explicit \texttt{async} backend is strong for some mid-sized \texttt{ServerlessLLM} cases even when it is weak for \texttt{SafeTensors}.
 
-The practical implication is clear: backend choice cannot be separated from layout choice. A loader that looks strong on \texttt{SafeTensors} does not automatically remain strong on a partitioned format.
+The practical implication is clear: backend choice cannot be separated from layout choice. A loader that looks strong on \texttt{SafeTensors} does not automatically remain strong on a partitioned format, so any good heuristic has to look at workload structure rather than model size alone.
 
 \section{The Architectural Turnaround Matters More Than the Backend Label}
 
@@ -80,4 +80,4 @@ The project succeeds if judged against its final, more realistic goal. It does n
 \item an adaptive default policy is the most defensible design target.
 \end{enumerate}
 
-That final conclusion is stronger than the original, simpler hypothesis would have been. It is also more useful. A practical checkpoint-loading system should not ask users to know which backend is best in every situation. It should make a good default choice automatically, while still exposing explicit backends when experimentation or deployment constraints require them.
+That final conclusion is stronger than the original, simpler hypothesis would have been. It is also more useful. A practical checkpoint-loading system should not ask users to know which backend is best in every situation. It should use an adaptive heuristic that defaults to the simpler synchronous path when the checkpoint is small enough, moves to io\_uring when larger checkpoints justify the extra machinery, and still leaves room for explicit overrides where experimentation or deployment constraints require them.

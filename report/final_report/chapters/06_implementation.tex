@@ -23,7 +23,7 @@ For synchronous loading, the Rust function is called directly from Python and bl
 
 For memory-mapped loading, the \texttt{MmapModel} type from the Rust core is wrapped as a Python class. Accessing a tensor triggers a page fault and loads the relevant pages on demand.
 
-For asynchronous loading, the Rust async function is wrapped using \texttt{pyo3-async-runtimes} with the Tokio runtime. This exposes the async function as an awaitable Python coroutine. The async interface is designed for use in async Python code such as FastAPI applications. It is not used in the vLLM integration path because vLLM's model loader is synchronous.
+For asynchronous loading, the bindings execute the Rust async path on a shared Tokio runtime and expose it through the Python API. This avoids repeatedly constructing a runtime for each call and was one of the practical binding optimisations applied during the project. The async interface is designed for use in async Python applications, but it is not used in the vLLM integration path because vLLM's model loader interface remains synchronous.
 
 Listing~\ref{fig:backend_interface} shows the core Rust interface for loading a checkpoint synchronously.
 
