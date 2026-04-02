@@ -27,7 +27,7 @@ Correctness testing combines unit tests at the format layer with integration tes
 
 The TensorStore project depends on external software components maintained by third parties. Managing these dependencies is a significant professional responsibility, because vulnerabilities in transitive dependencies become vulnerabilities in the project.
 
-The supply chain considerations influenced several decisions during development. Dependency versions are pinned in \texttt{Cargo.lock} to ensure that builds are reproducible and that updates are reviewed explicitly rather than applied automatically. The project uses \texttt{cargo-audit} and strict linting in CI to check for dependency and code-quality issues early.
+The supply chain considerations influenced several decisions during development. Dependency versions are pinned in \texttt{Cargo.lock} to ensure that builds are reproducible and that updates are reviewed explicitly rather than applied automatically. The project uses \texttt{cargo-audit} and strict linting in CI to catch dependency and code-quality issues early.
 
 One supply chain issue that arose during development was drift between the Rust core and its surrounding tooling layers. The project eventually removed stale \texttt{tokio-uring} assumptions from the Python bindings and documentation so that the bindings matched the final low-level \texttt{io-uring} implementation in the Rust core. This incident reinforced the same professional lesson as version pinning: ecosystem drift that goes unreviewed can quietly invalidate experiments and documentation.
 

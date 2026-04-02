@@ -35,7 +35,7 @@ Qwen3-32B & 15454.45 & 28763.46 & 12119.50 & 12089.05 \\
 \end{tabular}
 \end{table}
 
-For smaller eager whole-file loads, synchronous loading remains highly effective. On SmolLM3-3B and Qwen3-4B, \texttt{sync} is the strongest explicit backend. However, the ranking flips on larger multi-shard checkpoints. On Qwen3-8B, Qwen3-14B, and Qwen3-32B, the multi-worker \texttt{io\_uring} backend is the fastest explicit backend. The resulting rule is the clearest high-level heuristic in the project: \texttt{sync} for smaller \texttt{SafeTensors} checkpoints, \texttt{io\_uring} for larger ones.
+For smaller eager whole-file loads, synchronous loading remains highly effective. On SmolLM3-3B and Qwen3-4B, \texttt{sync} is the strongest explicit backend. The ranking flips on larger multi-shard checkpoints. On Qwen3-8B, Qwen3-14B, and Qwen3-32B, the multi-worker \texttt{io\_uring} backend is the fastest explicit backend. This yields the clearest high-level heuristic in the project: \texttt{sync} for smaller \texttt{SafeTensors} checkpoints and \texttt{io\_uring} for larger ones.
 
 The \texttt{async} backend is consistently the weakest choice for \texttt{SafeTensors}. This matches the workload structure: whole-file shard loading benefits from strong bulk parallelism, not from scheduler-heavy fine-grained async orchestration.
 
@@ -133,7 +133,7 @@ Qwen3-32B & 88164.00 & ts\_safetensors\_io\_uring \\
 \end{tabular}
 \end{table}
 
-Two observations stand out. First, the best vLLM loader is almost always from the \texttt{SafeTensors} family rather than the \texttt{ServerlessLLM} family. Second, the explicit \texttt{io\_uring} path becomes valuable again at the larger end of the ladder. It is the best \texttt{load\_only} choice for Qwen3-14B and Qwen3-32B.
+Two observations stand out. First, the best vLLM loader is usually from the \texttt{SafeTensors} family rather than the \texttt{ServerlessLLM} family. Second, the explicit \texttt{io\_uring} path becomes valuable again at the larger end of the ladder. It is the best \texttt{load\_only} choice for Qwen3-14B and Qwen3-32B.
 
 \subsection{TTFT and Steady-State Decode}
 
@@ -158,7 +158,7 @@ The project changed direction after that result. Once the \texttt{io\_uring} bac
 Three final findings emerge from the completed result set.
 
 \begin{enumerate}
-\item At the Rust layer, backend ranking depends strongly on workload structure. \texttt{SafeTensors} favours \texttt{sync} on smaller cases and \texttt{io\_uring} on larger cases. \texttt{ServerlessLLM} favours \texttt{async} or \texttt{io\_uring}, with \texttt{sync} rarely best.
+\item At the Rust layer, backend ranking depends strongly on workload structure. \texttt{SafeTensors} favours \texttt{sync} on smaller cases and \texttt{io\_uring} on larger cases. \texttt{ServerlessLLM} favours \texttt{async} or \texttt{io\_uring}, while \texttt{sync} is rarely best.
 \item At the Python layer, binding overhead is large enough to matter, and binding-specific optimisation produced meaningful practical gains.
 \item At the vLLM layer, backend choice affects initialisation and TTFT far more than steady-state decode, and the best loader depends on model size.
 \end{enumerate}
