@@ -893,6 +893,76 @@ mod tests {
     }
 
     #[test]
+    fn convert_single_shard_roundtrip_loads_same_tensor_content() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src_roundtrip_single");
+        std::fs::create_dir_all(&src).unwrap();
+        let shard = src.join("model.safetensors");
+
+        let a = vec![1u8, 2, 3, 4];
+        let b = vec![5u8, 6, 7, 8, 9, 10, 11, 12];
+        let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
+        let view_b = StTensorView::new(safetensors::Dtype::F32, vec![2], &b).unwrap();
+        write_shard(&shard, vec![("a", view_a), ("b", view_b)]);
+
+        let out = tmp.path().join("out_roundtrip_single");
+        convert_safetensors_to_serverlessllm_sync(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            2,
+        )
+        .unwrap();
+
+        let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
+        let a_tensor = converted.tensor("a").unwrap();
+        let b_tensor = converted.tensor("b").unwrap();
+
+        assert_eq!(a_tensor.shape(), &[4]);
+        assert_eq!(a_tensor.dtype(), "torch.uint8");
+        assert_eq!(a_tensor.data(), a.as_slice());
+
+        assert_eq!(b_tensor.shape(), &[2]);
+        assert_eq!(b_tensor.dtype(), "torch.float32");
+        assert_eq!(b_tensor.data(), b.as_slice());
+    }
+
+    #[test]
+    fn convert_multi_shard_roundtrip_loads_same_tensor_content() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src_roundtrip_multi");
+        std::fs::create_dir_all(&src).unwrap();
+        let shard1 = src.join("model-00001-of-00002.safetensors");
+        let shard2 = src.join("model-00002-of-00002.safetensors");
+
+        let a = vec![1u8, 2, 3, 4];
+        let b = vec![5u8, 6, 7, 8];
+        let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
+        let view_b = StTensorView::new(safetensors::Dtype::U8, vec![4], &b).unwrap();
+        write_shard(&shard1, vec![("a", view_a)]);
+        write_shard(&shard2, vec![("b", view_b)]);
+
+        let out = tmp.path().join("out_roundtrip_multi");
+        convert_safetensors_to_serverlessllm_sync(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            4,
+        )
+        .unwrap();
+
+        let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
+        let a_tensor = converted.tensor("a").unwrap();
+        let b_tensor = converted.tensor("b").unwrap();
+
+        assert_eq!(a_tensor.shape(), &[4]);
+        assert_eq!(a_tensor.dtype(), "torch.uint8");
+        assert_eq!(a_tensor.data(), a.as_slice());
+
+        assert_eq!(b_tensor.shape(), &[4]);
+        assert_eq!(b_tensor.dtype(), "torch.uint8");
+        assert_eq!(b_tensor.data(), b.as_slice());
+    }
+
+    #[test]
     fn calculate_contiguous_stride_basic() {
         assert_eq!(calculate_contiguous_stride(&[2, 3, 4]), vec![12, 4, 1]);
         assert_eq!(calculate_contiguous_stride(&[5]), vec![1]);

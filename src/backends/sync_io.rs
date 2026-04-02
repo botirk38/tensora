@@ -431,3 +431,56 @@ impl SyncWriterEngine {
         self.file.sync_all()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_file(path: &Path, len: usize, seed: u8) {
+        let data: Vec<u8> = (0..len)
+            .map(|i| seed.wrapping_add((i % 251) as u8))
+            .collect();
+        std::fs::write(path, data).unwrap();
+    }
+
+    #[test]
+    fn sync_reader_load_batch_preserves_order() {
+        let dir = TempDir::new().unwrap();
+        let path_a = dir.path().join("a.bin");
+        let path_b = dir.path().join("b.bin");
+        write_file(&path_a, 1024 * 1024, 1);
+        write_file(&path_b, 2 * 1024 * 1024, 2);
+
+        let mut reader = SyncReaderEngine::new();
+        let results = reader.load_batch(&[path_a.clone(), path_b.clone()]).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref(), std::fs::read(path_a).unwrap());
+        assert_eq!(results[1].as_ref(), std::fs::read(path_b).unwrap());
+    }
+
+    #[test]
+    fn sync_reader_load_range_batch_preserves_requested_slices() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ranges.bin");
+        write_file(&path, 4 * 1024 * 1024, 17);
+        let bytes = std::fs::read(&path).unwrap();
+
+        let requests = vec![
+            (path.clone(), 0, 128 * 1024),
+            (path.clone(), 140 * 1024, 64 * 1024),
+            (path.clone(), 1024 * 1024, 256 * 1024),
+        ];
+
+        let mut reader = SyncReaderEngine::new();
+        let results = reader.load_range_batch(&requests).unwrap();
+
+        assert_eq!(results.len(), requests.len());
+        for ((_, offset, len), (data, out_offset, out_len)) in requests.iter().zip(results.iter()) {
+            assert_eq!(*out_offset, 0);
+            assert_eq!(*out_len, *len);
+            assert_eq!(data.as_ref(), &bytes[*offset as usize..(*offset as usize + *len)]);
+        }
+    }
+}
