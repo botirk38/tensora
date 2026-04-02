@@ -867,6 +867,32 @@ mod tests {
     }
 
     #[test]
+    fn convert_rejects_mismatched_index_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path();
+        let shard = src.join("model.safetensors");
+        let data = vec![0u8; 16];
+        let view = StTensorView::new(safetensors::Dtype::F32, vec![4], &data).unwrap();
+        write_shard(&shard, vec![("a", view)]);
+
+        std::fs::write(
+            src.join("model.safetensors.index.json"),
+            r#"{"weight_map":{"a":"other.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let out = tmp.path().join("out");
+        let err = convert_safetensors_to_serverlessllm_sync(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            2,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, WriterError::InvalidInput(_)));
+    }
+
+    #[test]
     fn calculate_contiguous_stride_basic() {
         assert_eq!(calculate_contiguous_stride(&[2, 3, 4]), vec![12, 4, 1]);
         assert_eq!(calculate_contiguous_stride(&[5]), vec![1]);

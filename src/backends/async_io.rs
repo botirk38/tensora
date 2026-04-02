@@ -216,3 +216,63 @@ impl TokioWriter {
         self.file.sync_all().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::SyncReader;
+    use tempfile::TempDir;
+
+    fn write_file(path: &Path, len: usize, seed: u8) {
+        let data: Vec<u8> = (0..len)
+            .map(|i| seed.wrapping_add((i % 251) as u8))
+            .collect();
+        std::fs::write(path, data).unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_batch_matches_sync_reader() {
+        let dir = TempDir::new().unwrap();
+        let path_a = dir.path().join("a.bin");
+        let path_b = dir.path().join("b.bin");
+        write_file(&path_a, 2 * 1024 * 1024, 17);
+        write_file(&path_b, 3 * 1024 * 1024, 23);
+
+        let mut sync = SyncReader::new();
+        let expected = sync.load_batch(&[path_a.clone(), path_b.clone()]).unwrap();
+
+        let mut reader = TokioReader::new();
+        let actual = reader.load_batch(&[path_a, path_b]).await.unwrap();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual_item, expected_item) in actual.iter().zip(expected.iter()) {
+            assert_eq!(actual_item.as_ref(), expected_item.as_ref());
+        }
+    }
+
+    #[tokio::test]
+    async fn load_range_batch_matches_sync_reader() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ranges.bin");
+        write_file(&path, 4 * 1024 * 1024, 11);
+
+        let requests = vec![
+            (path.clone(), 0, 256 * 1024),
+            (path.clone(), 260 * 1024, 128 * 1024),
+            (path.clone(), 2 * 1024 * 1024, 512 * 1024),
+        ];
+
+        let mut sync = SyncReader::new();
+        let expected = sync.load_range_batch(&requests).unwrap();
+
+        let mut reader = TokioReader::new();
+        let actual = reader.load_range_batch(&requests).await.unwrap();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual_item, expected_item) in actual.iter().zip(expected.iter()) {
+            assert_eq!(actual_item.1, expected_item.1);
+            assert_eq!(actual_item.2, expected_item.2);
+            assert_eq!(actual_item.0.as_ref(), expected_item.0.as_ref());
+        }
+    }
+}
