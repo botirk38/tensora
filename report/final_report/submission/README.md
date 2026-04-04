@@ -13,13 +13,12 @@ This project implements a Rust-based tensor storage library with Python bindings
 ## Files
 
 - `FYP Final Report | Botir Khaltaev.pdf` - Final project report
-- `code.zip` - Source code and documentation
 
 ## Key Features
 
 - **Adaptive Backend Selection**: Automatically chooses optimal I/O backend (sync, io_uring, async) based on runtime metrics
 - **Multi-Format Support**: SafeTensors and ServerlessLLM checkpoint formats
-- **Framework Integrations**: PyTorch, TensorFlow, and vLLM inference pipelines
+- **Framework Integrations**: PyTorch and vLLM inference pipelines
 - **Python Bindings**: Clean Python API via PyO3
 
 ## Demo
