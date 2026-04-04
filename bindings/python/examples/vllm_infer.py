@@ -50,6 +50,8 @@ def run_inference(
     backend: str = "default",
     max_tokens: int = 64,
     temperature: float = 1.0,
+    gpu_memory_utilization: float = 0.8,
+    max_model_len: int = 4096,
 ) -> str:
     warnings.filterwarnings("ignore")
 
@@ -64,8 +66,8 @@ def run_inference(
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
-        gpu_memory_utilization=0.8,
-        max_model_len=16384,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
         load_format="tensor_store",
         model_loader_extra_config={"format": "serverlessllm", "backend": backend},
     )
@@ -111,6 +113,18 @@ def main():
         default=1.0,
         help="Sampling temperature (default: 1.0)",
     )
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=0.8,
+        help="GPU memory utilization (default: 0.8)",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=4096,
+        help="Maximum model sequence length (default: 4096)",
+    )
 
     args = parser.parse_args()
 
@@ -121,6 +135,8 @@ def main():
             backend=args.backend,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
         )
         print(result)
     except Exception as e:
