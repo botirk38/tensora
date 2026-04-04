@@ -64,7 +64,7 @@ def run_inference(
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
-        gpu_memory_utilization=0.95,
+        gpu_memory_utilization=0.8,
         max_model_len=16384,
         load_format="tensor_store",
         model_loader_extra_config={"format": "serverlessllm", "backend": backend},
