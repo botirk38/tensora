@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Runnable example: load safetensors with PyTorch using TensorStore and run LLM inference.
+"""Load safetensors with PyTorch using TensorStore and run inference.
 
 Usage:
     python examples/pytorch.py gpt2 --prompt "Hello, world!"
 
 Requirements:
-    uv sync --group dev --group bench
+    uv sync --group dev --group torch
     uv run maturin develop --release
 """
 

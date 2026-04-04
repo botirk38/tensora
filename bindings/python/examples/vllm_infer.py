@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runnable example: run vLLM inference with TensorStore-backed loading.
+"""Run vLLM inference with TensorStore-backed loading.
 
 Usage:
     python examples/vllm_infer.py --model gpt2 --prompt "Hello, world!"

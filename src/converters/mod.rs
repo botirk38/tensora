@@ -1,28 +1,15 @@
-//! High-level format conversion orchestration.
+//! High-level format conversion.
 //!
-//! This module provides convenient functions for converting between
-//! different checkpoint formats. Conversions are streaming where possible
-//! to minimize memory usage.
+//! Supported conversions:
+//! - `SafeTensors` → `ServerlessLLM`: Convert to partitioned format
 //!
-//! # Supported Conversions
-//!
-//! - **`SafeTensors` → `TensorStore`**: Convert to custom sharded format
-//! - **`SafeTensors` → `ServerlessLLM`**: Convert to partitioned binary format
-//!
-//! # Example Usage (Future)
+//! Example:
 //!
 //! ```rust,ignore
-//! use tensor_store::writers::converters;
+//! use tensor_store::converters::safetensors_to_serverlessllm;
 //!
-//! // Convert SafeTensors to TensorStore (16 shards)
-//! converters::safetensors_to_tensorstore(
-//!     "model.safetensors",
-//!     "model",  // output prefix
-//!     16,       // shard count
-//! ).await?;
-//!
-//! // Convert SafeTensors to ServerlessLLM (8 partitions)
-//! converters::safetensors_to_serverlessllm(
+//! // Convert to ServerlessLLM
+//! safetensors_to_serverlessllm(
 //!     "model.safetensors",
 //!     "output_dir/",
 //!     8,  // partition count
