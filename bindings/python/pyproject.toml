@@ -44,6 +44,7 @@ dev = [
 torch = [
     "torch>=2.1",
     "transformers>=4.0",
+    "accelerate>=0.20.0",
 ]
 tensorflow = [
     "tensorflow>=2.11.0",
@@ -52,4 +53,5 @@ tensorflow = [
 vllm = [
     "vllm>=0.6.0",
     "torch>=2.1",
+    "accelerate>=0.20.0",
 ]
