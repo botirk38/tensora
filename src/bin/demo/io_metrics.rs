@@ -1,3 +1,4 @@
+//! I/O metrics collection and display.
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -408,7 +409,7 @@ mod imp {
     }
 }
 
-pub use imp::{DiskSnapshot, capture_disk_snapshot, compute_metrics};
+pub use imp::{capture_disk_snapshot, compute_metrics, DiskSnapshot};
 
 pub fn display_io_metrics_delta(before: Option<DiskSnapshot>, duration: Duration) {
     match before {

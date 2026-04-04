@@ -1,3 +1,5 @@
+//! ServerlessLLM demo scenarios.
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 

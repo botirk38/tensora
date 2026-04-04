@@ -1,3 +1,5 @@
+//! SafeTensors profiling scenarios.
+
 use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};

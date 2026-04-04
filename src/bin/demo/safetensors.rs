@@ -1,3 +1,5 @@
+//! SafeTensors demo scenarios.
+
 use std::path::PathBuf;
 use std::time::Instant;
 

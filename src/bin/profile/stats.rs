@@ -1,3 +1,5 @@
+//! Profiling statistics.
+
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]

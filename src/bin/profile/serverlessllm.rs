@@ -1,3 +1,5 @@
+//! ServerlessLLM profiling scenarios.
+
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
