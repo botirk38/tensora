@@ -1,8 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-cd ~/PROJECT/bindings/python
-RESULTS_DIR=~/PROJECT/results/h100/vllm
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT/bindings/python"
+RESULTS_DIR="$REPO_ROOT/results/h100/vllm"
 mkdir -p "$RESULTS_DIR/raw"
 SUMMARY="$RESULTS_DIR/full_matrix.tsv"
 if [ ! -f "$SUMMARY" ]; then

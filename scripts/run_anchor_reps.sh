@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-cd ~/PROJECT
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 RESULTS="results/h100/profile/anchor_reps.tsv"
 mkdir -p "$(dirname "$RESULTS")"
