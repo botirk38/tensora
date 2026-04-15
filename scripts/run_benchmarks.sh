@@ -96,6 +96,8 @@ else
   (( effective_jobs > n_models )) && effective_jobs=$n_models
 fi
 
+bench_any_fail=0
+
 run_pytest_model() {
   local model_id="$1"
   local slug
@@ -104,15 +106,19 @@ run_pytest_model() {
   local cache_dir="${out_dir}/.cache/${slug}"
   mkdir -p "${cache_dir}"
   echo "==> pytest model=${model_id} -> ${bench_json_path} (cache: ${cache_dir})"
-  uv --directory "${py_dir}" run pytest "${tests[@]}" -v \
+  if ! uv --directory "${py_dir}" run pytest "${tests[@]}" -v \
     --model-id "${model_id}" \
     --cache-dir "${cache_dir}" \
-    --benchmark-json="${bench_json_path}"
+    --benchmark-json="${bench_json_path}"; then
+    echo "warning: pytest exited non-zero for model ${model_id}; continuing with remaining models" >&2
+    return 1
+  fi
+  return 0
 }
 
 if (( effective_jobs == 1 )); then
   for model_id in "${models[@]}"; do
-    run_pytest_model "${model_id}"
+    run_pytest_model "${model_id}" || bench_any_fail=1
   done
 else
   echo "==> running up to ${effective_jobs} pytest job(s) in parallel (CPU-only benchmarks)"
@@ -127,9 +133,12 @@ else
       batch_pids+=($!)
     done
     for pid in "${batch_pids[@]}"; do
-      wait "${pid}"
+      if ! wait "${pid}"; then
+        bench_any_fail=1
+      fi
     done
   done
 fi
 
 echo "Done. JSON under ${out_dir}/pytest_benchmark_<slug>.json"
+exit "${bench_any_fail}"

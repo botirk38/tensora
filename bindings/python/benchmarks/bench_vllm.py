@@ -7,11 +7,25 @@ Uses explicit loaders via vLLM's registered model loader mechanism.
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from benchmarks.vllm_runner import BENCHMARK_KINDS, LOADERS
+
 CACHE_MODES = ["warm", "cold"]
+
+
+def _drop_linux_page_cache() -> None:
+    """Best-effort host page-cache drop for cold-cache runs (Linux; usually requires root)."""
+    drop = Path("/proc/sys/vm/drop_caches")
+    if not drop.is_file():
+        return
+    try:
+        subprocess.run(["sync"], check=False, timeout=300)
+        drop.write_text("3", encoding="utf-8")
+    except OSError:
+        pass
 
 
 @pytest.mark.parametrize("loader", LOADERS)
@@ -21,6 +35,8 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
     """Parametrized vLLM benchmark: loader x benchmark_kind x cache_mode."""
 
     def run_subprocess():
+        if cache_mode == "cold":
+            _drop_linux_page_cache()
         result = subprocess.run(
             [
                 sys.executable,
@@ -50,7 +66,9 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
                     pass
         raise RuntimeError("Could not parse JSON from vLLM runner")
 
-    data = benchmark(run_subprocess)
+    # One subprocess load per test: default benchmark(...) repeats many rounds and would
+    # relaunch vLLM repeatedly (OOM / spurious failures / huge runtime).
+    data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
 
     if benchmark_kind == "load_only":
         assert "init_ms" in data
