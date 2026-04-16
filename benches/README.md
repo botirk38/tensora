@@ -1,6 +1,6 @@
 # Benchmarks
 
-Performance benchmark suite for tensor_store using [Criterion.rs](https://github.com/bheisler/criterion.rs).
+Performance benchmark suite for tensora using [Criterion.rs](https://github.com/bheisler/criterion.rs).
 
 ## Overview
 
@@ -63,14 +63,14 @@ Each format has benchmarks per backend (`safetensors_*`, `serverlessllm_*`):
 
 ## Model selection
 
-Set **`TENSOR_STORE_MODEL_ID`** to a Hugging Face model id before running Criterion (e.g. `export TENSOR_STORE_MODEL_ID=openai-community/gpt2`). The harness calls `tensor_store::hf_model` to ensure SafeTensors shards exist in the Hub cache and (for ServerlessLLM benches) a converted layout under the OS cache.
+Set **`TENSORA_MODEL_ID`** to a Hugging Face model id before running Criterion (e.g. `export TENSORA_MODEL_ID=openai-community/gpt2`). The harness calls `tensora::hf_model` to ensure SafeTensors shards exist in the Hub cache and (for ServerlessLLM benches) a converted layout under the OS cache.
 
 ```bash
-export TENSOR_STORE_MODEL_ID=openai-community/gpt2
+export TENSORA_MODEL_ID=openai-community/gpt2
 cargo bench --bench safetensors
 ```
 
-Pytest benchmarks use `--model-id` / `TENSOR_STORE_BENCH_MODELS` in `scripts/run_benchmarks.sh` instead; see the repository root [README.md](../README.md).
+Pytest benchmarks use `--model-id` / `TENSORA_BENCH_MODELS` in `scripts/run_benchmarks.sh` instead; see the repository root [README.md](../README.md).
 
 ## Understanding Results
 
@@ -158,7 +158,7 @@ cargo run --release --bin profile -- serverlessllm sync --model-id openai-commun
 
 ### Model resolution
 
-Benchmarks read **`TENSOR_STORE_MODEL_ID`** and resolve paths via `tensor_store::hf_model` (Hub cache for SafeTensors; OS cache for converted ServerlessLLM).
+Benchmarks read **`TENSORA_MODEL_ID`** and resolve paths via `tensora::hf_model` (Hub cache for SafeTensors; OS cache for converted ServerlessLLM).
 
 ### Measurement Strategy
 
@@ -191,12 +191,12 @@ Example results from development machine (Linux 6.17.0, 16 cores):
 
 ## Troubleshooting
 
-### "Set TENSOR_STORE_MODEL_ID" / early exit
+### "Set TENSORA_MODEL_ID" / early exit
 
 Export a Hugging Face model id, e.g.:
 
 ```bash
-export TENSOR_STORE_MODEL_ID=openai-community/gpt2
+export TENSORA_MODEL_ID=openai-community/gpt2
 cargo bench --bench safetensors
 ```
 

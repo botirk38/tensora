@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load safetensors with PyTorch using TensorStore (`tensor_store_py`) and run inference.
+"""Load safetensors with PyTorch using TensorStore (`tensora`) and run inference.
 
 Usage:
     python examples/pytorch.py gpt2 --prompt "Hello, world!"
@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def ensure_serverlessllm(hf_folder: str) -> str:
-    from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
+    from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
     safetensors_files = glob.glob(os.path.join(hf_folder, "*.safetensors"))
     if not safetensors_files:
@@ -68,33 +68,33 @@ def run_inference(
     else:
         print(f"Using safetensors format")
 
-    print(f"Loading weights with TensorStore (tensor_store) backend={backend}")
+    print(f"Loading weights with TensorStore (tensora) backend={backend}")
     if fmt == "serverlessllm":
         if backend == "sync":
-            from tensor_store_py._tensor_store_rust import load_serverlessllm_sync
+            from tensora._tensora_rust import load_serverlessllm_sync
 
             state_dict = load_serverlessllm_sync(local_path)
         elif backend == "io-uring":
-            from tensor_store_py._tensor_store_rust import load_serverlessllm_io_uring
+            from tensora._tensora_rust import load_serverlessllm_io_uring
 
             state_dict = load_serverlessllm_io_uring(local_path)
         else:
-            from tensor_store_py._tensor_store_rust import load_serverlessllm
+            from tensora._tensora_rust import load_serverlessllm
 
             state_dict = load_serverlessllm(local_path)
     else:
         if backend == "sync":
-            from tensor_store_py.torch import load_safetensors_sync
+            from tensora.torch import load_safetensors_sync
 
             state_dict = load_safetensors_sync(local_path, device=device)
         elif backend == "io-uring":
-            from tensor_store_py._tensor_store_rust import load_safetensors_io_uring
+            from tensora._tensora_rust import load_safetensors_io_uring
 
             state_dict = load_safetensors_io_uring(
                 local_path, framework="torch", device=device
             )
         else:
-            from tensor_store_py.torch import load_safetensors
+            from tensora.torch import load_safetensors
 
             state_dict = load_safetensors(local_path, device=device)
 
@@ -116,7 +116,7 @@ def run_inference(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Load safetensors with PyTorch using TensorStore (tensor_store_py)"
+        description="Load safetensors with PyTorch using TensorStore (tensora)"
     )
     parser.add_argument(
         "model",
@@ -137,7 +137,7 @@ def main():
         "--backend",
         default="default",
         choices=["default", "sync", "io-uring"],
-        help="TensorStore / tensor_store I/O backend (default: default)",
+        help="TensorStore / tensora I/O backend (default: default)",
     )
     parser.add_argument(
         "--device",

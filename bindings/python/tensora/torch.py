@@ -1,8 +1,8 @@
-"""TensorFlow-specific convenience API for tensor_store."""
+"""PyTorch-specific convenience API for tensora."""
 
 from typing import Dict, Optional, Union
 
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     SafeTensorsHandlePy,
     load_safetensors as _load_safetensors,
     load_safetensors_async as _load_safetensors_async,
@@ -13,40 +13,40 @@ from tensor_store_py._tensor_store_rust import (
 )
 
 try:
-    import tensorflow as tf
+    import torch
 except ImportError:
     raise ImportError(
-        "TensorFlow is required for this module. Install with: pip install tensor-store-py[tensorflow]"
+        "PyTorch is required for this module. Install with: pip install tensor-store-py[torch]"
     )
 
 
 def load_safetensors(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory into a dict of TensorFlow tensors.
+    path: Union[str, "os.PathLike"], device: str = "cpu"
+) -> Dict[str, torch.Tensor]:
+    """Load a safetensors model directory into a dict of PyTorch tensors.
 
     Args:
         path: Path to the safetensors model directory.
-        device: Device to load tensors to (e.g., "/CPU:0", "/GPU:0", "/device:CPU:0").
+        device: Device to load tensors to (e.g., "cpu", "cuda:0").
 
     Returns:
-        Dict mapping tensor names to tf.Tensor values.
+        Dict mapping tensor names to torch.Tensor values.
     """
-    return _load_safetensors(path, framework="tensorflow", device=device)
+    return _load_safetensors(path, framework="torch", device=device)
 
 
 def load_safetensors_async(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory asynchronously into TensorFlow tensors."""
-    return _load_safetensors_async(path, framework="tensorflow", device=device)
+    path: Union[str, "os.PathLike"], device: str = "cpu"
+) -> Dict[str, torch.Tensor]:
+    """Load a safetensors model directory asynchronously into PyTorch tensors."""
+    return _load_safetensors_async(path, framework="torch", device=device)
 
 
 def load_safetensors_sync(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory synchronously into TensorFlow tensors."""
-    return _load_safetensors_sync(path, framework="tensorflow", device=device)
+    path: Union[str, "os.PathLike"], device: str = "cpu"
+) -> Dict[str, torch.Tensor]:
+    """Load a safetensors model directory synchronously into PyTorch tensors."""
+    return _load_safetensors_sync(path, framework="torch", device=device)
 
 
 def open_safetensors(path: Union[str, "os.PathLike"]) -> SafeTensorsHandlePy:
@@ -62,34 +62,34 @@ def open_safetensors(path: Union[str, "os.PathLike"]) -> SafeTensorsHandlePy:
 
 
 def save_safetensors(
-    tensors: Dict[str, tf.Tensor],
+    tensors: Dict[str, torch.Tensor],
     path: Union[str, "os.PathLike"],
     metadata: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Save a dict of TensorFlow tensors to a safetensors file.
+    """Save a dict of PyTorch tensors to a safetensors file.
 
     Args:
-        tensors: Dict mapping tensor names to tf.Tensor values.
+        tensors: Dict mapping tensor names to torch.Tensor values.
         path: Path to save the safetensors file.
         metadata: Optional metadata to include in the file header.
     """
-    _save_safetensors(tensors, path, framework="tensorflow", metadata=metadata)
+    _save_safetensors(tensors, path, framework="torch", metadata=metadata)
 
 
 def save_safetensors_bytes(
-    tensors: Dict[str, tf.Tensor],
+    tensors: Dict[str, torch.Tensor],
     metadata: Optional[Dict[str, str]] = None,
 ) -> bytes:
-    """Save a dict of TensorFlow tensors to bytes in safetensors format.
+    """Save a dict of PyTorch tensors to bytes in safetensors format.
 
     Args:
-        tensors: Dict mapping tensor names to tf.Tensor values.
+        tensors: Dict mapping tensor names to torch.Tensor values.
         metadata: Optional metadata to include in the file header.
 
     Returns:
         bytes: The safetensors file content as bytes.
     """
-    result = _save_safetensors_bytes(tensors, framework="tensorflow", metadata=metadata)
+    result = _save_safetensors_bytes(tensors, framework="torch", metadata=metadata)
     if isinstance(result, bytes):
         return result
     raise TypeError("save_safetensors_bytes did not return bytes")

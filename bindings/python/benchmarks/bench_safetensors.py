@@ -1,9 +1,9 @@
-"""SafeTensors benchmarks: native file baselines vs tensor_store directory loads."""
+"""SafeTensors benchmarks: native file baselines vs tensora directory loads."""
 
 from safetensors.torch import load_file as safetensors_load_file
 
 from benchmarks.hub_model import touch_tensor
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     load_safetensors,
     load_safetensors_async,
     load_safetensors_sync,
@@ -43,7 +43,7 @@ def test_load_native(benchmark, safetensors_files):
 
 
 def test_load_tensorstore_sync(benchmark, safetensors_dir):
-    """Benchmark tensor_store load_safetensors_sync for the full model directory."""
+    """Benchmark tensora load_safetensors_sync for the full model directory."""
 
     def run():
         return _load_dir(safetensors_dir, load_safetensors_sync)
@@ -53,7 +53,7 @@ def test_load_tensorstore_sync(benchmark, safetensors_dir):
 
 
 def test_load_async(benchmark, safetensors_dir):
-    """Benchmark tensor_store load_safetensors_async for the full model directory."""
+    """Benchmark tensora load_safetensors_async for the full model directory."""
 
     def run():
         return _load_dir(safetensors_dir, load_safetensors_async)
@@ -63,7 +63,7 @@ def test_load_async(benchmark, safetensors_dir):
 
 
 def test_load_default(benchmark, safetensors_dir):
-    """Benchmark tensor_store load_safetensors default backend for the full model directory."""
+    """Benchmark tensora load_safetensors default backend for the full model directory."""
 
     def run():
         return _load_dir(safetensors_dir, load_safetensors)

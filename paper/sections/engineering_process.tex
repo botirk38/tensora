@@ -1,0 +1,36 @@
+\section{Development methodology}
+\label{sec:engineering_process}
+
+This section summarises how the implementation was developed and validated, complementing the technical design in Section~\ref{sec:design}. The focus is on requirements, quality practices, and how measurements were tied to reproducible harnesses.
+
+\subsection{Lifecycle and iteration}
+
+Development interleaved implementation with benchmarking so that design choices were validated against measured behaviour on real checkpoints. Git history links coherent changes (refactors, backend fixes, tests) to the revisions used for final numbers where relevant.
+
+\subsection{Requirements and scope management}
+
+Initial requirements were to support SafeTensors and ServerlessLLM-style partitioned layouts, expose multiple backends for comparison, and remain usable from Python for integration-style tests. As the codebase grew, secondary requirements appeared: stable error reporting for conversion pipelines, parity tests between backends, and compatibility constraints from downstream tools (for example, vLLM's synchronous loader interface). Scope was managed by treating the Rust core and bindings as separate layers: core correctness and performance first, then binding ergonomics, then serving-engine integration. The vLLM-facing code paths follow the engine's synchronous loader interface at the Python boundary.
+
+\subsection{Testing strategy}
+
+Testing relied on automated checks at multiple levels. The Rust crate uses unit and integration tests across readers, writers, backends, and converters. The Python bindings use pytest with optional framework extras so that environments without Torch or TensorFlow can still run core tests. Benchmarks and profiling binaries are kept separate from the library surface so that measurement code does not complicate production paths.
+
+Regression risk was controlled by running the full Rust test suite after structural changes and by using continuous integration to catch failures on push. The exact CI configuration may evolve, but the intent is stable: build, test, and lint should remain green on the main development line.
+
+\subsection{Quality practices}
+
+The codebase adopted consistent error types instead of ad hoc strings for failure modes that users must diagnose (missing tensors, partition size mismatches, and similar). Public APIs document error conditions where non-obvious. Unsafe code used for zero-copy I/O includes explicit safety comments. These practices support long-term maintainability: future contributors can see invariants and failure modes without relying on tribal knowledge.
+
+\subsection{Software artefacts}
+
+The primary artefacts are a reusable library and bindings with documented loading paths, plus evaluation harnesses used to produce the results in Section~\ref{sec:results}. Documentation and examples were updated as workflows changed (for example, defaulting conversion steps in helper scripts so that demos fail less often for new users). This aligns engineering effort with the goal of reproducible evaluation rather than one-off scripts.
+
+\subsection{Testing and regression discipline}
+
+Automated tests served two roles: correctness (tensor bytes match expectations; error paths behave) and guardrails during refactors (backend parity on shared workloads). Benchmarks were treated as non-deterministic measurements: they validate directionally, but headline numbers in this paper come from controlled harness runs with explicit cache-drop procedures rather than from a single CI timing assertion. This separation keeps CI fast and reliable while still allowing honest performance work.
+
+\subsection{Maintainability implications of adaptive policy}
+
+An adaptive loader is more complex than a single-backend loader. That complexity must be justified by measurable benefit, which is why we tie policy changes to observed crossovers rather than to aesthetics. For future maintainers, the useful invariant is: \textbf{when adding a new format or a new backend, update the selector's features and re-run the Rust matrices before claiming parity}. Otherwise the codebase risks drifting into a configuration-heavy system whose behaviour is hard to explain, which would undermine the very clarity that motivates adaptive heuristics in the first place.
+
+Public APIs stay small, explicit backend labels stay available for debugging, and harnesses stay out of library code paths so an adaptive loader stays auditable as maintainers change.

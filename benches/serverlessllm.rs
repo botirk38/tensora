@@ -3,18 +3,18 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::PathBuf;
-use tensor_store::formats::serverlessllm;
+use tensora::formats::serverlessllm;
 
 fn model_dir() -> (String, PathBuf) {
     let id = std::env::var("TENSOR_STORE_MODEL_ID").unwrap_or_else(|_| {
         eprintln!("Set TENSOR_STORE_MODEL_ID to a Hugging Face model id (e.g. openai-community/gpt2).");
         std::process::exit(1);
     });
-    let safetensors_dir = tensor_store::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {
+    let safetensors_dir = tensora::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {
         eprintln!("Could not download safetensors for {id}: {e}");
         std::process::exit(1);
     });
-    let dir = tensor_store::hf_model::ensure_serverlessllm_cache_dir(&id, &safetensors_dir)
+    let dir = tensora::hf_model::ensure_serverlessllm_cache_dir(&id, &safetensors_dir)
         .unwrap_or_else(|e| {
             eprintln!("Could not build ServerlessLLM layout for {id}: {e}");
             std::process::exit(1);

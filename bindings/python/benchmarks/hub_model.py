@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
-from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
+from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
 
 _RECOMMENDED_PARTITION_TARGET_BYTES = 512 * 1024 * 1024
@@ -15,7 +15,7 @@ _RECOMMENDED_PARTITION_TARGET_BYTES = 512 * 1024 * 1024
 def recommended_partition_count(total_bytes: int) -> int:
     """Default ServerlessLLM partition count: ``max(1, ceil(total_bytes / 512 MiB))``.
 
-    This matches ``tensor_store::formats::serverlessllm::recommended_partition_count`` in Rust.
+    This matches ``tensora::formats::serverlessllm::recommended_partition_count`` in Rust.
     """
     if total_bytes <= 0:
         return 1

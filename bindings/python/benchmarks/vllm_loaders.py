@@ -1,4 +1,4 @@
-"""Benchmark-only vLLM tensor_store loader."""
+"""Benchmark-only vLLM tensora loader."""
 
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ def _cache_root() -> str:
 
 
 def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
-    from tensor_store_py._tensor_store_rust import (
+    from tensora._tensora_rust import (
         load_safetensors,
         load_safetensors_sync,
     )
     if backend == "io-uring":
-        from tensor_store_py._tensor_store_rust import load_safetensors_io_uring
+        from tensora._tensora_rust import load_safetensors_io_uring
 
         return load_safetensors_io_uring(path)
 
@@ -33,12 +33,12 @@ def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
 
 
 def _load_serverlessllm(path: str, backend: str) -> dict[str, torch.Tensor]:
-    from tensor_store_py._tensor_store_rust import (
+    from tensora._tensora_rust import (
         load_serverlessllm,
         load_serverlessllm_sync,
     )
     if backend == "io-uring":
-        from tensor_store_py._tensor_store_rust import load_serverlessllm_io_uring
+        from tensora._tensora_rust import load_serverlessllm_io_uring
 
         return load_serverlessllm_io_uring(path)
 
@@ -67,18 +67,18 @@ def _ensure_serverlessllm_artifact(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
+    from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
     convert_safetensors_to_serverlessllm(hf_folder, out_dir, parts)
     return out_dir
 
 
-def register_tensor_store_loader() -> None:
+def register_tensora_loader() -> None:
     from vllm.model_executor.model_loader import register_model_loader
     from vllm.model_executor.model_loader.base_loader import BaseModelLoader
     from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
 
-    @register_model_loader("tensor_store")
+    @register_model_loader("tensora")
     class TensorStoreLoader(DefaultModelLoader):
         def __init__(self, load_config):
             BaseModelLoader.__init__(self, load_config)
@@ -93,9 +93,9 @@ def register_tensor_store_loader() -> None:
             fmt = extra.get("format")
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
-                raise ValueError(f"unsupported tensor_store format: {fmt}")
+                raise ValueError(f"unsupported tensora format: {fmt}")
             if backend not in {"default", "sync", "io-uring"}:
-                raise ValueError(f"unsupported tensor_store backend: {backend}")
+                raise ValueError(f"unsupported tensora backend: {backend}")
 
             original_load_format = self.load_config.load_format
             self.load_config.load_format = "safetensors"
@@ -110,7 +110,7 @@ def register_tensor_store_loader() -> None:
                 self.load_config.load_format = original_load_format
             if not use_safetensors:
                 raise ValueError(
-                    "tensor_store benchmark loader requires safetensors weights"
+                    "tensora benchmark loader requires safetensors weights"
                 )
 
             if self.counter_before_loading_weights == 0.0:

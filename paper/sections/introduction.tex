@@ -1,0 +1,14 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Serving an LLM begins before the first token: weights must reach GPU memory. A 7B model in float16 needs roughly 14GB, and serverless environments evict idle models to free memory for other tenants. When a request arrives, the inference pipeline cannot start until the checkpoint is fully loaded---this cold-start latency is directly visible to users.
+
+Peak storage bandwidth is only an upper bound. Checkpoint layout, request structure, and integration overhead often dominate realised throughput. The gap between peak hardware and effective loading performance suggests bottlenecks lie in how reads are submitted, batched, and integrated.
+
+Our thesis is that backend choice for LLM checkpoint loading depends jointly on layout and scale, so the right systems contribution is a measured, format-aware adaptive policy with explicit overrides, not a single universal loader. We use Tensora as the experimental vehicle, comparing synchronous POSIX I/O, Tokio async, io\_uring, and an adaptive \texttt{default} under cold-cache evaluation.\footnote{Tensora: this paper's checkpoint-loading system (Rust crate \texttt{tensor\_store}, Python package \texttt{tensor\_store\_py}). It is unrelated to Google's TensorStore library for array storage.}
+
+For SafeTensors (contiguous), explicit sync fits smaller fixtures while io\_uring fits the largest multi-shard cases (Section~\ref{sec:results}). For ServerlessLLM (partitioned), sync never leads. Python and vLLM results show integration overhead can reorder backend rankings; loader choice matters most for initialisation and time-to-first-token.
+
+We make four contributions: (1) a controlled measurement study across two layouts and four backend policies; (2) empirical regime maps showing SafeTensors crossovers and ServerlessLLM matrices; (3) integration evidence that Python and vLLM can reorder conclusions; and (4) an operational policy: deploy a format-aware adaptive \texttt{default} with explicit overrides.
+
+The remainder proceeds as follows. Related work (Section~\ref{sec:related_work}) positions our thesis. Design (Section~\ref{sec:design}) describes the Tensora system. Experimental setup (Section~\ref{sec:experimental_setup}) and results (Section~\ref{sec:results}) present evidence. Discussion (Section~\ref{sec:discussion}) and limitations (Section~\ref{sec:limitations}) interpret findings. Conclusion (Section~\ref{sec:conclusion}) summarises. Appendix~\ref{app:repro} provides reproducibility details.

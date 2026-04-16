@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
-from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
+from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
 
 def create_gpt2(n_layers: int = 2) -> dict[str, torch.Tensor]:

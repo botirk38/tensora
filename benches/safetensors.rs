@@ -1,16 +1,16 @@
-//! SafeTensors benchmarks: tensor_store modes plus native baselines.
+//! SafeTensors benchmarks: tensora modes plus native baselines.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
-use tensor_store::formats::safetensors;
+use tensora::formats::safetensors;
 
 fn model_dirs() -> (String, PathBuf) {
     let id = std::env::var("TENSOR_STORE_MODEL_ID").unwrap_or_else(|_| {
         eprintln!("Set TENSOR_STORE_MODEL_ID to a Hugging Face model id (e.g. openai-community/gpt2).");
         std::process::exit(1);
     });
-    let dir = tensor_store::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {
+    let dir = tensora::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {
         eprintln!("Could not resolve model {id}: {e}");
         std::process::exit(1);
     });

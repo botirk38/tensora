@@ -1,1 +1,1 @@
-"""Benchmark suite for tensor_store_py."""
+"""Benchmark suite for tensora."""

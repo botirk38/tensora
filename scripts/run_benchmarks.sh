@@ -3,13 +3,13 @@
 # Writes pytest-benchmark JSON (--benchmark-json), one file per model.
 #
 # Required:
-#   TENSOR_STORE_BENCH_MODELS   One or more Hugging Face model ids (space- and/or comma-separated)
+#   TENSORA_BENCH_MODELS   One or more Hugging Face model ids (space- and/or comma-separated)
 #
 # Optional:
-#   TENSOR_STORE_BENCH_JSON          Output directory for JSON files (default: <repo>/results/benchmarks/)
-#   TENSOR_STORE_BENCH_JOBS          Max concurrent pytest processes (default: min(4, number of models); ignored when vLLM runs)
-#   TENSOR_STORE_SKIP_MAURIN=1       Skip maturin develop --release
-#   TENSOR_STORE_BENCH_NO_VLLM=1     Omit bench_vllm.py; uv sync uses --group dev --group torch (no vLLM stack)
+#   TENSORA_BENCH_JSON          Output directory for JSON files (default: <repo>/results/benchmarks/)
+#   TENSORA_BENCH_JOBS          Max concurrent pytest processes (default: min(4, number of models); ignored when vLLM runs)
+#   TENSORA_SKIP_MAURIN=1       Skip maturin develop --release
+#   TENSORA_BENCH_NO_VLLM=1     Omit bench_vllm.py; uv sync uses --group dev --group torch (no vLLM stack)
 
 set -euo pipefail
 
@@ -24,28 +24,28 @@ fi
 
 py_dir="${repo_root}/bindings/python"
 
-if [[ -z "${TENSOR_STORE_BENCH_MODELS:-}" ]]; then
-  echo "error: set TENSOR_STORE_BENCH_MODELS to one or more Hugging Face model ids (space/comma-separated; example: gpt2 or Qwen/Qwen3-8B)" >&2
+if [[ -z "${TENSORA_BENCH_MODELS:-}" ]]; then
+  echo "error: set TENSORA_BENCH_MODELS to one or more Hugging Face model ids (space/comma-separated; example: gpt2 or Qwen/Qwen3-8B)" >&2
   exit 1
 fi
 
-_normalized="${TENSOR_STORE_BENCH_MODELS//,/ }"
+_normalized="${TENSORA_BENCH_MODELS//,/ }"
 read -r -a models <<< "${_normalized}"
 if [[ ${#models[@]} -eq 0 ]]; then
-  echo "error: TENSOR_STORE_BENCH_MODELS produced no model ids after parsing" >&2
+  echo "error: TENSORA_BENCH_MODELS produced no model ids after parsing" >&2
   exit 1
 fi
 
-if [[ -n "${TENSOR_STORE_BENCH_JSON:-}" ]]; then
-  if [[ -f "${TENSOR_STORE_BENCH_JSON}" ]]; then
-    echo "error: TENSOR_STORE_BENCH_JSON must be a directory path, not an existing file (${TENSOR_STORE_BENCH_JSON})" >&2
+if [[ -n "${TENSORA_BENCH_JSON:-}" ]]; then
+  if [[ -f "${TENSORA_BENCH_JSON}" ]]; then
+    echo "error: TENSORA_BENCH_JSON must be a directory path, not an existing file (${TENSORA_BENCH_JSON})" >&2
     exit 1
   fi
-  if [[ "${TENSOR_STORE_BENCH_JSON}" == *.json ]] && [[ ! -d "${TENSOR_STORE_BENCH_JSON}" ]]; then
-    echo "error: TENSOR_STORE_BENCH_JSON must be a directory; remove the .json suffix or create the directory" >&2
+  if [[ "${TENSORA_BENCH_JSON}" == *.json ]] && [[ ! -d "${TENSORA_BENCH_JSON}" ]]; then
+    echo "error: TENSORA_BENCH_JSON must be a directory; remove the .json suffix or create the directory" >&2
     exit 1
   fi
-  out_dir="${TENSOR_STORE_BENCH_JSON}"
+  out_dir="${TENSORA_BENCH_JSON}"
 else
   out_dir="${repo_root}/results/benchmarks"
 fi
@@ -58,7 +58,7 @@ slugify() {
 
 n_models=${#models[@]}
 
-if [[ "${TENSOR_STORE_BENCH_NO_VLLM:-}" == "1" ]]; then
+if [[ "${TENSORA_BENCH_NO_VLLM:-}" == "1" ]]; then
   echo "==> uv sync (dev + torch; skipping vLLM dependency group)"
   uv --directory "${py_dir}" sync --group dev --group torch
 else
@@ -66,28 +66,28 @@ else
   uv --directory "${py_dir}" sync --group dev --group vllm
 fi
 
-if [[ "${TENSOR_STORE_SKIP_MAURIN:-}" != "1" ]]; then
+if [[ "${TENSORA_SKIP_MAURIN:-}" != "1" ]]; then
   echo "==> maturin develop --release"
   uv --directory "${py_dir}" run maturin develop --release
 else
-  echo "==> skipping maturin (TENSOR_STORE_SKIP_MAURIN=1)"
+  echo "==> skipping maturin (TENSORA_SKIP_MAURIN=1)"
 fi
 
 tests=(benchmarks/bench_safetensors.py benchmarks/bench_serverlessllm.py)
-if [[ "${TENSOR_STORE_BENCH_NO_VLLM:-}" != "1" ]]; then
+if [[ "${TENSORA_BENCH_NO_VLLM:-}" != "1" ]]; then
   tests+=(benchmarks/bench_vllm.py)
 else
-  echo "==> skipping bench_vllm.py (TENSOR_STORE_BENCH_NO_VLLM=1)"
+  echo "==> skipping bench_vllm.py (TENSORA_BENCH_NO_VLLM=1)"
 fi
 
-if [[ "${TENSOR_STORE_BENCH_NO_VLLM:-}" != "1" ]]; then
+if [[ "${TENSORA_BENCH_NO_VLLM:-}" != "1" ]]; then
   effective_jobs=1
-  if [[ -n "${TENSOR_STORE_BENCH_JOBS:-}" ]] && [[ "${TENSOR_STORE_BENCH_JOBS}" != "1" ]]; then
-    echo "==> vLLM benchmarks: forcing parallel jobs to 1 (TENSOR_STORE_BENCH_JOBS=${TENSOR_STORE_BENCH_JOBS} ignored; single GPU / single vLLM process)" >&2
+  if [[ -n "${TENSORA_BENCH_JOBS:-}" ]] && [[ "${TENSORA_BENCH_JOBS}" != "1" ]]; then
+    echo "==> vLLM benchmarks: forcing parallel jobs to 1 (TENSORA_BENCH_JOBS=${TENSORA_BENCH_JOBS} ignored; single GPU / single vLLM process)" >&2
   fi
 else
-  if [[ -n "${TENSOR_STORE_BENCH_JOBS:-}" ]]; then
-    effective_jobs="${TENSOR_STORE_BENCH_JOBS}"
+  if [[ -n "${TENSORA_BENCH_JOBS:-}" ]]; then
+    effective_jobs="${TENSORA_BENCH_JOBS}"
   else
     effective_jobs=$n_models
     (( effective_jobs > 4 )) && effective_jobs=4

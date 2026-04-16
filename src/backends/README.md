@@ -88,7 +88,7 @@ Uses OS virtual memory to map files directly into address space.
 The module includes a global buffer pool optimized for ML checkpoint loading:
 
 ```rust
-use tensor_store::backends::get_buffer_pool;
+use tensora::backends::get_buffer_pool;
 
 let pool = get_buffer_pool();
 let buffer = pool.get(size);

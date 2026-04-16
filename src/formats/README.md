@@ -10,8 +10,8 @@
 ## Usage
 
 ```rust
-use tensor_store::safetensors;
-use tensor_store::serverlessllm;
+use tensora::safetensors;
+use tensora::serverlessllm;
 ```
 
 Each format module exposes `Model` and `TensorView` implementations via the traits in `traits.rs`. Choose based on your source checkpoint format:

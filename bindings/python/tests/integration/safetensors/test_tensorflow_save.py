@@ -4,8 +4,8 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from tensor_store_py.tensorflow import load_safetensors as tf_load_safetensors
-from tensor_store_py.tensorflow import save_safetensors as tf_save_safetensors
+from tensora.tensorflow import load_safetensors as tf_load_safetensors
+from tensora.tensorflow import save_safetensors as tf_save_safetensors
 
 
 class TestTensorFlowSave:

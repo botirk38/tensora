@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     load_safetensors,
     load_safetensors_async,
     load_safetensors_sync,

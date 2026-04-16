@@ -1,0 +1,32 @@
+\section{Narrative: Scale, Backend Choice, and Adaptive Loading}
+\label{sec:narrative_scope}
+
+This section states claims separately for SafeTensors and ServerlessLLM. \textbf{Scale shifts the best backend}; \textbf{layout can overturn a one-line rule}; \textbf{adaptive selection follows from the tables}, not from API names alone.
+
+\subsection{SafeTensors (contiguous)}
+
+Among \emph{explicit} backends in Table~\ref{tab:rust-safetensors}, \textbf{synchronous} loading wins at the small end of the ladder: blocking reads with parallel shard loading avoid async runtime overhead, and total bytes stay small enough that submission cost still matters. From Qwen3-8B upward, \textbf{\texttt{io\_uring}} is the fastest explicit column: larger multi-shard loads need sustained queue depth. That crossover makes a \textbf{fixed} global backend (always sync or always io\_uring) wrong in principle.
+
+The production \texttt{default} policy maps workload signals (format family, total bytes, shard count) onto backends and adds planning (chunking, coalescing). It is \emph{not} a relabel of one explicit column, so it can beat or miss explicit sync/io\_uring on individual rows. The signals it uses---contiguous versus partitioned layout, checkpoint byte size, shard granularity---are derived from the table patterns: the adaptive heuristic tracks where the crossover occurs empirically, not from first principles.
+
+The selector is bounded: it cannot perfectly predict the medium-scale crossover region (SafeTensors SmolLM3-3B and Qwen3-4B) because that region depends on fine-grained interaction between read size, filesystem behaviour, and NVMe depth that the heuristic captures approximately. Section~\ref{sec:limitations} states these explicit misses. Despite this boundedness, the adaptive policy provides operational value: it automates the large-scale regime (where io\_uring dominates) and the small-scale regime (where sync dominates), handling the majority of production checkpoint loads without manual backend selection.
+
+\subsection{ServerlessLLM (partitioned)}
+
+Table~\ref{tab:rust-serverlessllm} is a different regime: \textbf{synchronous loading never wins}. The trade-off is between grouped \textbf{async} work at smaller and mid-sized range-heavy loads and \textbf{io\_uring} (including via \texttt{default} at larger sizes). Do not import the SafeTensors ``sync for small'' slogan here without the table.
+
+The \texttt{default} policy for ServerlessLLM uses the same class of signals (format, bytes, partition count) but maps them onto a different ranking because partitioned layout changes the optimal backend. The selector is also bounded here: it routes most large partitioned loads to io\_uring effectively but can lag explicit async on some mid-sized rows (SmolLM3-3B, Qwen3-4B).
+
+\subsection{Why adaptation, and a minimal mechanistic picture}
+
+Crossover location depends on shards, grouping, and higher layers (Python, vLLM), so a single static policy cannot track the optimum.
+
+Small SafeTensors loads finish before async/io\_uring setup fully amortises; large loads need enough in-flight I/O to feed NVMe parallelism. The evaluated \texttt{io\_uring} backend matches that regime by sustaining submission depth. This is consistent with the tables, not a formal queueing proof.
+
+Adaptive loading is an \textbf{engineering policy justified by evidence}, not a claim of universal optimality. The policy is grounded in measured regime behaviour: sync wins small, io\_uring wins large for SafeTensors; partitioned layouts have no sync regime. That evidence supports automation for most production cases while explicitly acknowledging bounded misses.
+
+\subsection{Reading \texttt{default} against explicit columns}
+
+``Sync for small SafeTensors'' and ``io\_uring for large SafeTensors'' refer to the \textbf{explicit} sync and io\_uring columns as anchors. The \texttt{default} column shows the integrated selector with planning. Credit belongs to integration as much as to API names.
+
+The ``sync when small, io\_uring when large'' line is anchored to the \textbf{SafeTensors Rust cold-cache matrix} in this harness, not to every filesystem or host. For ServerlessLLM, claims are limited to what Table~\ref{tab:rust-serverlessllm} shows on the tested ladder.

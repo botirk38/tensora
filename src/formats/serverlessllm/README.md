@@ -1,6 +1,6 @@
 # ServerlessLLM Format
 
-Partitioned tensor loading for tensor_store, with adaptive backend selection.
+Partitioned tensor loading for tensora, with adaptive backend selection.
 
 ## Module Structure
 
@@ -34,7 +34,7 @@ The `default` policy uses workload-aware heuristics:
 ## API
 
 ```rust
-use tensor_store::serverlessllm::Model;
+use tensora::serverlessllm::Model;
 
 let model = Model::load("model_serverlessllm").await?;
 for name in model.tensor_names() {

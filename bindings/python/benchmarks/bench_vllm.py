@@ -1,4 +1,4 @@
-"""vLLM integration benchmarks: compare native vs tensor_store loaders.
+"""vLLM integration benchmarks: compare native vs tensora loaders.
 
 Each loader runs load_only, ttft, and steady_state_decode in warm and cold cache modes.
 Uses explicit loaders via vLLM's registered model loader mechanism.

@@ -2,22 +2,22 @@
 
 ## Entry point
 
-- **`run_benchmarks.sh`** — from the **repository root**, runs all pytest benchmarks under `bindings/python/benchmarks/` via `uv`, builds the extension with `maturin`, and writes one pytest-benchmark JSON file per model under `results/benchmarks/` (`pytest_benchmark_<slug>.json`). Requires **`TENSOR_STORE_BENCH_MODELS`** (one or more Hugging Face model ids, space- or comma-separated). With vLLM benchmarks, runs are serialized to a single pytest process; with `TENSOR_STORE_BENCH_NO_VLLM=1`, use **`TENSOR_STORE_BENCH_JOBS`** to cap parallel pytest runs.
+- **`run_benchmarks.sh`** — from the **repository root**, runs all pytest benchmarks under `bindings/python/benchmarks/` via `uv`, builds the extension with `maturin`, and writes one pytest-benchmark JSON file per model under `results/benchmarks/` (`pytest_benchmark_<slug>.json`). Requires **`TENSORA_BENCH_MODELS`** (one or more Hugging Face model ids, space- or comma-separated). With vLLM benchmarks, runs are serialized to a single pytest process; with `TENSORA_BENCH_NO_VLLM=1`, use **`TENSORA_BENCH_JOBS`** to cap parallel pytest runs.
 
 ## Typical usage
 
 Run Python benchmarks:
 
 ```bash
-export TENSOR_STORE_BENCH_MODELS=Qwen/Qwen3-8B
+export TENSORA_BENCH_MODELS=Qwen/Qwen3-8B
 ./scripts/run_benchmarks.sh
 ```
 
 Multiple models (CPU-only stack; parallel by default up to four at a time):
 
 ```bash
-export TENSOR_STORE_BENCH_MODELS="Qwen/Qwen3-0.6B Qwen/Qwen3-8B"
-export TENSOR_STORE_BENCH_NO_VLLM=1
+export TENSORA_BENCH_MODELS="Qwen/Qwen3-0.6B Qwen/Qwen3-8B"
+export TENSORA_BENCH_NO_VLLM=1
 ./scripts/run_benchmarks.sh
 ```
 

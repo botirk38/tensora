@@ -5,13 +5,13 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tensor_store::formats::safetensors;
+use tensora::formats::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
 use crate::stats::summarize;
 
 fn resolved_dir(config: &ProfileConfig) -> Result<(String, PathBuf), ProfileError> {
-    let dir = tensor_store::hf_model::ensure_safetensors_hub_dir(&config.model_id)
+    let dir = tensora::hf_model::ensure_safetensors_hub_dir(&config.model_id)
         .map_err(|e| ProfileError::new(e.to_string()))?;
     Ok((config.model_id.clone(), dir))
 }
@@ -140,7 +140,7 @@ fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
                 summary.mean_ms, summary.min_ms, summary.max_ms
             );
         }
-        Ok::<_, tensor_store::ReaderError>(())
+        Ok::<_, tensora::ReaderError>(())
     })?;
     Ok(())
 }

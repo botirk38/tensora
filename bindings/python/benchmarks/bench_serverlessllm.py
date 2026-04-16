@@ -1,12 +1,12 @@
 """ServerlessLLM benchmarks for real models.
 
-Benchmarks tensor_store ServerlessLLM loading with different eager backends plus
+Benchmarks tensora ServerlessLLM loading with different eager backends plus
 the lazy open/get_tensor path. Partition count uses the shared size-based heuristic.
 """
 
 
 from benchmarks.hub_model import touch_tensor
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     load_serverlessllm,
     load_serverlessllm_async,
     load_serverlessllm_sync,

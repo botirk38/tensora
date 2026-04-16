@@ -1,16 +1,16 @@
 [package]
-name = "tensor_store"
+name = "tensora"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Adaptive checkpoint loading for large language models"
 license = "Apache-2.0"
-repository = "https://github.com/botirk38/tensor_store"
+repository = "https://github.com/botirk38/tensora"
 keywords = ["tensor", "storage", "io", "performance", "llm"]
 categories = ["development-tools", "hardware-support"]
 
 [lib]
-name = "tensor_store"
+name = "tensora"
 path = "src/lib.rs"
 
 [[bench]]

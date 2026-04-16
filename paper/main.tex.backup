@@ -1,0 +1,83 @@
+%% Preprint / arXiv build: standard LaTeX article (natbib + plainnat). Single entrypoint.
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage[expansion=false]{microtype}
+\usepackage[round,authoryear]{natbib}
+\usepackage{xurl}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{%
+  pdftitle={Load by Design: Adaptive Heuristics for LLM Checkpoint Loading},
+  pdfauthor={Botir Khaltaev},
+  pdfkeywords={large language models, checkpoint loading, io-uring, cold start, vLLM, reproducibility}%
+}
+
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usetikzlibrary{shapes.geometric,arrows,positioning,calc}
+\pgfplotsset{compat=1.18}
+
+\def\figdir{figures}
+
+\lstset{%
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+}
+
+\title{Load by Design: Adaptive Heuristics for LLM Checkpoint Loading}
+\author{%
+  Botir Khaltaev\\%
+  \textit{Independent, United Kingdom}\\%
+  \texttt{btrghstk@gmail.com}%
+}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Inference on large language models is often gated by loading weights from storage into GPU memory. In serverless and multi-tenant settings, idle models are evicted and must be reloaded on demand, so cold-start latency can hinge on how checkpoints are read. Peak NVMe bandwidth is only an upper bound: request structure, checkpoint layout, and software above the block layer often dominate realised throughput.
+
+This paper treats checkpoint loading as a measurement-driven systems problem. Using \emph{TensorStore} as a controlled experimental vehicle, we compare synchronous POSIX I/O, Tokio-based async loading, io\_uring, and an adaptive \texttt{default} policy across contiguous SafeTensors and partitioned ServerlessLLM-style layouts, then check how those choices survive Python bindings and vLLM integration.
+
+\textbf{Findings.} For \textbf{contiguous SafeTensors}, explicit \textbf{synchronous} loading wins at the small end of our ladder, while explicit \textbf{io\_uring} wins at the largest multi-shard scales where queue depth matters. For \textbf{partitioned ServerlessLLM}, synchronous loading is never fastest in our matrix; the relevant trade-off is among async, io\_uring, and \texttt{default}. These layout- and scale-dependent crossovers show that no single fixed backend is the right default.
+
+The paper's central contribution is therefore an operational policy claim: backend choice for LLM checkpoint loading should be \textbf{format-aware} and \textbf{adaptive}, with explicit overrides, rather than treated as one universal loader decision. Python and vLLM results support the same point by showing that integration overhead can reorder backend rankings and that loader choice matters most for initialisation and time-to-first-token, not steady-state decode. Appendix~\ref{app:repro} documents harnesses, result paths, and environment fields to record for replication.
+\end{abstract}
+
+\bgroup\sloppy\raggedright
+\noindent\textbf{Keywords:}\ 
+large language models, checkpoint loading, I/O policy, io\_uring, cold start, vLLM, reproducibility\par
+\vspace{0.75em}\footnotesize
+\noindent\textbf{Naming.} \emph{TensorStore} denotes this paper's checkpoint-loading system (Rust crate \texttt{tensor\_store}, Python \texttt{tensor\_store\_py}).\par
+\noindent It is not affiliated with Google's TensorStore library for N-dimensional array storage.\par
+\egroup
+\vspace{0.6em}
+
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/narrative_scope}
+\input{sections/design}
+\input{sections/engineering_process}
+\input{sections/experimental_setup}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/limitations}
+\input{sections/professional_issues}
+\input{sections/conclusion}
+
+\appendix
+\input{sections/appendix_reproducibility}
+
+\bibliographystyle{plainnat}
+\bibliography{bib/references}
+
+\end{document}

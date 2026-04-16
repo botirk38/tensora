@@ -5,8 +5,8 @@ import pytest
 torch = pytest.importorskip("torch")
 from safetensors.torch import load_file
 
-from tensor_store_py.torch import load_safetensors as pytorch_load_safetensors
-from tensor_store_py.torch import save_safetensors as pytorch_save_safetensors
+from tensora.torch import load_safetensors as pytorch_load_safetensors
+from tensora.torch import save_safetensors as pytorch_save_safetensors
 
 
 class TestPyTorchSave:

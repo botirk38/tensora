@@ -57,9 +57,9 @@ def run_benchmark(
     config = LOADER_CONFIG.get(loader)
 
     if config is not None:
-        from benchmarks.vllm_loaders import register_tensor_store_loader
+        from benchmarks.vllm_loaders import register_tensora_loader
 
-        register_tensor_store_loader()
+        register_tensora_loader()
 
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
@@ -75,7 +75,7 @@ def run_benchmark(
     }
 
     if config is not None:
-        llm_kwargs["load_format"] = "tensor_store"
+        llm_kwargs["load_format"] = "tensora"
         llm_kwargs["model_loader_extra_config"] = config
 
     init_start = time.perf_counter()

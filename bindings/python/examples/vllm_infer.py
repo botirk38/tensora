@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run vLLM inference with TensorStore-backed loading (`tensor_store_py`).
+"""Run vLLM inference with TensorStore-backed loading (`tensora`).
 
 Usage:
     python examples/vllm_infer.py --model gpt2 --prompt "Hello, world!"
@@ -18,7 +18,7 @@ import warnings
 
 
 def ensure_serverlessllm(hf_folder: str) -> str:
-    from tensor_store_py._tensor_store_rust import convert_safetensors_to_serverlessllm
+    from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
     safetensors_files = glob.glob(os.path.join(hf_folder, "*.safetensors"))
     if not safetensors_files:
@@ -71,20 +71,20 @@ def run_inference(
         max_model_len = get_model_max_len(model_id)
         print(f"Auto-detected max_model_len: {max_model_len}")
 
-    from benchmarks.vllm_loaders import register_tensor_store_loader
+    from benchmarks.vllm_loaders import register_tensora_loader
 
-    register_tensor_store_loader()
+    register_tensora_loader()
 
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
 
-    print(f"Loading model {model_id} with TensorStore (tensor_store) backend={backend}")
+    print(f"Loading model {model_id} with TensorStore (tensora) backend={backend}")
     llm = LLM(
         model=model_id,
         tensor_parallel_size=1,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
-        load_format="tensor_store",
+        load_format="tensora",
         model_loader_extra_config={"format": "serverlessllm", "backend": backend},
     )
 
@@ -99,7 +99,7 @@ def run_inference(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run vLLM inference with TensorStore-backed model loading (tensor_store_py)"
+        description="Run vLLM inference with TensorStore-backed model loading (tensora)"
     )
     parser.add_argument(
         "--model",
@@ -115,7 +115,7 @@ def main():
         "--backend",
         default="default",
         choices=["default", "sync", "io-uring"],
-        help="TensorStore / tensor_store I/O backend (default: default)",
+        help="TensorStore / tensora I/O backend (default: default)",
     )
     parser.add_argument(
         "--max-tokens",

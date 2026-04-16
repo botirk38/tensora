@@ -3,13 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tensor_store::TensorView;
-use tensor_store::formats::safetensors;
+use tensora::TensorView;
+use tensora::formats::safetensors;
 
 use crate::config::{DemoConfig, DemoError, DemoResult, format_bytes};
 
 fn resolve_dir(config: &DemoConfig) -> Result<PathBuf, DemoError> {
-    tensor_store::hf_model::ensure_safetensors_hub_dir(&config.model_id)
+    tensora::hf_model::ensure_safetensors_hub_dir(&config.model_id)
         .map_err(|e| DemoError::new(e.to_string()))
 }
 
@@ -86,7 +86,7 @@ fn demo_async(config: &DemoConfig) -> DemoResult {
         crate::io_metrics::display_io_metrics_delta(io_before, duration);
         println!();
 
-        Ok::<_, tensor_store::ReaderError>(())
+        Ok::<_, tensora::ReaderError>(())
     })?;
 
     Ok(())

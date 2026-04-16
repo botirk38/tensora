@@ -19,7 +19,7 @@ pub fn filesystem_slug(model_id: &str) -> String {
 fn cache_root() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("tensor_store")
+        .join("tensora")
 }
 
 /// Errors while resolving a Hub model to local paths.
@@ -46,9 +46,7 @@ pub enum HfModelError {
 ///
 /// Downloads missing shards via the Hub API. All shards share one snapshot directory.
 pub fn ensure_safetensors_hub_dir(model_id: &str) -> Result<PathBuf, HfModelError> {
-    let api = ApiBuilder::from_env()
-        .with_progress(true)
-        .build()?;
+    let api = ApiBuilder::from_env().with_progress(true).build()?;
     let repo = Repo::model(model_id.to_string());
     let info = api.repo(repo.clone()).info()?;
 
@@ -91,18 +89,14 @@ fn dir_safetensors_total_bytes(dir: &Path) -> Result<u64, HfModelError> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|e| e == "safetensors")
-            && path.is_file()
-        {
+        if path.extension().is_some_and(|e| e == "safetensors") && path.is_file() {
             total += path.metadata()?.len();
         }
     }
     Ok(total)
 }
 
-/// ServerlessLLM artifact directory for `model_id`, under the OS cache (`tensor_store/<slug>/serverlessllm`).
+/// ServerlessLLM artifact directory for `model_id`, under the OS cache (`tensora/<slug>/serverlessllm`).
 ///
 /// Builds from `safetensors_dir` when `tensor_index.json` is absent (same partition heuristic as `convert`).
 pub fn ensure_serverlessllm_cache_dir(
@@ -126,7 +120,9 @@ pub fn ensure_serverlessllm_cache_dir(
     }
     let partitions = recommended_partition_count(total);
     if partitions == 0 {
-        return Err(HfModelError::Msg("partition count resolved to 0".to_string()));
+        return Err(HfModelError::Msg(
+            "partition count resolved to 0".to_string(),
+        ));
     }
 
     crate::convert_safetensors_to_serverlessllm_sync(

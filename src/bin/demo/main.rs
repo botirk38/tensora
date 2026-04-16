@@ -8,7 +8,7 @@ mod serverlessllm;
 use config::DemoConfig;
 
 #[derive(Parser)]
-#[command(name = "tensor_store demo")]
+#[command(name = "tensora demo")]
 #[command(about = "Showcase SafeTensors and ServerlessLLM loaders", long_about = None)]
 struct Cli {
     #[command(subcommand)]

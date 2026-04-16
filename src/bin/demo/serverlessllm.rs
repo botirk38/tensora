@@ -3,14 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tensor_store::formats::serverlessllm;
+use tensora::formats::serverlessllm;
 
 use crate::config::{DemoConfig, DemoError, DemoResult, format_bytes};
 
 fn resolve_dir(config: &DemoConfig) -> Result<PathBuf, DemoError> {
-    let safetensors_dir = tensor_store::hf_model::ensure_safetensors_hub_dir(&config.model_id)
+    let safetensors_dir = tensora::hf_model::ensure_safetensors_hub_dir(&config.model_id)
         .map_err(|e| DemoError::new(e.to_string()))?;
-    tensor_store::hf_model::ensure_serverlessllm_cache_dir(&config.model_id, &safetensors_dir)
+    tensora::hf_model::ensure_serverlessllm_cache_dir(&config.model_id, &safetensors_dir)
         .map_err(|e| DemoError::new(e.to_string()))
 }
 

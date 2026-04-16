@@ -1,1 +1,1 @@
-"""Integration tests for tensor_store_py."""
+"""Integration tests for tensora."""

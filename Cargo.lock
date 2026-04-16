@@ -1895,7 +1895,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tensor_store"
+name = "tensora"
 version = "0.1.0"
 dependencies = [
  "clap",

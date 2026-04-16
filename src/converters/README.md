@@ -24,14 +24,14 @@ Converters are responsible for:
 converters/
 ├── mod.rs                              # Module exports
 ├── safetensors_to_serverlessllm.rs    # SafeTensors → ServerlessLLM conversion
-└── safetensors_to_tensorstore.rs       # SafeTensors → TensorStore conversion
+└── safetensors_to_tensorstore.rs       # SafeTensors → Tensora conversion
 ```
 
 ## Key Functions
 
 ### SafeTensors to ServerlessLLM
 ```rust
-use tensor_store::converters::safetensors_to_serverlessllm;
+use tensora::converters::safetensors_to_serverlessllm;
 
 // Convert a directory of SafeTensors shards with partitioning
 convert_safetensors_to_serverlessllm(
@@ -83,7 +83,7 @@ fn partition_tensors(tensor_count: usize, partition_count: usize) -> Vec<usize> 
 
 ```rust
 // 1. Choose appropriate converter for input→output format pair
-use tensor_store::converters::safetensors_to_serverlessllm;
+use tensora::converters::safetensors_to_serverlessllm;
 
 // 2. Call converter with input directory/output paths and parameters
 convert_safetensors_to_serverlessllm(

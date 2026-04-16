@@ -1,16 +1,16 @@
 [package]
-name = "tensor-store-py"
+name = "tensora-py"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.70"
 
 [lib]
-name = "_tensor_store_rust"
+name = "_tensora_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["extension-module"] }
-tensor_store = { path = "../../.." }
+tensora = { path = "../../.." }
 tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "fs", "macros"] }
 
 [dev-dependencies]

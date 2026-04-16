@@ -1,0 +1,9 @@
+Plain-text abstract for the arXiv web form (paste as one block; adjust line breaks if the form imposes a character limit).
+
+Inference on large language models is often gated by loading weights from storage into GPU memory. In serverless and multi-tenant settings, idle models are evicted and must be reloaded on demand, so cold-start latency can hinge on how checkpoints are read. Peak NVMe bandwidth is only an upper bound: request structure, checkpoint layout, and software above the block layer often dominate realised throughput.
+
+We present TensorStore, an open checkpoint-loading framework and evaluation harness for Linux that supports SafeTensors and a partitioned ServerlessLLM-style layout, with eager backends spanning synchronous POSIX I/O, Tokio-based async loading, and io_uring. Python bindings and a custom vLLM integration extend the study beyond Rust-only microbenchmarks. Experiments use six public checkpoints and both layouts.
+
+Findings. For contiguous SafeTensors, explicit synchronous loading wins at the small end of our ladder, while explicit io_uring wins at the largest multi-shard scales where queue depth matters. No single fixed backend tracks that crossover, so an adaptive default policy (selector plus planning) is justified; it is not equivalent to any one explicit column.
+
+For partitioned ServerlessLLM, synchronous loading is never fastest in our matrix; the relevant trade-off is among async, io_uring, and default. Python adds enough overhead to reorder some Rust-level conclusions unless the bindings are tuned. In vLLM, loader choice affects initialisation and time-to-first-token far more than steady-state decode. The operational recommendation is a format-aware adaptive default with explicit overrides, not one universal backend. The reproducibility appendix documents harnesses, result paths, and environment fields to record for replication.

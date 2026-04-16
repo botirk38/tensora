@@ -1,0 +1,28 @@
+\section{Related Work}
+\label{sec:related_work}
+
+This section positions our thesis against existing literature. We show that the gap is operational policy, not format design or scheduling, and that database io\_uring findings translate qualitatively to checkpoint loading.
+
+\subsection{Where the gap is not}
+
+Three strands of prior work address checkpoint loading from different angles, and none answer the question this paper asks.
+
+\textbf{Scheduling and placement research} treats loading as a cost to avoid or hide. Warm pools, instance migration, and snapshot-based warm-up all optimise \emph{whether} and \emph{when} a load happens; they do not measure how fast bytes move once a load is required \cite{FU:2024,silva2021snapshot}. This paper holds scheduling fixed and measures load mechanics.
+
+\textbf{Format design} (SafeTensors, GGUF, partitioned formats) determines what byte ranges exist and whether storage can pre-fetch effectively. SafeTensors standardises layout; GGUF optimises memory mapping; partitioned formats enable partial loading \cite{safetensors_docs,serverlessllm_repo}. All three leave the operational question unanswered: given a fixed format, which I/O backend submits reads fastest?
+
+\textbf{Serverless serving systems} (vLLM, ORCA) improve runtime throughput through batching and scheduling \cite{pagedattention,orca}. Checkpoint loading sits before their pipeline starts; faster loading directly reduces time-to-first-token, which these systems treat as a constant.
+
+The gap is therefore operational: \textbf{which backend policy to deploy for a given checkpoint on a given integration surface}, not format design, not scheduling, not serving architecture.
+
+\subsection{Database io\_uring as a methodological anchor}
+
+Recent database work shows io\_uring benefits depend on workload shape and queue depth \cite{IOURING_DATABASE_GUIDELINES}. Bulk sequential reads already amortise syscall overhead; fragmented many-small workloads benefit from batched submission. This is directly relevant because checkpoint loading spans both regimes: contiguous SafeTensors shards resemble bulk sequential access, while partitioned ServerlessLLM layouts resemble fragmented range workloads.
+
+Key qualitative translation: backend family (\texttt{sync}, \texttt{async}, \texttt{io\_uring}) is not enough---execution policy must match workload features (byte count, shard count, fragmentation). This motivates our adaptive policy as a heuristic, not a closed-form optimum.
+
+Memory-mapped formats (GGUF) and page-cache strategies target a different optimisation: eliminating copies. They complement eager-loading policy; we hold mmap out of scope for cold-cache eager loads and treat it as a synthesis topic.
+
+\subsection{Positioning}
+
+We do not introduce a new format, prove security properties, or optimise training checkpoints. We measure load mechanics across backend policies for public checkpoints and synthesise an adaptive policy with explicit overrides. This operational contribution is the missing piece between format design (what bytes exist) and serving (how they are used).

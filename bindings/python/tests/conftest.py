@@ -1,8 +1,8 @@
-"""Shared pytest fixtures for tensor_store_py tests."""
+"""Shared pytest fixtures for tensora tests."""
 
 import pytest
 
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     load_safetensors,
     load_safetensors_async,
     load_safetensors_sync,

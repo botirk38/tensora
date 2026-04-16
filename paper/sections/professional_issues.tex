@@ -1,0 +1,16 @@
+\section{Ethics, safety, and reproducibility}
+\label{sec:professional_issues}
+
+This work evaluates systems behaviour on public model weights; it does not collect or analyse user conversations. The following points matter when deploying the open-source \texttt{tensor\_store} crate in production.
+
+\textbf{Provenance and safety.} Checkpoints from public hubs should be loaded with the same care as any third-party binary: verify distributor checksums when available, pin revisions, and prefer safe formats (e.g.\ SafeTensors) over unsafe deserialisation. Kernel-adjacent code (\texttt{io\_uring}, unsafe Rust) should use pinned dependency versions and regression tests on upgrades.
+
+\textbf{Privacy and regulation.} Benchmarks do not process tenant data; production deployments must still meet access control, encryption, and data-protection requirements where personal data or proprietary weights are involved.
+
+\textbf{Environmental proportionality.} Faster cold loads can reduce wasted idle time but do not address the dominant energy cost of large-model serving (inference and memory traffic). Claims should separate ``faster loading'' from ``lower total footprint'' unless measured end-to-end.
+
+\textbf{Transparency.} Performance claims should state cache state, format, and layer (Rust, Python, or vLLM). Negative rows (e.g.\ where \texttt{default} trails explicit sync) are reported in the main matrices and limitations. The repository root \texttt{README.md} suggests commands to record kernel, toolchain, and optional GPU and vLLM lines beside result tables. The name \emph{Tensora} refers to this work's system (\texttt{tensor\_store}); it is not affiliated with Google's unrelated TensorStore project for N-dimensional arrays.
+
+\textbf{Integrity.} Upstream engines (vLLM), formats, and community tooling should be cited when results depend on them. Use of generative tools for prose or code should follow institutional policies.
+
+These points align with common professional codes for computing practitioners~\cite{bcs_code}.

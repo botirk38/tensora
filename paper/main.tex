@@ -1,0 +1,71 @@
+%% Preprint / arXiv build: standard LaTeX article (natbib + plainnat). Single entrypoint.
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage[expansion=false]{microtype}
+\usepackage[round,authoryear]{natbib}
+\usepackage{xurl}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{%
+  pdftitle={Format-Aware Checkpoint Loading: An Adaptive Backend Policy for LLMs},
+  pdfauthor={Botir Khaltaev},
+  pdfkeywords={large language models, checkpoint loading, io\_uring, cold start, vLLM, reproducibility}%
+}
+
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usetikzlibrary{shapes.geometric,arrows,positioning,calc}
+\pgfplotsset{compat=1.18}
+
+\def\figdir{figures}
+
+\lstset{%
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+}
+
+\title{Format-Aware Checkpoint Loading: An Adaptive Backend Policy for LLMs}
+\author{%
+  Botir Khaltaev\\%
+  \textit{Independent, United Kingdom}\\%
+  \texttt{btrghstk@gmail.com}%
+}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Inference on large language models requires loading weights from storage into GPU memory. In serverless settings where idle models are evicted, cold-start latency hinges on how checkpoints are read. Peak NVMe bandwidth is only an upper bound: checkpoint layout, request structure, and integration overhead often dominate realised throughput.
+
+This paper treats checkpoint loading as a measurement-driven systems problem. Using Tensora, we compare synchronous POSIX I/O, Tokio async, io\_uring, and an adaptive \texttt{default} policy across contiguous SafeTensors and partitioned ServerlessLLM-style layouts, then trace those choices through Python bindings and vLLM integration.
+
+For contiguous SafeTensors, explicit sync wins at smaller scales while explicit io\_uring wins at the largest multi-shard scales where queue depth matters. For partitioned ServerlessLLM, sync never leads; the relevant trade-off is among async, io\_uring, and \texttt{default}. These layout- and scale-dependent crossovers show that no single fixed backend is optimal in all cases.
+
+Deploy a format-aware adaptive \texttt{default} with explicit overrides, not a single universal loader. Python and vLLM results confirm that integration overhead can reorder backend rankings; loader choice matters most for initialisation and time-to-first-token.
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/design}
+\input{sections/experimental_setup}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/limitations}
+\input{sections/professional_issues}
+\input{sections/conclusion}
+
+\appendix
+\input{sections/appendix_reproducibility}
+
+\bibliographystyle{plainnat}
+\bibliography{bib/references}
+
+\end{document}

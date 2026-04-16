@@ -86,8 +86,8 @@ __pycache__/
 .pytest_cache/
 
 # Generated Python binding artifacts
-bindings/python/tensor_store_py/*.so
-bindings/python/tensor_store_py/*.pyd
+bindings/python/tensora/*.so
+bindings/python/tensora/*.pyd
 
 # LaTeX build intermediates (keep only source + final PDF)
 report/final_report/*.aux

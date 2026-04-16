@@ -16,7 +16,7 @@ def test_load_safetensors_dispatch_default(monkeypatch):
         load_safetensors_sync=lambda path: {"path": path, "backend": "sync"},
         load_safetensors_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_safetensors("/tmp/model", "default")
     assert result["backend"] == "default"
 
@@ -27,7 +27,7 @@ def test_load_safetensors_dispatch_sync(monkeypatch):
         load_safetensors_sync=lambda path: {"path": path, "backend": "sync"},
         load_safetensors_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_safetensors("/tmp/model", "sync")
     assert result["backend"] == "sync"
 
@@ -38,7 +38,7 @@ def test_load_safetensors_dispatch_io_uring(monkeypatch):
         load_safetensors_sync=lambda path: {"path": path, "backend": "sync"},
         load_safetensors_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_safetensors("/tmp/model", "io-uring")
     assert result["backend"] == "io-uring"
 
@@ -49,7 +49,7 @@ def test_load_serverlessllm_dispatch_default(monkeypatch):
         load_serverlessllm_sync=lambda path: {"path": path, "backend": "sync"},
         load_serverlessllm_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_serverlessllm("/tmp/model", "default")
     assert result["backend"] == "default"
 
@@ -60,7 +60,7 @@ def test_load_serverlessllm_dispatch_sync(monkeypatch):
         load_serverlessllm_sync=lambda path: {"path": path, "backend": "sync"},
         load_serverlessllm_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_serverlessllm("/tmp/model", "sync")
     assert result["backend"] == "sync"
 
@@ -71,7 +71,7 @@ def test_load_serverlessllm_dispatch_io_uring(monkeypatch):
         load_serverlessllm_sync=lambda path: {"path": path, "backend": "sync"},
         load_serverlessllm_io_uring=lambda path: {"path": path, "backend": "io-uring"},
     )
-    monkeypatch.setitem(sys.modules, "tensor_store_py._tensor_store_rust", fake)
+    monkeypatch.setitem(sys.modules, "tensora._tensora_rust", fake)
     result = vllm_loaders._load_serverlessllm("/tmp/model", "io-uring")
     assert result["backend"] == "io-uring"
 

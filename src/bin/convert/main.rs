@@ -31,7 +31,7 @@ fn default_partition_count(input_dir: &str) -> usize {
         eprintln!("Error: no .safetensors files found in {input_dir}");
         process::exit(1);
     }
-    tensor_store::recommended_partition_count(total)
+    tensora::recommended_partition_count(total)
 }
 
 #[derive(clap::Parser, Debug)]
@@ -87,20 +87,20 @@ fn main() {
     let result = rt.block_on(async {
         match args.backend {
             Backend::Default => {
-                tensor_store::convert_safetensors_to_serverlessllm(
+                tensora::convert_safetensors_to_serverlessllm(
                     &args.input_dir,
                     &args.output_dir,
                     partition_count,
                 )
                 .await
             }
-            Backend::Sync => tensor_store::convert_safetensors_to_serverlessllm_sync(
+            Backend::Sync => tensora::convert_safetensors_to_serverlessllm_sync(
                 &args.input_dir,
                 &args.output_dir,
                 partition_count,
             ),
             Backend::Async => {
-                tensor_store::convert_safetensors_to_serverlessllm_async(
+                tensora::convert_safetensors_to_serverlessllm_async(
                     &args.input_dir,
                     &args.output_dir,
                     partition_count,
@@ -108,7 +108,7 @@ fn main() {
                 .await
             }
             #[cfg(target_os = "linux")]
-            Backend::IoUring => tensor_store::convert_safetensors_to_serverlessllm_io_uring(
+            Backend::IoUring => tensora::convert_safetensors_to_serverlessllm_io_uring(
                 &args.input_dir,
                 &args.output_dir,
                 partition_count,

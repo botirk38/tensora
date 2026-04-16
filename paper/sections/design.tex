@@ -1,0 +1,157 @@
+\section{Tensora Design}
+\label{sec:design}
+
+This section describes the design of \emph{Tensora}, the experimental framework we built to conduct this measurement study. The system is the vehicle for our evaluation, not the contribution itself.
+
+\subsection{Design Goals}
+
+Tensora was designed around four primary requirements. First, the framework must support multiple I/O backends and checkpoint formats under a consistent interface, so that backend decisions can be studied without rewriting the rest of the loading stack. Second, the framework must keep the loader logic separate from the measurement harness, so that instrumentation does not distort the measured path. Third, the design must make its concurrency model explicit, because queue depth, worker fanout, and batching policy are central to the performance question. Fourth, the framework must remain accessible from Python and from a real serving engine, so that backend-level findings can be tested beyond Rust-only microbenchmarks.
+
+These requirements led to a layered architecture that separates format parsing, I/O execution, policy selection, and evaluation.
+
+\subsection{System Architecture}
+
+Tensora is structured into three layers: a format layer, a backend layer, and an evaluation layer.
+
+The format layer parses checkpoint metadata and produces a normalised loading workload. The key abstraction is a request-local view of the checkpoint: the format layer determines which file ranges must be read, but it does not commit to how those reads are scheduled. This separation allows the same logical workload to be executed by different backends while preserving the semantics visible to the caller.
+
+The backend layer implements I/O execution. Each backend receives the same logical workload and executes it according to its own submission model. Backends may perform backend-local planning such as chunking large files or coalescing nearby ranges, but they must preserve request-local output semantics. That matches how real loaders behave: the same logical byte ranges can be fetched with different scheduling while preserving tensor outputs, and comparing backends fairly requires allowing each implementation its natural planning.
+
+The evaluation layer contains the Rust profiling harness, the Python benchmarks, and the vLLM integration benchmarks. These are kept outside the core loading path so that the production implementation and the measurement logic remain distinct.
+
+\begin{figure}[t]
+  \centering
+  \resizebox{\linewidth}{!}{%
+  \begin{tikzpicture}[
+    font=\small,
+    box/.style={draw, rounded corners=2pt, align=center, inner sep=6pt, minimum width=2.6cm},
+    arr/.style={->, >=latex, thick},
+  ]
+    \node[box] (fmt) {Format layer\\metadata $\rightarrow$ read plan};
+    \node[box, right=1.1cm of fmt] (pol) {Policy\\(\texttt{default} / explicit)};
+    \node[box, right=1.1cm of pol] (be) {Backend\\sync / async / \texttt{io\_uring}};
+    \node[box, right=1.1cm of be] (out) {Tensor buffers\\(Rust / Python FFI)};
+    \node[box, below=1.0cm of pol] (ev) {Evaluation harness\\(not on hot path)};
+    \draw[arr] (fmt) -- (pol);
+    \draw[arr] (pol) -- (be);
+    \draw[arr] (be) -- (out);
+    \draw[arr, dashed] (ev) -- (pol);
+  \end{tikzpicture}%
+  }
+  \caption{Tensora architecture: the format layer produces a normalised read plan; policy selects a backend and planning parameters; backends execute I/O; evaluation harnesses attach at the boundary for measurement only.}
+  \label{fig:tensorstore-arch}
+\end{figure}
+
+Figure~\ref{fig:tensorstore-arch} summarises the layering; the following subsections specify the backend interface, adaptive policy, and bindings.
+
+\subsection{Common Backend Interface}
+
+All eager-loading backends implement the same public surface:
+
+\begin{itemize}
+\item \texttt{load(path)} for a full file,
+\item \texttt{load\_batch(paths)} for multiple whole-file loads,
+\item \texttt{load\_range(path, offset, len)} for one byte range, and
+\item \texttt{load\_range\_batch(requests)} for many ranges.
+\end{itemize}
+
+This interface is deliberately narrow: it covers \texttt{SafeTensors} and \texttt{ServerlessLLM} without extra surface area, so backend differences remain interpretable.
+
+\subsection{Adaptive Loading Policy}
+
+The central design decision is that backend selection is handled as an adaptive heuristic rather than as a fixed policy. Evidence shows that no single backend is best across all checkpoint sizes and layouts.
+
+The final \texttt{default} policy uses workload-aware signals and includes backend-internal planning such as chunking large files, coalescing nearby ranges, and workload-driven sizing decisions. This internal planning is part of what makes \texttt{default} effective in practice, but it means that \texttt{default} is not a pure selector among the explicit benchmark paths. Instead, \texttt{default} represents a higher-level policy that combines adaptive backend selection with execution-time planning decisions.
+
+For \texttt{SafeTensors}, the key factors are shard count and total checkpoint size. The adaptive policy is designed around the measured crossover: \textbf{keep synchronous execution for smaller eager loads}, and \textbf{move to the \texttt{io\_uring} path as scale increases}. For \texttt{ServerlessLLM}, the key factors are total bytes, partition count, and the degree to which the workload is range-heavy; the selector does \emph{not} assume that synchronous I/O is competitive on partitioned range workloads (the Rust matrix shows it is not). Smaller and mid-sized range-heavy workloads may use the Tokio async path; larger partitioned checkpoints use the adaptive \texttt{default} that selects \texttt{io\_uring}. The selector therefore remains format-aware rather than purely size-aware.
+
+The selector is \textbf{feature-driven} (bytes, shard and partition structure from the format layer), not a single hard-coded byte threshold. Exact internal cut-offs are omitted here to avoid false precision; regimes matter more than constants. Figure~\ref{fig:policy-sketch} summarises the control flow at a high level; threshold constants live in the open-source implementation alongside the harness revision recorded for the results.
+
+\begin{figure}[htbp]
+\centering
+\begin{tabular}{c}
+$\texttt{extract\_features}$ \\
+$\downarrow$ \\
+$\texttt{heuristic\_select}$ \\
+$\downarrow$ \\
+$\texttt{plan\_reads}$ \\
+$\downarrow$ \\
+$\texttt{execute}$ \\
+\end{tabular}
+\caption{Adaptive policy control flow: features $\to$ backend selection $\to$ read planning $\to$ execution. SafeTensors uses sync for small and io\_uring for large loads; ServerlessLLM routes to async or io\_uring depending on partition structure.}
+\label{fig:policy-sketch}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Major design decisions and rationale.}
+\label{tab:major_design_forks}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.28\textwidth}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}}
+\toprule
+Decision & Alternatives considered & Rationale \\
+\midrule
+Adaptive \texttt{default} & Fixed global backend & Evidence shows crossovers with scale and layout \\
+\midrule
+\texttt{io\_uring} implementation & Minimal parallelism / naive batching & Worker-owned rings with chunking and planning sustain queue depth on large multi-shard loads \\
+\midrule
+Cold-cache control & In-process eviction hints & External \texttt{sync}/\texttt{drop\_caches} separates harness from loader \\
+\midrule
+vLLM integration & Async loader bridge & vLLM's loader API at the Python boundary is synchronous; benchmarks follow that interface \\
+\midrule
+Python Tokio & New runtime per call & Shared runtime reduced binding overhead \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Backend Designs}
+
+The synchronous backend uses blocking POSIX reads. In the final design it is not a purely serial implementation: large files are split into chunks and loaded with host-side thread parallelism. This keeps the backend simple at the API boundary while still exploiting multiple cores where appropriate. The design intent is not to make \texttt{sync} look trivial, but to give it a fair and practical implementation baseline.
+
+The async backend is built on Tokio. Its design is strongest for grouped and range-heavy workloads rather than for large whole-file eager loads. The final implementation groups work per file, uses dynamic batching, and reduces unnecessary task fanout. This backend remains important because the final results show that explicit async loading is often strong for \texttt{ServerlessLLM}-style partitioned workloads even when it is weak for \texttt{SafeTensors}.
+
+The \texttt{io\_uring} backend uses multiple worker-owned rings, lazy ring initialisation, dynamic ring sizing, and workload-driven planning for chunk size and in-flight depth, so that submission can keep pace with large multi-shard and range-heavy workloads.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Evaluated \texttt{io\_uring} backend structure.}
+\label{tab:impl_io_uring_fork}
+\begin{tabular}{p{0.22\textwidth}p{0.72\textwidth}}
+\toprule
+Aspect & Design \\
+\midrule
+Ring ownership & Worker-owned rings (lazy initialisation) \\
+Submission & Multiple workers; batched SQEs; depth matched to workload \\
+Planning & Dynamic ring sizing, chunk sizing, and in-flight limits \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We do not conclude that \texttt{io\_uring} is inherently superior. We conclude that \texttt{io\_uring} pays off when the implementation sustains enough parallelism for the workload; topology and planning matter as much as choosing the API family.
+
+The mmap-backed path is retained as a useful lazy-access mode, especially for Python and vLLM experiments where a caller may not need to materialise every tensor immediately. It is not treated as the main eager-loading solution to the cold-start problem, because mmap solves a different problem: efficient selective access rather than aggressive eager loading.
+
+\subsection{Checkpoint Formats}
+
+Tensora supports two checkpoint layouts.
+
+\texttt{SafeTensors} stores tensors in a whole-file or multi-shard layout. Once the header is parsed, the loader sees a largely contiguous eager-loading workload.
+
+The \texttt{ServerlessLLM} layout distributes tensors across multiple partition files with a central index. This introduces a more fragmented range-oriented workload and therefore stresses a different part of the backend design space.
+
+The purpose of supporting both formats is not just compatibility. It is to expose two different I/O regimes under one framework.
+
+\subsection{Python Bindings}
+
+Tensora exposes its functionality through Python bindings implemented with PyO3. The bindings intentionally expose a small public API: a \texttt{default} eager path, explicit \texttt{sync} and \texttt{async} eager paths, and lazy \texttt{open\_*} mmap-backed handles. On Linux, \texttt{io\_uring} remains an internal backend behind \texttt{default} in the public Python API, while benchmark-only explicit paths were used in the vLLM benchmark layer.
+
+One important binding design decision is that the async Python path runs on a shared Tokio runtime rather than constructing a fresh runtime per call. This was one of the practical optimisations that materially improved Python-side performance.
+
+The vLLM integration is implemented through a custom model-loader path. vLLM is particularly useful as an evaluation target because it separates model initialisation, time-to-first-token, and steady-state decode. This allows us to test whether backend gains survive contact with a real serving engine.
+
+The key design constraint is that vLLM's loader interface is synchronous. The final benchmark integration therefore compares synchronous and default eager-loading policies directly, and uses benchmark-only explicit loader variants where necessary to expose additional backend behaviour. This is a practical design choice: it reflects the serving interface that actually exists, rather than inventing an async serving path that the engine does not support.
+
+Cold-cache control is implemented in the experiment harness, not inside the loader: the Linux shell runs \texttt{sync} and \texttt{drop\_caches} before benchmark invocations. That keeps measurement ritual separate from loading logic and matches common storage-evaluation practice.
+
+This decision is important for clarity. The loader implementation should express how Tensora loads checkpoints; the benchmark harness should express how cold and warm conditions are created. Tables~\ref{tab:major_design_forks} and~\ref{tab:impl_io_uring_fork} summarise principal design choices; the narrative above explains Rust core choice, shared interface, and binding integration in full.

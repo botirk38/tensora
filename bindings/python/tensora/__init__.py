@@ -1,4 +1,4 @@
-"""tensor_store Python bindings - high-performance tensor loading."""
+"""tensora Python bindings - high-performance tensor loading."""
 
 from importlib.metadata import version
 

@@ -1,0 +1,170 @@
+\section{Experimental Setup}
+\label{sec:experimental_setup}
+
+This section describes the experimental methodology used to evaluate the checkpoint loading backends. We make explicit what each measurement layer captures and what it does not capture, so that readers can correctly interpret which claims are supported by which evidence.
+
+\subsection{What is measured and why the separation matters}
+
+The evaluation spans three distinct measurement layers, each answering a different question:
+
+\begin{enumerate}
+\item \textbf{Rust-layer microbenchmark.} This measures pure I/O and format deserialisation: reading checkpoint bytes from storage through the selected backend and assembling tensors in memory. It intentionally excludes Python interpreter overhead, tensor materialisation in other runtimes, and GPU allocation inside a serving engine. The purpose is backend attribution---isolating which submission policy (sync, async, io\_uring, default) produces the best raw loading performance for a given checkpoint layout.
+
+\item \textbf{Python-layer binding benchmark.} This measures what a Python client of the Tensora library observes: the full pipeline including FFI transitions, tensor construction, and any binding-specific overhead. It answers whether backend differences survive into the actual API that users would employ. It does not isolate I/O policy from the cost of crossing into Python.
+
+\item \textbf{vLLM-layer integration benchmark.} This measures checkpoint loading inside a real serving engine: CUDA context setup, memory pool allocation, runtime configuration, model initialisation, and time-to-first-token. It is the right metric for deployment impact but conflates I/O policy with engine bring-up. It does not answer what pure disk-to-tensor performance is.
+\end{enumerate}
+
+These are not interchangeable. A claim that ``io\_uring is faster'' at the Rust layer does not automatically hold at the vLLM layer, because the vLLM layer includes fixed-cost engine initialisation that dominates loader choice for small checkpoints. The limitations section (Section~\ref{sec:limitations}) elaborates on this construct validity issue.
+
+\subsection{Research Questions}
+
+The evaluation is organised around five research questions:
+
+\begin{itemize}
+\item RQ1: How much does backend choice affect checkpoint loading time for real LLM checkpoints?
+\item RQ2: How does checkpoint layout change the relative ordering of backends?
+\item RQ3: How much overhead is introduced by the Python binding layer, and how much of that overhead can be reduced with binding-specific optimisation?
+\item RQ4: To what extent do backend gains survive integration into a serving stack such as vLLM?
+\item RQ5: What engineering lessons emerge when turning backend-specific microbenchmarks into a practical adaptive loading system?
+\end{itemize}
+
+Each question maps to a specific measurement layer. RQ1 and RQ2 are answered primarily by Rust-layer matrices. RQ3 is answered by Python-layer benchmarks. RQ4 is answered by vLLM-layer integration. RQ5 draws on all three.
+
+\subsection{Experimental Platform}
+
+All final measurements were collected on a single dedicated Linux server with an NVIDIA H100 GPU and approximately 180 GB of host RAM. The host was used as an isolated experiment host with minimal concurrent tenant load. The CPU is a contemporary multi-core x86\_64 processor; the exact model should be recorded beside published timings if the submission requires it.
+
+We make the single-host nature explicit because it is a known limitation. The claims in this paper are about \textbf{ordering regimes}---which backend wins at which scale and layout---rather than absolute timings that would hold across any machine. A second measurement site (different CPU, different NVMe generation, or cloud block storage) would directly test whether the observed SafeTensors and ServerlessLLM orderings transfer. Section~\ref{sec:limitations} states this explicitly.
+
+The software stack for final runs was Ubuntu 24.04, Python 3.12, and Rust 1.94 (\texttt{rustc 1.94.0}, stable). Kernel version was recorded beside exports (\texttt{uname -r}; 6.x on the measurement host). The optional vLLM dependency is pinned in \texttt{bindings/python/uv.lock} (resolved \texttt{vllm} 0.11.0); serving exports should record \texttt{pip show vllm} or \texttt{uv pip show vllm} next to tables. Appendix~\ref{app:repro} lists other environment fields to capture.
+
+Storage is local NVMe behind a standard Linux journaling filesystem with default metadata behaviour unless noted. Cold-cache runs for the Rust matrix use buffered I/O and external cache drops (procedure below), not O\_DIRECT, unless a specific backend documents otherwise.
+
+GPU-backed vLLM runs are constrained by vLLM memory budgeting (KV cache, CUDA graphs, buffers), not only raw VRAM. I/O experiments are Linux-only because the io\_uring backend is Linux-specific.
+
+\subsection{External baselines}
+
+The Rust matrices compare Tensora's own backends on \emph{identical} logical read plans; they isolate submission policy rather than pitting Tensora against unrelated third-party loaders.
+
+The vLLM evaluation includes a production-style baseline: the \textbf{\texttt{native}} loader uses vLLM's stock checkpoint path for the same model configuration and cache mode. Loaders prefixed \textbf{\texttt{ts\_}} are Tensora-backed integrations (\texttt{ts\_safetensors\_*}, \texttt{ts\_serverlessllm\_*}) through the same harness so that differences isolate the weight-loading path. Table~\ref{tab:vllm-baseline} summarises cold \texttt{load\_only} times where \texttt{native} is available.
+
+At the Python layer, benchmarks target the Tensora public API (explicit backends and \texttt{default}). A conventional Hugging Face workflow often uses framework-native tensor construction on top of \texttt{safetensors}; that stack differs from our Rust-first path, so we report Tensora binding stages (Table~\ref{tab:python-optimisation}) rather than claiming a single universal Python baseline number.
+
+\subsection{Backends Under Test}
+
+The system exposes four eager-loading policies at the Rust layer:
+
+\begin{itemize}
+\item \textbf{sync}: blocking POSIX reads with dynamic chunking and parallelism.
+\item \textbf{async}: Tokio-based async loading with dynamic batching and per-file grouping.
+\item \textbf{io\_uring}: a low-level Linux \texttt{io-uring} backend with worker-owned rings, dynamic ring sizing, and dynamic chunk planning (Section~\ref{sec:design}).
+\item \textbf{default}: an adaptive selector that chooses between the explicit backends based on workload structure.
+\end{itemize}
+
+Rust-layer timings for \texttt{io\_uring} refer to that implementation (Section~\ref{sec:design}), not to the syscall family in the abstract.
+
+The memory-mapped \texttt{open\_*} APIs are evaluated in the Python layer where they are practically useful, but they are not treated as eager-loading backends in the main Rust cold-load comparison.
+
+Two checkpoint layouts were evaluated:
+
+\begin{itemize}
+\item \textbf{SafeTensors}: whole-file or multi-shard eager loading.
+\item \textbf{ServerlessLLM}: partitioned layout accessed through range-oriented loading.
+\end{itemize}
+
+The model ladder consists of six open-access checkpoints:
+
+\begin{enumerate}
+\item \texttt{Qwen/Qwen3-0.6B}
+\item \texttt{HuggingFaceTB/SmolLM3-3B}
+\item \texttt{Qwen/Qwen3-4B}
+\item \texttt{Qwen/Qwen3-8B}
+\item \texttt{Qwen/Qwen3-14B}
+\item \texttt{Qwen/Qwen3-32B}
+\end{enumerate}
+
+This ladder was chosen to cover small, medium, and large checkpoints while also including one cross-family model (SmolLM3-3B) to reduce the risk of overfitting conclusions to a single vendor family.
+
+The ladder is also what makes the SafeTensors narrative empirically meaningful. A single-point benchmark at one model size cannot justify adaptive policy; it can only justify a constant backend choice. By spanning orders of magnitude in total bytes and shard structure, the experiments expose where synchronous loading stops being the best explicit option and where io\_uring becomes the best explicit option in Table~\ref{tab:rust-safetensors}. That progression is the evidential core behind the adaptive policy claim.
+
+Cold-cache behaviour is the primary condition for the Rust and Python eager-loading measurements. Cold-cache runs use a manual Linux-side procedure before each benchmark invocation (no in-loader eviction):
+
+\begin{enumerate}
+\item run \texttt{sync}
+\item run \texttt{echo 3 > /proc/sys/vm/drop\_caches}
+\item invoke the benchmark binary or Python benchmark
+\end{enumerate}
+
+Warm-cache conditions skip the cache-drop step and reuse the existing page-cache state.
+
+Rust-layer measurements were generated with a standalone profiling harness. Two categories of Rust experiments were used. First, a five-repetition cold-cache anchor set was collected for Qwen3-0.6B, Qwen3-8B, and Qwen3-32B for both SafeTensors and ServerlessLLM, across sync, async, io\_uring, and default. These repeated measurements were used to identify stable workload regimes and to set default-selector thresholds. Second, a full cold-cache matrix was run across the six-model ladder, both formats, and the four eager backend policies.
+
+Python benchmarks were run against the public binding surface rather than against every internal Rust backend directly. This reflects the actual intended Python API: adaptive default policy, explicit synchronous eager load, explicit Tokio eager load, and mmap-backed lazy access path. The main Python benchmark model was Qwen/Qwen3-8B.
+
+The Python layer was benchmarked across stages that separate pure backend effects from binding-layer tuning and selector behaviour (Table~\ref{tab:python-optimisation}).
+
+vLLM benchmarks were run through a custom benchmark loader integration. Unlike the Python eager-loading benchmarks, the vLLM evaluation measures the loading backends inside a wider serving-engine context.
+
+Three benchmark kinds were collected:
+
+\begin{itemize}
+\item \textbf{load\_only}: model initialisation time only
+\item \textbf{TTFT}: time to first token, including initialisation and first generation step
+\item \textbf{steady\_state\_decode}: average per-request decode latency after warm-up
+\end{itemize}
+
+Both warm and cold cache conditions were collected. The full vLLM matrix covers all six fixtures and all available benchmark loaders.
+
+Three rules were used to keep the evaluation interpretable.
+
+\begin{enumerate}
+\item Rust-layer results are used for backend attribution, because they isolate checkpoint loading from Python and serving-engine overhead.
+\item Python-layer results are used to quantify binding overhead and to validate whether the public default API tracks the stronger explicit backend in practice.
+\item vLLM results are treated as end-to-end serving initialisation evidence, not as a pure backend microbenchmark.
+\end{enumerate}
+
+Backend gains do not propagate unchanged across layers.
+
+\subsection{Operational definitions and internal validity}
+
+\textbf{What ``load time'' means at each layer.} At the Rust layer, the profiling harness measures the elapsed time to read checkpoint bytes from storage through the selected backend and assemble tensors in memory according to the format's semantics. It intentionally isolates that work from Python object construction and from GPU allocation inside a serving engine. At the Python layer, reported times include interpreter overhead, tensor materialisation, and any FFI transitions exposed by the binding API; they answer whether a real client of the library would observe backend differences, not what a pure Rust microbenchmark would print. At the vLLM layer, \texttt{load\_only} and \texttt{TTFT} include engine initialisation steps beyond tensor bytes on disk: CUDA context setup, memory pools, and runtime configuration. Steady-state decode measures post-warm-up per-request latency and is dominated by compute and scheduling; it is included to show where loader choice stops mattering, not to rank I/O APIs for decode.
+
+\textbf{Cold cache versus warm cache.} A \textbf{cold-cache} run is one where the checkpoint bytes are not resident in the Linux page cache at the start of the measurement. The procedure used here is \texttt{sync} followed by \texttt{echo 3 > /proc/sys/vm/drop\_caches}; that sequence drops clean cache pages system-wide before invoking the benchmark. That is stronger than evicting a single file with advisory hints and matches common practice in storage evaluation. It does not guarantee an empty GPU or an idle disk firmware queue; it guarantees that the loader cannot satisfy reads entirely from DRAM backed by a prior read of the same file. A \textbf{warm-cache} run skips the drop and reuses pages left by earlier reads on the host, modelling a second load without a full cache flush between runs.
+
+\textbf{Why eviction is out-of-process.} In-process \texttt{posix\_fadvise} and similar hints are advisory and filesystem-dependent; embedding them in the loader would blur the line between harness and code under test. External cache drops keep the loader binary unchanged: every cold iteration pays the same visible storage path, and the methodology is easy to replicate from a shell script.
+
+\textbf{Variance and anchor repetitions.} NVMe and kernel subsystems exhibit run-to-run jitter. Single cold numbers are therefore \emph{representative} rather than statistically exhaustive. The five-repetition anchor set exists to confirm that observed crossovers are not one-off artefacts for a handful of ladder points (small, large, and mid-scale anchors across formats). The full matrices use one cold iteration per cell for readability. Interpreting a 5\% gap as meaningful without repeats is risky; interpreting a consistent ordering across many cells and formats with anchors showing stable bands is much less so.
+
+\textbf{Comparability across backends.} Each backend receives the same logical tensor read plan for a given fixture and format: the same sequence of byte ranges must be satisfied. Differences in wall time come from submission strategy, parallelism, and buffer management, not from silently skipping work. When \texttt{default} loses to an explicit backend on a row, that is an empirical fact about the selector and planner under the same harness constraints, not a different problem instance.
+
+\textbf{Statistical reporting.} Full matrices use representative cold-cache times; anchor cells use five repetitions to check variance. Appendix~\ref{app:anchor-stats} reports median wall-clock time and the min--max band for selected anchor configurations (SafeTensors and ServerlessLLM). Main tables omit per-cell standard deviations for readability, so small gaps in one cell should be read cautiously, while consistent ordering across many cells carries more weight.
+
+\textbf{Single-host bounds.} All measurements come from one dedicated H100 host with local NVMe. We do not claim that absolute timings transfer to other machines. The paper claims that \textbf{ordering regimes} (which backend wins at which scale and layout) transfer more plausibly, but that is itself an empirical claim tested by replication. Section~\ref{sec:limitations} elaborates.
+
+\textbf{Linux-only scope.} The io\_uring backend is Linux-specific. Results on other operating systems would require a different I/O backend and are outside scope.
+
+\subsection{What would and would not falsify the main claims}
+
+The central claim is that backend choice depends jointly on layout and scale, so a fixed global backend is wrong in principle. The evidence for this is the crossover pattern: sync wins at small SafeTensors scale, io\_uring wins at large SafeTensors scale, and sync never wins for partitioned ServerlessLLM.
+
+This claim would be falsified if:
+\begin{itemize}
+\item Explicit synchronous loading remained fastest for the largest SafeTensors checkpoints in the ladder (opposite of observed)
+\item Explicit io\_uring never won at large SafeTensors scale (opposite of observed)
+\item Synchronous loading was fastest across the entire ServerlessLLM matrix (opposite of observed)
+\end{itemize}
+
+The claim would be supported (but boundary location refined) if replication on different hardware showed the same ordering pattern but at different crossover points in the model ladder. Section~\ref{sec:limitations} states these falsification conditions explicitly.
+
+The adaptive \texttt{default} policy claim would be falsified if the selector systematically lost to a single explicit backend across the full matrix. The evidence shows it wins on some rows and loses on others (medium-scale SafeTensors, notably SmolLM3-3B and Qwen3-4B). This is documented in the limitations section.
+
+vLLM results would not falsify the Rust-layer I/O claims because they conflate loader choice with engine bring-up. They instead test whether backend differences survive into deployment, which is a different question. The limitations section makes this construct distinction explicit.
+
+\subsection{Reading the matrices and reproducing ordering}
+
+Read Rust tables alongside the results in Section~\ref{sec:results}. SafeTensors compares sync, async, io\_uring, and \texttt{default} on the same logical workload; \texttt{default} shows when integrated planning beats or misses explicit backends. The ladder orders increasing bytes and shard complexity in this harness only. SmolLM3-3B and Qwen3-4B sit in a medium band where \texttt{default} still trails explicit sync (Section~\ref{sec:limitations}). On ServerlessLLM, treat sync as a baseline, not a target.
+
+Cold-cache runs use \texttt{sync} and \texttt{drop\_caches} so numbers reflect storage, not warm DRAM. vLLM warm-cache cases are labelled separately.
+
+Replication should not chase identical milliseconds across machines; it should reproduce \textbf{ordering}: SafeTensors sync$\rightarrow$io\_uring crossover among explicit backends, and ServerlessLLM with sync off the front of Table~\ref{tab:rust-serverlessllm}. Ship revision hashes, model IDs, partition conversion settings, and cold-cache commands. The adaptive policy is conditional on the measured crossover structure; if ordering differs on other hardware, that is a finding about boundary stability, not a refutation of the methodology.

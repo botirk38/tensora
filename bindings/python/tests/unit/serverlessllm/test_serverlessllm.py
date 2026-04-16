@@ -4,9 +4,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import tensor_store_py._tensor_store_rust as rust_ext
+import tensora._tensora_rust as rust_ext
 
-from tensor_store_py._tensor_store_rust import (
+from tensora._tensora_rust import (
     load_serverlessllm_sync,
     open_serverlessllm,
 )

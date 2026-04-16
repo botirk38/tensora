@@ -1,1 +1,1 @@
-"""Unit tests for tensor_store_py."""
+"""Unit tests for tensora."""

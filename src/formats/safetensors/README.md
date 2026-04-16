@@ -1,6 +1,6 @@
 # SafeTensors Format
 
-SafeTensors support for tensor_store: whole-file and multi-shard eager loading with adaptive backend selection.
+SafeTensors support for tensora: whole-file and multi-shard eager loading with adaptive backend selection.
 
 ## Module Structure
 
@@ -31,7 +31,7 @@ The `default` policy uses workload-aware heuristics:
 ## API
 
 ```rust
-use tensor_store::safetensors::Model;
+use tensora::safetensors::Model;
 
 let model = Model::load("model_dir").await?;
 for name in model.tensor_names() {

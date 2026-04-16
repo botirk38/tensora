@@ -7,21 +7,21 @@ Real-model benchmarks using `pytest-benchmark`. Results can be exported as **JSO
 From the **repository root**:
 
 ```bash
-export TENSOR_STORE_BENCH_MODELS=openai-community/gpt2   # required (one or more ids)
+export TENSORA_BENCH_MODELS=openai-community/gpt2   # required (one or more ids)
 ./scripts/run_benchmarks.sh
 ```
 
-This runs `uv sync` (dev + vLLM groups), `maturin develop --release`, then pytest on `bench_safetensors.py`, `bench_serverlessllm.py`, and `bench_vllm.py`. JSON is written to **`results/benchmarks/pytest_benchmark_<slug>.json`** per model (slug: repo id with `/` → `-`, lowercased). Set **`TENSOR_STORE_BENCH_JSON`** to an **output directory** to place those files elsewhere. Each run uses a distinct **`--cache-dir`** under that directory’s `.cache/<slug>/` so parallel jobs do not collide.
+This runs `uv sync` (dev + vLLM groups), `maturin develop --release`, then pytest on `bench_safetensors.py`, `bench_serverlessllm.py`, and `bench_vllm.py`. JSON is written to **`results/benchmarks/pytest_benchmark_<slug>.json`** per model (slug: repo id with `/` → `-`, lowercased). Set **`TENSORA_BENCH_JSON`** to an **output directory** to place those files elsewhere. Each run uses a distinct **`--cache-dir`** under that directory’s `.cache/<slug>/` so parallel jobs do not collide.
 
 ### Environment variables
 
 | Variable | Meaning |
 |----------|---------|
-| `TENSOR_STORE_BENCH_MODELS` | **Required.** One or more HuggingFace model ids (`pytest --model-id`), space- and/or comma-separated. |
-| `TENSOR_STORE_BENCH_JSON` | Optional. **Directory** for pytest-benchmark JSON files (default: `results/benchmarks/` under repo root). Must not be a `.json` file path. |
-| `TENSOR_STORE_BENCH_JOBS` | Optional. Max concurrent pytest processes when **`TENSOR_STORE_BENCH_NO_VLLM=1`** (default: `min(4, number of models)`). Ignored when vLLM benchmarks run (always one job). |
-| `TENSOR_STORE_SKIP_MAURIN=1` | Skip `maturin develop --release` if the extension is already built. |
-| `TENSOR_STORE_BENCH_NO_VLLM=1` | Run only SafeTensors + ServerlessLLM benchmarks (omit `bench_vllm.py`). Uses `uv sync --group dev --group torch` instead of the `vllm` group. |
+| `TENSORA_BENCH_MODELS` | **Required.** One or more HuggingFace model ids (`pytest --model-id`), space- and/or comma-separated. |
+| `TENSORA_BENCH_JSON` | Optional. **Directory** for pytest-benchmark JSON files (default: `results/benchmarks/` under repo root). Must not be a `.json` file path. |
+| `TENSORA_BENCH_JOBS` | Optional. Max concurrent pytest processes when **`TENSORA_BENCH_NO_VLLM=1`** (default: `min(4, number of models)`). Ignored when vLLM benchmarks run (always one job). |
+| `TENSORA_SKIP_MAURIN=1` | Skip `maturin develop --release` if the extension is already built. |
+| `TENSORA_BENCH_NO_VLLM=1` | Run only SafeTensors + ServerlessLLM benchmarks (omit `bench_vllm.py`). Uses `uv sync --group dev --group torch` instead of the `vllm` group. |
 
 ## Manual pytest (single suite)
 
@@ -50,7 +50,7 @@ Add `--benchmark-json=path.json` to capture machine-readable timings.
 
 | File | Description |
 |------|-------------|
-| `bench_safetensors.py` | SafeTensors loading: native vs tensor_store (`sync`, `async`, `default`, `open_*`) |
+| `bench_safetensors.py` | SafeTensors loading: native vs tensora (`sync`, `async`, `default`, `open_*`) |
 | `bench_serverlessllm.py` | ServerlessLLM loading (`sync`, `async`, `default`, `open_*`) |
 | `bench_vllm.py` | vLLM integration: init, TTFT, steady-state decode |
 
@@ -59,10 +59,10 @@ Add `--benchmark-json=path.json` to capture machine-readable timings.
 **Backends:**
 
 - `native` - `safetensors.torch.load_file`
-- `tensor_store sync` - `tensor_store.load_safetensors_sync`
-- `tensor_store async` - `tensor_store.load_safetensors_async`
-- `tensor_store default` - `tensor_store.load_safetensors`
-- `tensor_store open` - `tensor_store.open_safetensors`
+- `tensora sync` - `tensora.load_safetensors_sync`
+- `tensora async` - `tensora.load_safetensors_async`
+- `tensora default` - `tensora.load_safetensors`
+- `tensora open` - `tensora.open_safetensors`
 
 **Cache modes:** `warm`, `cold`
 
@@ -86,7 +86,7 @@ The vLLM subprocess harness sets **`enforce_eager=True`** so runs do not depend 
 **Loaders:**
 
 - `native` - default vLLM loader
-- `ts_safetensors_*` / `ts_serverlessllm_*` - tensor_store loaders (see `vllm_runner.py`)
+- `ts_safetensors_*` / `ts_serverlessllm_*` - tensora loaders (see `vllm_runner.py`)
 
 **Benchmark kinds:**
 

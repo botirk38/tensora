@@ -9,7 +9,7 @@ use config::ProfileConfig;
 
 #[derive(Parser)]
 #[command(name = "profile")]
-#[command(about = "Profiling harness for tensor_store (no Criterion)", long_about = None)]
+#[command(about = "Profiling harness for tensora (no Criterion)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -142,7 +142,7 @@ mod tests {
     fn clap_help_contains_summary() {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
-        assert!(help.contains("Profiling harness for tensor_store"));
+        assert!(help.contains("Profiling harness for tensora"));
         assert!(help.contains("safetensors"));
         assert!(help.contains("serverlessllm"));
     }

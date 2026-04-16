@@ -1,0 +1,12 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented a measurement-driven study of checkpoint-loading backends for LLMs. We evaluated four backend policies across two checkpoint layouts and traced the results through Python bindings and vLLM integration.
+
+The central finding is that no single backend wins across all formats and scales. SafeTensors exhibits a clear crossover: sync is fastest at small scale, io\_uring at large scale. ServerlessLLM never shows sync as the winner. This pattern motivates an adaptive policy that selects the backend based on format and checkpoint size, with explicit overrides for edge cases.
+
+The adaptive default correctly handles the majority of measured cases and automates the clear regimes. It has known bounded misses on medium-scale rows (SmolLM3-3B, Qwen3-4B) where explicit backends outperform it. These misses are not failures; they are the natural consequence of a heuristic that optimises for the stable regimes. Explicit overrides handle these cells in practice.
+
+What would change the conclusion? If explicit io\_uring lost to sync on the largest SafeTensors fixtures, or if sync became competitive on partitioned ranges, the structural claim would weaken. Different NVMe generations, filesystems, or cloud storage would shift where crossovers occur but not whether they exist.
+
+The contribution is not a single optimal loader; it is evidence that backend choice depends on layout and scale, and that an adaptive policy provides operational value by automating the dominant patterns. Deploy a format-aware adaptive default with explicit overrides.

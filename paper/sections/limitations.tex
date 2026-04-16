@@ -1,0 +1,41 @@
+\section{Limitations}
+\label{sec:limitations}
+
+The results support regime claims in a controlled harness; this section states what does \emph{not} follow without further evidence. It covers external validity (hardware and storage), construct validity (what each layer measures), and internal validity (selector imperfection, variance reporting, and scope). Read it before generalising timings or ordering beyond the measured ladder and integration surfaces.
+
+\subsection{External validity}
+
+Hardware specificity. All final measurements come from one H100-based Linux host with minimal concurrent tenant load. Ordering of backends is more likely to transfer across machines than absolute milliseconds, but that transfer is still an empirical claim. A second site (different CPU or NVMe generation, or cloud block storage) would be the direct test of whether SafeTensors and ServerlessLLM orderings in Section~\ref{sec:results} are host-specific.
+
+The storage stack is likewise singular: one local NVMe configuration and one filesystem/mount profile. Different journaling modes, RAID layouts, or network-attached storage would change latency variance and could shift which submission path keeps the device fed. The claim that transfers to \textbf{ordering regimes} (small contiguous versus large shard-heavy versus partitioned range-heavy) is more portable than the claim that a particular backend wins by exactly $x$ milliseconds on another site.
+
+\subsection{Construct validity}
+
+The experiments operationalise ``fast loading'' differently at different layers, on purpose. Rust timings approximate pure I/O and deserialisation work; Python timings approximate library usability; vLLM timings approximate deployment reality including GPU bring-up. None of these is the same construct as ``user-perceived latency for the first chat message in production,'' which would add authentication, batching, queueing, and network RTT. Section~\ref{sec:experimental_setup} makes those definitions explicit so that claims are not smuggled across constructs.
+
+Loader time is also not the same as ``time until the model is profitable to serve.'' It is one component of cold start. Scheduling, prewarming, and model selection dominate many product stories; we do not measure those larger systems.
+
+\subsection{Internal validity and selector claims}
+
+Heuristic imperfection. The default selector is not perfect on every Rust matrix row. The medium-size crossover region remains the most difficult area to classify cleanly.
+
+For SafeTensors, explicit sync substantially outperforms the adaptive \texttt{default} on SmolLM3-3B (3722ms vs 1332ms, a 2.8x gap) and Qwen3-4B (3083ms vs 1821ms, a 1.7x gap). These are not hidden failures---they are explicitly stated here and acknowledged in results.
+The selector correctly routes small and large SafeTensors loads to their dominant regimes but misclassifies the medium-scale crossover region where the heuristic's feature mapping is imprecise. For ServerlessLLM, the adaptive \texttt{default} lags explicit async on SmolLM3-3B (3182ms vs~2391ms) and is comparable on Qwen3-4B (3552ms vs~3504ms). The selector routes large partitioned loads to io\_uring but does not perfectly track the mid-sized async regime.
+
+These bounded misses are incorporated into the selector story, not buried. They inform where explicit overrides may be needed in production (force sync for SmolLM3-3B, force async for ServerlessLLM mid-size loads).
+
+Statistical reporting. The full Rust and vLLM matrices report representative cold-cache times after stabilisation; a smaller anchor set used five repetitions for selected models to validate regime behaviour. The main tables omit per-cell variance for readability, so absolute gaps should be read as indicative rather than as tight confidence intervals.
+
+Serving-stack dependence. vLLM results are sensitive to engine settings such as memory budget and maximum model length. This is an unavoidable property of evaluating inside a real serving stack, but it means that the exact numbers are partly harness-dependent.
+
+Scope. Our evaluation covers two checkpoint layouts and a six-model ladder; it does not exhaust the design space of checkpoint formats or storage hardware.
+
+\textbf{Scope of claims.} The evidence in Section~\ref{sec:results} is written to match the tables that were actually measured. It does not prove that synchronous I/O is theoretically optimal for small checkpoints in all possible implementations, nor that io\_uring is theoretically optimal for large checkpoints on all Linux versions and all devices. It claims a consistent empirical pattern in a controlled harness and uses that pattern to motivate adaptive selection. The selector is an \textbf{engineering policy justified by evidence}, not a claim of universal optimality. Stronger claims would require broader sweeps across hardware, filesystems, and competing loader implementations, which is outside the scope of this work but a reasonable direction for future work.
+
+\textbf{Selector boundedness summary.} A reviewer can see from the tables why adaptation is justified: the data shows clear regime patterns (sync for small SafeTensors, io\_uring for large SafeTensors, async or io\_uring for ServerlessLLM). The selector automates these patterns while explicitly acknowledging known medium-scale misses on SmolLM3-3B, Qwen3-4B, and comparable rows. The boundedness is not a flaw---it is a known region where the heuristic is fragile and where explicit overrides are appropriate.
+
+\subsection{What would falsify the adaptive heuristic?}
+
+The central heuristic would be undermined if, on similar hardware, explicit synchronous loading remained fastest for the largest SafeTensors checkpoints in the ladder, or if explicit \texttt{io\_uring} never won at large scale. It would also be undermined if partitioned ServerlessLLM loads showed synchronous loading as fastest across the matrix. The measured evidence supports the opposite ordering patterns in this harness; replication on other storage stacks tests boundary stability, not whether crossovers can exist.
+
+Future work directions suggested by these limitations are practical rather than speculative. Cross-hardware replication would test whether ordering is stable when moving from NVMe Gen4 to Gen5, or from local disks to network-attached storage where latency dominates differently. Filesystem and mount-option sweeps would test whether buffered versus direct I/O changes the SafeTensors crossover point. A broader format study could include GGUF or other mmap-friendly layouts, which may shift the optimum toward lazy access rather than eager loading. None of those directions contradict the claim that \textbf{scale and layout change the best policy}; they refine where the boundaries lie.

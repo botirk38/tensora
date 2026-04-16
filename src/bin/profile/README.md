@@ -1,6 +1,6 @@
 # profile
 
-Profiling harness for measuring tensor_store loader performance. Pass a **Hugging Face model id**; SafeTensors shards are resolved through the Hub client cache, and ServerlessLLM layouts are built under the OS cache (`tensor_store/<slug>/serverlessllm`).
+Profiling harness for measuring tensora loader performance. Pass a **Hugging Face model id**; SafeTensors shards are resolved through the Hub client cache, and ServerlessLLM layouts are built under the OS cache (`tensora/<slug>/serverlessllm`).
 
 ## Usage
 

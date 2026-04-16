@@ -1,6 +1,6 @@
-# TensorStore
+# Tensora
 
-**Product:** Adaptive checkpoint loading for LLMs (Rust `tensor_store`, Python `tensor_store_py`). Backends: synchronous POSIX I/O, Tokio async, Linux `io_uring`, plus an adaptive default. Formats: SafeTensors, ServerlessLLM-style layouts.
+**Product:** Adaptive checkpoint loading for LLMs (Rust `tensora`, Python `tensora_py`). Backends: synchronous POSIX I/O, Tokio async, Linux `io_uring`, plus an adaptive default. Formats: SafeTensors, ServerlessLLM-style layouts.
 
 **Paper:** *Load by Design: Adaptive Heuristics for LLM Checkpoint Loading* — sources in [`paper/`](paper/), built from [`paper/main.tex`](paper/main.tex).
 
@@ -12,7 +12,7 @@ This README is the **single entry point** for developers and for **reproducing p
 
 | | |
 |--|--|
-| **Public clone** | `https://github.com/botirk38/tensor_store` |
+| **Public clone** | `https://github.com/botirk38/tensora` |
 | **Licence** | Apache License, Version 2.0 ([`LICENSE`](LICENSE)) |
 
 Pin software next to any exported numbers:
@@ -44,7 +44,7 @@ pdflatex -interaction=nonstopmode main.tex
 
 **Needs:** Linux (`io_uring` is Linux-only), Rust (see `rust-version` in [`Cargo.toml`](Cargo.toml)), [`uv`](https://docs.astral.sh/uv/) for Python scripts. **GPU** only for vLLM / GPU-backed Python paths. Cold-cache replication assumes you can run `sync` and `echo 3 > /proc/sys/vm/drop_caches` (usually root); use a dedicated machine so cache drops do not affect other workloads.
 
-**Models:** pass a **Hugging Face model id** everywhere (Python: `--model-id` / `TENSOR_STORE_BENCH_MODELS` in `run_benchmarks.sh`; Rust `profile` / `demo`: `--model-id`; Criterion benches: `TENSOR_STORE_MODEL_ID`). SafeTensors shards are read from the **Hugging Face Hub cache**; ServerlessLLM conversions are stored under **`$XDG_CACHE_HOME/tensor_store/<slug>/serverlessllm`** (or the platform cache/temp equivalent). Nothing is required under a repository `fixtures/` directory.
+**Models:** pass a **Hugging Face model id** everywhere (Python: `--model-id` / `TENSORA_BENCH_MODELS` in `run_benchmarks.sh`; Rust `profile` / `demo`: `--model-id`; Criterion benches: `TENSORA_MODEL_ID`). SafeTensors shards are read from the **Hugging Face Hub cache**; ServerlessLLM conversions are stored under **`$XDG_CACHE_HOME/tensora/<slug>/serverlessllm`** (or the platform cache/temp equivalent). Nothing is required under a repository `fixtures/` directory.
 
 **Rust profiling binary** (single run — downloads via Hub if needed):
 
@@ -59,7 +59,7 @@ Formats: `safetensors` or `serverlessllm`. Backends: `sync`, `async`, `io-uring`
 
 | Script | Typical output |
 |--------|----------------|
-| [`scripts/run_benchmarks.sh`](scripts/run_benchmarks.sh) | pytest-benchmark JSON under `results/benchmarks/` as `pytest_benchmark_<slug>.json` (set `TENSOR_STORE_BENCH_MODELS` to one or more Hugging Face model ids; includes SafeTensors, ServerlessLLM, and vLLM pytest suites unless `TENSOR_STORE_BENCH_NO_VLLM=1`; vLLM runs are serialized to one process at a time) |
+| [`scripts/run_benchmarks.sh`](scripts/run_benchmarks.sh) | pytest-benchmark JSON under `results/benchmarks/` as `pytest_benchmark_<slug>.json` (set `TENSORA_BENCH_MODELS` to one or more Hugging Face model ids; includes SafeTensors, ServerlessLLM, and vLLM pytest suites unless `TENSORA_BENCH_NO_VLLM=1`; vLLM runs are serialized to one process at a time) |
 
 Script setup and notes: [`scripts/README.md`](scripts/README.md).
 
@@ -115,13 +115,13 @@ cargo clippy --lib --locked -- -D warnings
 
 ## Python benchmarks
 
-From the repo root, set `TENSOR_STORE_BENCH_MODELS` to one or more Hugging Face model ids (space- or comma-separated), then:
+From the repo root, set `TENSORA_BENCH_MODELS` to one or more Hugging Face model ids (space- or comma-separated), then:
 
 ```bash
 ./scripts/run_benchmarks.sh
 ```
 
-Default output: `results/benchmarks/pytest_benchmark_<slug>.json` per model. With `TENSOR_STORE_BENCH_NO_VLLM=1`, multiple models can run in parallel (see `TENSOR_STORE_BENCH_JOBS`). To sweep the paper’s six public checkpoints in one invocation, run [`scripts/paper_pytest_ladder.sh`](scripts/paper_pytest_ladder.sh) from the repo root. Details: [`bindings/python/benchmarks/README.md`](bindings/python/benchmarks/README.md).
+Default output: `results/benchmarks/pytest_benchmark_<slug>.json` per model. With `TENSORA_BENCH_NO_VLLM=1`, multiple models can run in parallel (see `TENSORA_BENCH_JOBS`). To sweep the paper’s six public checkpoints in one invocation, run [`scripts/paper_pytest_ladder.sh`](scripts/paper_pytest_ladder.sh) from the repo root. Details: [`bindings/python/benchmarks/README.md`](bindings/python/benchmarks/README.md).
 
 ## Component docs
 
@@ -132,7 +132,7 @@ Default output: `results/benchmarks/pytest_benchmark_<slug>.json` per model. Wit
 
 ## FAQ
 
-- **Name collision:** *TensorStore* in this repository is the checkpoint-loading system described in the paper (Rust crate `tensor_store`, Python `tensor_store_py`). It is **not** Google’s unrelated TensorStore library for N-dimensional arrays.
+- **Name collision:** *Tensora* in this repository is the checkpoint-loading system described in the paper (Rust crate `tensora`, Python `tensora_py`). It is **not** Google’s unrelated Tensora library for N-dimensional arrays.
 - **Platform:** The `io_uring` backend is **Linux-only**. Other platforms are out of scope for this codebase.
 - **What “replication” means:** Match **backend ordering and regime behaviour** (e.g. SafeTensors crossover; ServerlessLLM without synchronous loading leading) rather than identical millisecond timings on different hardware.
 - **Cold cache:** Published cold-cache numbers assume `sync` and `drop_caches` as in the paper; warm-cache behaviour is different by design.

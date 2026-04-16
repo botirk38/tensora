@@ -4,8 +4,8 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from tensor_store_py.tensorflow import load_safetensors as tf_load_safetensors
-from tensor_store_py.tensorflow import (
+from tensora.tensorflow import load_safetensors as tf_load_safetensors
+from tensora.tensorflow import (
     load_safetensors_async as tf_load_safetensors_async,
 )
 
@@ -70,7 +70,7 @@ class TestTensorFlowLoad:
 
     def test_tensor_shapes(self, safetensors_path, hidden_dim):
         """Test that tensor shapes match PyTorch loads for the same file."""
-        from tensor_store_py.torch import load_safetensors as pytorch_load_safetensors
+        from tensora.torch import load_safetensors as pytorch_load_safetensors
 
         pt_weights = pytorch_load_safetensors(safetensors_path)
         tf_weights = tf_load_safetensors(safetensors_path)
@@ -124,7 +124,7 @@ class TestTensorFlowRoundtrip:
         }
         path = tmp_path / "test.safetensors"
 
-        from tensor_store_py.tensorflow import save_safetensors as tf_save_safetensors
+        from tensora.tensorflow import save_safetensors as tf_save_safetensors
 
         tf_save_safetensors(tensors, path)
 
