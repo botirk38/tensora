@@ -6,8 +6,6 @@ torch = pytest.importorskip("torch")
 
 from tensora._tensora_rust import (
     load_serverlessllm,
-    load_serverlessllm_async,
-    load_serverlessllm_sync,
 )
 
 
@@ -28,7 +26,7 @@ def _seeded_tensor(shape, seed):
 def test_embedding_lookup_sync(serverlessllm_dir, hidden_dim):
     """Test embedding lookup with sync-loaded weights."""
     torch.manual_seed(FIXED_SEED)
-    weights = load_serverlessllm_sync(serverlessllm_dir)
+    weights = load_serverlessllm(serverlessllm_dir, backend="sync")
     wte = weights["wte"]
     input_ids = torch.tensor([[1, 2, 3, 4, 5]])
     embedded = torch.nn.functional.embedding(input_ids, wte)
@@ -38,7 +36,7 @@ def test_embedding_lookup_sync(serverlessllm_dir, hidden_dim):
 def test_embedding_lookup_async(serverlessllm_dir, hidden_dim):
     """Test embedding lookup with async-loaded weights."""
     torch.manual_seed(FIXED_SEED)
-    weights = load_serverlessllm_async(serverlessllm_dir)
+    weights = load_serverlessllm(serverlessllm_dir, backend="async")
     wte = weights["wte"]
     input_ids = torch.tensor([[1, 2, 3, 4, 5]])
     embedded = torch.nn.functional.embedding(input_ids, wte)
@@ -76,14 +74,14 @@ def _attention_computation(weights, layer_idx=0, hidden_dim=126):
 
 def test_attention_computation_sync(serverlessllm_dir, hidden_dim):
     """Test attention computation with sync-loaded weights."""
-    weights = load_serverlessllm_sync(serverlessllm_dir)
+    weights = load_serverlessllm(serverlessllm_dir, backend="sync")
     output = _attention_computation(weights, hidden_dim=hidden_dim)
     assert output.shape == (1, 10, hidden_dim)
 
 
 def test_attention_computation_async(serverlessllm_dir, hidden_dim):
     """Test attention computation with async-loaded weights."""
-    weights = load_serverlessllm_async(serverlessllm_dir)
+    weights = load_serverlessllm(serverlessllm_dir, backend="async")
     output = _attention_computation(weights, hidden_dim=hidden_dim)
     assert output.shape == (1, 10, hidden_dim)
 
@@ -156,7 +154,7 @@ def _full_layer_forward(weights, layer_idx=0, hidden_dim=126):
 def test_full_layer_forward_sync(serverlessllm_dir, hidden_dim):
     """Test full layer forward with sync-loaded weights."""
     output = _full_layer_forward(
-        load_serverlessllm_sync(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir, backend="sync"), hidden_dim=hidden_dim
     )
     assert output.shape == (2, 5, hidden_dim)
     assert not torch.isnan(output).any()
@@ -166,7 +164,7 @@ def test_full_layer_forward_sync(serverlessllm_dir, hidden_dim):
 def test_full_layer_forward_async(serverlessllm_dir, hidden_dim):
     """Test full layer forward with async-loaded weights."""
     output = _full_layer_forward(
-        load_serverlessllm_async(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir, backend="async"), hidden_dim=hidden_dim
     )
     assert output.shape == (2, 5, hidden_dim)
     assert not torch.isnan(output).any()
@@ -213,7 +211,7 @@ def test_gradient_flow_sync(serverlessllm_dir, hidden_dim):
     """Test gradient flow with sync-loaded weights."""
     intermediate_dim = hidden_dim * 3
     x_grad, c_attn_grad, c_proj_grad = _gradient_test(
-        load_serverlessllm_sync(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir, backend="sync"), hidden_dim=hidden_dim
     )
     assert x_grad.shape == (1, 10, hidden_dim)
     assert c_attn_grad.shape == (hidden_dim, intermediate_dim)
@@ -224,7 +222,7 @@ def test_gradient_flow_async(serverlessllm_dir, hidden_dim):
     """Test gradient flow with async-loaded weights."""
     intermediate_dim = hidden_dim * 3
     x_grad, c_attn_grad, c_proj_grad = _gradient_test(
-        load_serverlessllm_async(serverlessllm_dir), hidden_dim=hidden_dim
+        load_serverlessllm(serverlessllm_dir, backend="async"), hidden_dim=hidden_dim
     )
     assert x_grad.shape == (1, 10, hidden_dim)
     assert c_attn_grad.shape == (hidden_dim, intermediate_dim)

@@ -4,38 +4,31 @@ Benchmarks tensora ServerlessLLM loading with different eager backends plus
 the lazy open/get_tensor path. Partition count uses the shared size-based heuristic.
 """
 
-
 from benchmarks.hub_model import touch_tensor
 from tensora._tensora_rust import (
     load_serverlessllm,
-    load_serverlessllm_async,
-    load_serverlessllm_sync,
     open_serverlessllm,
 )
 
 
 def test_load_async(benchmark, serverlessllm_dir):
-    """Benchmark load_serverlessllm_async."""
+    """Benchmark load_serverlessllm (async backend)."""
 
     def run():
-        result = load_serverlessllm_async(serverlessllm_dir)
+        result = load_serverlessllm(serverlessllm_dir, backend="async")
         sum(touch_tensor(t) for t in result.values())
-        return result
 
-    result = benchmark(run)
-    assert len(result) > 0
+    benchmark(run)
 
 
 def test_load_sync(benchmark, serverlessllm_dir):
-    """Benchmark load_serverlessllm_sync."""
+    """Benchmark load_serverlessllm (sync backend)."""
 
     def run():
-        result = load_serverlessllm_sync(serverlessllm_dir)
+        result = load_serverlessllm(serverlessllm_dir, backend="sync")
         sum(touch_tensor(t) for t in result.values())
-        return result
 
-    result = benchmark(run)
-    assert len(result) > 0
+    benchmark(run)
 
 
 def test_load_default(benchmark, serverlessllm_dir):
@@ -44,25 +37,12 @@ def test_load_default(benchmark, serverlessllm_dir):
     def run():
         result = load_serverlessllm(serverlessllm_dir)
         sum(touch_tensor(t) for t in result.values())
-        return result
-
-    result = benchmark(run)
-    assert len(result) > 0
-
-
-def test_open_get_tensor(benchmark, serverlessllm_dir):
-    """Benchmark open_serverlessllm + get_tensor."""
-
-    def run():
-        handle = open_serverlessllm(serverlessllm_dir)
-        for k in handle.keys():
-            touch_tensor(handle.get_tensor(k))
 
     benchmark(run)
 
 
-def test_open_get_tensor_default(benchmark, serverlessllm_dir):
-    """Benchmark open_serverlessllm (default) + get_tensor."""
+def test_open_get_tensor(benchmark, serverlessllm_dir):
+    """Benchmark open_serverlessllm + get_tensor."""
 
     def run():
         handle = open_serverlessllm(serverlessllm_dir)

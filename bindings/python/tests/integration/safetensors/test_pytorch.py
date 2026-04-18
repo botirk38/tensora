@@ -6,8 +6,6 @@ torch = pytest.importorskip("torch")
 
 from tensora._tensora_rust import (
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
 )
 
 
@@ -28,7 +26,7 @@ def _seeded_tensor(shape, seed):
 def test_embedding_lookup_sync(safetensors_path, hidden_dim):
     """Test embedding lookup with sync-loaded weights."""
     torch.manual_seed(FIXED_SEED)
-    weights = load_safetensors_sync(safetensors_path)
+    weights = load_safetensors(safetensors_path, backend="sync")
     wte = weights["wte"]
     input_ids = torch.tensor([[1, 2, 3, 4, 5]])
     embedded = torch.nn.functional.embedding(input_ids, wte)
@@ -38,7 +36,7 @@ def test_embedding_lookup_sync(safetensors_path, hidden_dim):
 def test_embedding_lookup_async(safetensors_path, hidden_dim):
     """Test embedding lookup with async-loaded weights."""
     torch.manual_seed(FIXED_SEED)
-    weights = load_safetensors_async(safetensors_path)
+    weights = load_safetensors(safetensors_path, backend="async")
     wte = weights["wte"]
     input_ids = torch.tensor([[1, 2, 3, 4, 5]])
     embedded = torch.nn.functional.embedding(input_ids, wte)
@@ -130,7 +128,7 @@ def _full_layer_forward(weights, layer_idx=0, hidden_dim=128):
 def test_full_layer_forward_sync(safetensors_path, hidden_dim):
     """Test full layer forward with sync-loaded weights."""
     output = _full_layer_forward(
-        load_safetensors_sync(safetensors_path), hidden_dim=hidden_dim
+        load_safetensors(safetensors_path, backend="sync"), hidden_dim=hidden_dim
     )
     assert output.shape == (2, 5, hidden_dim)
     assert not torch.isnan(output).any()
@@ -140,7 +138,7 @@ def test_full_layer_forward_sync(safetensors_path, hidden_dim):
 def test_full_layer_forward_async(safetensors_path, hidden_dim):
     """Test full layer forward with async-loaded weights."""
     output = _full_layer_forward(
-        load_safetensors_async(safetensors_path), hidden_dim=hidden_dim
+        load_safetensors(safetensors_path, backend="async"), hidden_dim=hidden_dim
     )
     assert output.shape == (2, 5, hidden_dim)
     assert not torch.isnan(output).any()
@@ -187,7 +185,7 @@ def test_gradient_flow_sync(safetensors_path, hidden_dim):
     """Test gradient flow with sync-loaded weights."""
     intermediate_dim = hidden_dim * 3
     x_grad, c_attn_grad, c_proj_grad = _gradient_test(
-        load_safetensors_sync(safetensors_path), hidden_dim=hidden_dim
+        load_safetensors(safetensors_path, backend="sync"), hidden_dim=hidden_dim
     )
     assert x_grad.shape == (1, 10, hidden_dim)
     assert c_attn_grad.shape == (hidden_dim, intermediate_dim)
@@ -198,7 +196,7 @@ def test_gradient_flow_async(safetensors_path, hidden_dim):
     """Test gradient flow with async-loaded weights."""
     intermediate_dim = hidden_dim * 3
     x_grad, c_attn_grad, c_proj_grad = _gradient_test(
-        load_safetensors_async(safetensors_path), hidden_dim=hidden_dim
+        load_safetensors(safetensors_path, backend="async"), hidden_dim=hidden_dim
     )
     assert x_grad.shape == (1, 10, hidden_dim)
     assert c_attn_grad.shape == (hidden_dim, intermediate_dim)

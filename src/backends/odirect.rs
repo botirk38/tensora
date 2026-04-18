@@ -3,7 +3,7 @@
 //! Provides utilities for direct I/O that bypasses the kernel page cache.
 
 use super::IoResult;
-use std::alloc::{Layout, alloc_zeroed, dealloc};
+use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fs::OpenOptions as StdOpenOptions;
 use std::io::{Error as IoError, ErrorKind};
 use std::os::unix::fs::OpenOptionsExt;
@@ -109,7 +109,7 @@ pub fn alloc_aligned(capacity: usize) -> IoResult<AlignedBuffer> {
 }
 
 #[inline]
-pub fn open_direct_read_sync(path: &Path) -> IoResult<std::fs::File> {
+pub fn open_direct_read(path: &Path) -> IoResult<std::fs::File> {
     StdOpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECT)

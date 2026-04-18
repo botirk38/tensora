@@ -29,11 +29,39 @@ LOADER_CONFIG = {
     "native": None,
     "ts_safetensors_default": {"format": "safetensors", "backend": "default"},
     "ts_safetensors_sync": {"format": "safetensors", "backend": "sync"},
-    "ts_safetensors_io_uring": {"format": "safetensors", "backend": "io-uring"},
+    "ts_safetensors_io_uring": {"format": "safetensors", "backend": "io_uring"},
     "ts_serverlessllm_default": {"format": "serverlessllm", "backend": "default"},
     "ts_serverlessllm_sync": {"format": "serverlessllm", "backend": "sync"},
-    "ts_serverlessllm_io_uring": {"format": "serverlessllm", "backend": "io-uring"},
+    "ts_serverlessllm_io_uring": {"format": "serverlessllm", "backend": "io_uring"},
 }
+
+
+def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
+    """Get vLLM engine kwargs, with model-specific memory settings."""
+    base_kwargs = {
+        "model": model_id,
+        "tensor_parallel_size": 1,
+        "max_model_len": 16384,
+        "enforce_eager": True,
+    }
+
+    is_custom = loader and loader.startswith("ts_")
+
+    if "8B" in model_id or "8b" in model_id:
+        base_kwargs["gpu_memory_utilization"] = 0.70
+    elif "14B" in model_id or "14b" in model_id:
+        base_kwargs["gpu_memory_utilization"] = 0.50
+    elif "32B" in model_id or "32b" in model_id:
+        base_kwargs["gpu_memory_utilization"] = 0.95
+        base_kwargs["max_model_len"] = 16384
+    elif (
+        "72B" in model_id or "72b" in model_id or "70B" in model_id or "70b" in model_id
+    ):
+        base_kwargs["gpu_memory_utilization"] = 0.15
+    else:
+        base_kwargs["gpu_memory_utilization"] = 0.95
+
+    return base_kwargs
 
 
 def run_benchmark(
@@ -64,15 +92,7 @@ def run_benchmark(
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
 
-    llm_kwargs = {
-        "model": model_id,
-        "tensor_parallel_size": 1,
-        "gpu_memory_utilization": 0.95,
-        "max_model_len": 16384,
-        # Avoid TorchInductor/Triton JIT of tiny CUDA helpers on hosts where gcc/cuda headers
-        # are incomplete (common on minimal cloud images). Loader comparisons remain fair.
-        "enforce_eager": True,
-    }
+    llm_kwargs = get_llm_kwargs(model_id, loader)
 
     if config is not None:
         llm_kwargs["load_format"] = "tensora"

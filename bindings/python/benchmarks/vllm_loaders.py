@@ -16,37 +16,31 @@ def _cache_root() -> str:
 
 
 def _load_safetensors(path: str, backend: str) -> dict[str, torch.Tensor]:
-    from tensora._tensora_rust import (
-        load_safetensors,
-        load_safetensors_sync,
-    )
-    if backend == "io-uring":
-        from tensora._tensora_rust import load_safetensors_io_uring
+    from tensora._tensora_rust import load_safetensors
 
-        return load_safetensors_io_uring(path)
+    return load_safetensors(path, backend=backend)
 
-    if backend == "default":
-        return load_safetensors(path)
-    if backend == "sync":
-        return load_safetensors_sync(path)
-    raise ValueError(f"unsupported backend: {backend}")
+
+def _iter_safetensors(
+    path: str, backend: str
+) -> Generator[tuple[str, torch.Tensor], None, None]:
+    from tensora._tensora_rust import iter_safetensors
+
+    return iter_safetensors(path, backend=backend)
 
 
 def _load_serverlessllm(path: str, backend: str) -> dict[str, torch.Tensor]:
-    from tensora._tensora_rust import (
-        load_serverlessllm,
-        load_serverlessllm_sync,
-    )
-    if backend == "io-uring":
-        from tensora._tensora_rust import load_serverlessllm_io_uring
+    from tensora._tensora_rust import load_serverlessllm
 
-        return load_serverlessllm_io_uring(path)
+    return load_serverlessllm(path, backend=backend)
 
-    if backend == "default":
-        return load_serverlessllm(path)
-    if backend == "sync":
-        return load_serverlessllm_sync(path)
-    raise ValueError(f"unsupported backend: {backend}")
+
+def _iter_serverlessllm(
+    path: str, backend: str
+) -> Generator[tuple[str, torch.Tensor], None, None]:
+    from tensora._tensora_rust import iter_serverlessllm
+
+    return iter_serverlessllm(path, backend=backend)
 
 
 def _ensure_serverlessllm_artifact(
@@ -94,7 +88,7 @@ def register_tensora_loader() -> None:
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
                 raise ValueError(f"unsupported tensora format: {fmt}")
-            if backend not in {"default", "sync", "io-uring"}:
+            if backend not in {"default", "sync", "io_uring"}:
                 raise ValueError(f"unsupported tensora backend: {backend}")
 
             original_load_format = self.load_config.load_format
@@ -108,6 +102,7 @@ def register_tensora_loader() -> None:
                 )
             finally:
                 self.load_config.load_format = original_load_format
+
             if not use_safetensors:
                 raise ValueError(
                     "tensora benchmark loader requires safetensors weights"
@@ -119,9 +114,7 @@ def register_tensora_loader() -> None:
                 self.counter_before_loading_weights = time.perf_counter()
 
             if fmt == "safetensors":
-                state_dict = _load_safetensors(hf_folder, backend)
-                for name, tensor in state_dict.items():
-                    yield source.prefix + name, tensor
+                yield from _iter_safetensors(hf_folder, backend)
                 return
 
             artifact_dir = _ensure_serverlessllm_artifact(
@@ -129,6 +122,4 @@ def register_tensora_loader() -> None:
                 hf_weights_files,
                 getattr(source, "revision", None),
             )
-            state_dict = _load_serverlessllm(artifact_dir, backend)
-            for name, tensor in state_dict.items():
-                yield source.prefix + name, tensor
+            yield from _iter_serverlessllm(artifact_dir, backend)

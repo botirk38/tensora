@@ -8,8 +8,6 @@ import tensora._tensora_rust as rust_ext
 
 from tensora._tensora_rust import (
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
     open_safetensors,
 )
 from tests.fixtures import write_safetensors
@@ -48,14 +46,16 @@ def test_load_directory_smoke(tmp_path):
     assert d["b"].shape == (3, 4)
 
 
-@pytest.mark.skipif(not hasattr(rust_ext, "load_safetensors_io_uring"), reason="io_uring binding is Linux-only")
-def test_load_directory_io_uring_smoke(tmp_path):
-    load_safetensors_io_uring = rust_ext.load_safetensors_io_uring
+@pytest.mark.skipif(
+    not hasattr(rust_ext, "iter_safetensors"),
+    reason="io_uring binding is Linux-only",
+)
+def test_load_directory_io_uring(tmp_path):
     tensors = {"a": torch.zeros(1, 2), "b": torch.ones(3, 4)}
     model_dir = tmp_path / "test_dir_io_uring"
     model_dir.mkdir()
     write_safetensors(tensors, model_dir / "model.safetensors")
-    d = load_safetensors_io_uring(str(model_dir))
+    d = load_safetensors(str(model_dir), backend="io_uring")
     assert "a" in d and "b" in d
     assert d["a"].shape == (1, 2)
     assert d["b"].shape == (3, 4)

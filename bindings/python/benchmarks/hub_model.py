@@ -194,5 +194,6 @@ def get_or_build_serverlessllm(
 
 
 def touch_tensor(t: torch.Tensor) -> float:
-    """Force read of all pages (e.g. for mmap-backed tensors). Returns sum for sanity."""
-    return t.sum().item()
+    """Force read of all pages (e.g. for mmap-backed tensors). Returns element count for sanity."""
+    _ = t.sum()
+    return float(t.numel())

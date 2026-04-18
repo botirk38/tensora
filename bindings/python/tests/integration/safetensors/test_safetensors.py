@@ -6,8 +6,6 @@ torch = pytest.importorskip("torch")
 
 from tensora._tensora_rust import (
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
     open_safetensors,
 )
 
@@ -31,7 +29,7 @@ def test_load_safetensors_default(safetensors_path, hidden_dim):
 
 
 def test_load_safetensors_sync(safetensors_path, hidden_dim):
-    d = load_safetensors_sync(safetensors_path)
+    d = load_safetensors(safetensors_path, backend="sync")
     assert "wte" in d and "wpe" in d
     assert d["wte"].shape == (1024, hidden_dim)
 
@@ -40,7 +38,7 @@ def test_load_safetensors_sync(safetensors_path, hidden_dim):
 
 
 def test_load_safetensors_async(safetensors_path, hidden_dim):
-    d = load_safetensors_async(safetensors_path)
+    d = load_safetensors(safetensors_path, backend="async")
     assert "wte" in d and "wpe" in d
     assert d["wte"].shape == (1024, hidden_dim)
 
@@ -56,15 +54,15 @@ def test_open_handle(safetensors_path, hidden_dim):
 
 def test_load_keys_parity(safetensors_path):
     keys_default = set(load_safetensors(safetensors_path).keys())
-    keys_sync = set(load_safetensors_sync(safetensors_path).keys())
-    keys_async = set(load_safetensors_async(safetensors_path).keys())
+    keys_sync = set(load_safetensors(safetensors_path, backend="sync").keys())
+    keys_async = set(load_safetensors(safetensors_path, backend="async").keys())
     assert keys_default == keys_sync == keys_async
 
 
 def test_load_shapes_parity(safetensors_path):
     d_default = load_safetensors(safetensors_path)
-    d_sync = load_safetensors_sync(safetensors_path)
-    d_async = load_safetensors_async(safetensors_path)
+    d_sync = load_safetensors(safetensors_path, backend="sync")
+    d_async = load_safetensors(safetensors_path, backend="async")
     assert (
         {k: tuple(d_default[k].shape) for k in d_default}
         == {k: tuple(d_sync[k].shape) for k in d_sync}

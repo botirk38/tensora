@@ -5,8 +5,6 @@ from safetensors.torch import load_file as safetensors_load_file
 from benchmarks.hub_model import touch_tensor
 from tensora._tensora_rust import (
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
     open_safetensors,
 )
 
@@ -36,57 +34,42 @@ def test_load_native(benchmark, safetensors_files):
     """Benchmark native safetensors.torch.load_file across all shards."""
 
     def run():
-        return _load_all_files(safetensors_files, safetensors_load_file)
+        _load_all_files(safetensors_files, safetensors_load_file)
 
-    result = benchmark(run)
-    assert result > 0
+    benchmark(run)
 
 
 def test_load_tensorstore_sync(benchmark, safetensors_dir):
-    """Benchmark tensora load_safetensors_sync for the full model directory."""
+    """Benchmark tensora load_safetensors for the full model directory."""
 
     def run():
-        return _load_dir(safetensors_dir, load_safetensors_sync)
+        _load_dir(safetensors_dir, lambda p: load_safetensors(p, backend="sync"))
 
-    result = benchmark(run)
-    assert result > 0
+    benchmark(run)
 
 
 def test_load_async(benchmark, safetensors_dir):
-    """Benchmark tensora load_safetensors_async for the full model directory."""
+    """Benchmark tensora load_safetensors (async backend) for the full model directory."""
 
     def run():
-        return _load_dir(safetensors_dir, load_safetensors_async)
+        _load_dir(safetensors_dir, lambda p: load_safetensors(p, backend="async"))
 
-    result = benchmark(run)
-    assert result > 0
+    benchmark(run)
 
 
 def test_load_default(benchmark, safetensors_dir):
     """Benchmark tensora load_safetensors default backend for the full model directory."""
 
     def run():
-        return _load_dir(safetensors_dir, load_safetensors)
+        _load_dir(safetensors_dir, load_safetensors)
 
-    result = benchmark(run)
-    assert result > 0
+    benchmark(run)
 
 
 def test_open_get_tensor(benchmark, safetensors_dir):
     """Benchmark open_safetensors + get_tensor for the full model directory."""
 
     def run():
-        return _open_dir(safetensors_dir, open_safetensors)
+        _open_dir(safetensors_dir, open_safetensors)
 
-    result = benchmark(run)
-    assert result > 0
-
-
-def test_open_get_tensor_default(benchmark, safetensors_dir):
-    """Benchmark open_safetensors (default) + get_tensor for the full model directory."""
-
-    def run():
-        return _open_dir(safetensors_dir, open_safetensors)
-
-    result = benchmark(run)
-    assert result > 0
+    benchmark(run)

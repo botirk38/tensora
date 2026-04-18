@@ -4,11 +4,7 @@ import pytest
 
 from tensora._tensora_rust import (
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
     load_serverlessllm,
-    load_serverlessllm_async,
-    load_serverlessllm_sync,
     open_safetensors,
     open_serverlessllm,
 )
@@ -22,9 +18,9 @@ from tests.fixtures import (
 
 def get_keys_sync(path, fmt):
     if fmt == "safetensors":
-        d = load_safetensors_sync(path)
+        d = load_safetensors(path, backend="sync")
     else:
-        d = load_serverlessllm_sync(path)
+        d = load_serverlessllm(path, backend="sync")
     return set(d.keys())
 
 
@@ -46,9 +42,9 @@ def get_keys_default(path, fmt):
 
 def get_shapes_sync(path, fmt):
     if fmt == "safetensors":
-        d = load_safetensors_sync(path)
+        d = load_safetensors(path, backend="sync")
     else:
-        d = load_serverlessllm_sync(path)
+        d = load_serverlessllm(path, backend="sync")
     return {k: tuple(d[k].shape) for k in sorted(d.keys())}
 
 

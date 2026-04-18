@@ -7,15 +7,11 @@ import pytest
 
 from tensora import __version__
 from tensora._tensora_rust import (
-    TensorStoreError,
+    TensoraError,
     SafeTensorsHandlePy,
     ServerlessLLMHandlePy,
     load_safetensors,
-    load_safetensors_async,
-    load_safetensors_sync,
     load_serverlessllm,
-    load_serverlessllm_async,
-    load_serverlessllm_sync,
     open_safetensors,
     open_serverlessllm,
 )
@@ -46,7 +42,7 @@ def test_handle_classes_are_types():
 
 
 def test_tensora_error_is_exception():
-    assert issubclass(TensorStoreError, Exception)
+    assert issubclass(TensoraError, Exception)
 
 
 def test_default_functions_work(tmp_path):
@@ -74,16 +70,12 @@ def test_default_functions_work(tmp_path):
     assert "x" in result
 
 
-def test_all_backend_functions_are_callable():
+def test_all_functions_are_callable():
     for fn in (
         open_safetensors,
         open_serverlessllm,
         load_safetensors,
-        load_safetensors_async,
-        load_safetensors_sync,
         load_serverlessllm,
-        load_serverlessllm_async,
-        load_serverlessllm_sync,
     ):
         assert callable(fn)
 
@@ -91,37 +83,20 @@ def test_all_backend_functions_are_callable():
 def test_rust_extension_is_importable():
     mod = importlib.import_module("tensora._tensora_rust")
     assert hasattr(mod, "__version__")
-    assert hasattr(mod, "load_safetensors_sync")
+    assert hasattr(mod, "load_safetensors")
 
 
 @pytest.mark.skipif(platform.system() != "Linux", reason="io_uring is Linux-only")
-def test_io_uring_functions_exist_on_linux():
-    from tensora._tensora_rust import (
-        load_safetensors_io_uring,
-        load_serverlessllm_io_uring,
-    )
-
-    assert callable(load_safetensors_io_uring)
-    assert callable(load_serverlessllm_io_uring)
-
-
-@pytest.mark.skipif(platform.system() != "Linux", reason="io_uring is Linux-only")
-def test_io_uring_safetensors_load_works(tmp_path):
+def test_load_with_io_uring_backend(tmp_path):
     torch = pytest.importorskip("torch")
-    from tensora._tensora_rust import load_safetensors_io_uring
+    from tensora._tensora_rust import load_safetensors, load_serverlessllm
 
     safetensors_path = write_safetensors_dir({"x": torch.zeros(1)}, tmp_path / "t")
-    result = load_safetensors_io_uring(str(safetensors_path))
+    result = load_safetensors(str(safetensors_path), backend="io_uring")
     assert isinstance(result, dict)
     assert "x" in result
 
-
-@pytest.mark.skipif(platform.system() != "Linux", reason="io_uring is Linux-only")
-def test_io_uring_serverlessllm_load_works(tmp_path):
-    torch = pytest.importorskip("torch")
-    from tensora._tensora_rust import load_serverlessllm_io_uring
-
     serverless_path = write_serverlessllm_dir({"x": torch.zeros(1)}, tmp_path / "s")
-    result = load_serverlessllm_io_uring(str(serverless_path))
+    result = load_serverlessllm(str(serverless_path), backend="io_uring")
     assert isinstance(result, dict)
     assert "x" in result

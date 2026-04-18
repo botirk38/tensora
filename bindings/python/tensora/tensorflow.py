@@ -5,8 +5,7 @@ from typing import Dict, Optional, Union
 from tensora._tensora_rust import (
     SafeTensorsHandlePy,
     load_safetensors as _load_safetensors,
-    load_safetensors_async as _load_safetensors_async,
-    load_safetensors_sync as _load_safetensors_sync,
+    iter_safetensors as _iter_safetensors,
     open_safetensors as _open_safetensors,
     save_safetensors as _save_safetensors,
     save_safetensors_bytes as _save_safetensors_bytes,
@@ -21,32 +20,43 @@ except ImportError:
 
 
 def load_safetensors(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
+    path: Union[str, "os.PathLike"],
+    backend: str = "default",
+    device: str = "/CPU:0",
 ) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory into a dict of TensorFlow tensors.
+        """Load a safetensors model directory into a dict of TensorFlow tensors.
 
     Args:
         path: Path to the safetensors model directory.
-        device: Device to load tensors to (e.g., "/CPU:0", "/GPU:0", "/device:CPU:0").
+        backend: Backend to use ("default", "sync", "io_uring").
+        device: Device to load tensors to (e.g., "/CPU:0", "/GPU:0").
 
     Returns:
         Dict mapping tensor names to tf.Tensor values.
     """
-    return _load_safetensors(path, framework="tensorflow", device=device)
+    return _load_safetensors(
+        path, framework="tensorflow", device=device, backend=backend
+    )
 
 
-def load_safetensors_async(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory asynchronously into TensorFlow tensors."""
-    return _load_safetensors_async(path, framework="tensorflow", device=device)
+def iter_safetensors(
+    path: Union[str, "os.PathLike"],
+    backend: str = "default",
+    device: str = "/CPU:0",
+):
+    """Iterate over a safetensors model directory as (name, tensor) pairs.
 
+    Args:
+        path: Path to the safetensors model directory.
+        backend: Backend to use ("default", "sync", "io_uring").
+        device: Device to load tensors to (e.g., "/CPU:0", "/GPU:0").
 
-def load_safetensors_sync(
-    path: Union[str, "os.PathLike"], device: str = "/CPU:0"
-) -> Dict[str, tf.Tensor]:
-    """Load a safetensors model directory synchronously into TensorFlow tensors."""
-    return _load_safetensors_sync(path, framework="tensorflow", device=device)
+    Returns:
+        Iterator yielding (name, tf.Tensor) pairs.
+    """
+    return _iter_safetensors(
+        path, framework="tensorflow", device=device, backend=backend
+    )
 
 
 def open_safetensors(path: Union[str, "os.PathLike"]) -> SafeTensorsHandlePy:
@@ -97,8 +107,7 @@ def save_safetensors_bytes(
 
 __all__ = [
     "load_safetensors",
-    "load_safetensors_async",
-    "load_safetensors_sync",
+    "iter_safetensors",
     "open_safetensors",
     "save_safetensors",
     "save_safetensors_bytes",

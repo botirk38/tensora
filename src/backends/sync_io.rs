@@ -37,7 +37,7 @@ mod linux {
     pub fn load(path: &Path) -> IoResult<OwnedBytes> {
         use super::super::MAX_SINGLE_READ;
         use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync,
+            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read,
         };
 
         let mut file = File::open(path)?;
@@ -53,7 +53,7 @@ mod linux {
         }
 
         if can_use_direct_read(len, len) {
-            match open_direct_read_sync(path) {
+            match open_direct_read(path) {
                 Ok(mut direct_file) => {
                     let mut buf = alloc_aligned_buf(len)?;
                     buf.set_len(len);
@@ -72,7 +72,7 @@ mod linux {
 
     fn load_chunked(path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
         use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read_sync,
+            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read,
         };
 
         if chunks == 0 {
@@ -87,7 +87,7 @@ mod linux {
         let chunk_size = plan.chunk_size.min(div_ceil(file_size, chunks).max(1));
 
         if can_use_direct_read(file_size, chunk_size) {
-            match open_direct_read_sync(path) {
+            match open_direct_read(path) {
                 Ok(_) => {
                     drop(file);
                     let mut final_buf = alloc_aligned_buf(file_size)?;
@@ -104,7 +104,7 @@ mod linux {
                             let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
                             let path_clone = path.to_path_buf();
                             Some(thread::spawn(move || {
-                                let mut f = open_direct_read_sync(path_clone.as_path())?;
+                                let mut f = open_direct_read(path_clone.as_path())?;
                                 f.seek(SeekFrom::Start(start as u64))?;
                                 let s = unsafe { buffer_slice.as_mut_slice() };
                                 f.read_exact(s)?;
@@ -155,7 +155,7 @@ mod linux {
 
     pub fn load_range(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
         use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, is_block_aligned, open_direct_read_sync,
+            alloc_aligned as alloc_aligned_buf, is_block_aligned, open_direct_read,
         };
 
         if len == 0 {
@@ -163,7 +163,7 @@ mod linux {
         }
 
         if is_block_aligned(offset, len) {
-            match open_direct_read_sync(path) {
+            match open_direct_read(path) {
                 Ok(mut file) => {
                     let mut buf = alloc_aligned_buf(len)?;
                     buf.set_len(len);

@@ -16,13 +16,10 @@ pyo3::create_exception!(
 );
 
 use api::{
-    convert_safetensors_to_serverlessllm, load_safetensors, load_safetensors_async,
-    load_safetensors_sync, load_serverlessllm, load_serverlessllm_async, load_serverlessllm_sync,
-    open_safetensors, open_serverlessllm, save_safetensors, save_safetensors_bytes,
-    SafeTensorsHandlePy, ServerlessLLMHandlePy,
+    convert_safetensors_to_serverlessllm, iter_safetensors, iter_serverlessllm, load_safetensors,
+    load_serverlessllm, open_safetensors, open_serverlessllm, save_safetensors,
+    save_safetensors_bytes, SafeTensorsHandlePy, ServerlessLLMHandlePy,
 };
-#[cfg(target_os = "linux")]
-use api::{load_safetensors_io_uring, load_serverlessllm_io_uring};
 
 /// Python module entry point.
 #[pymodule]
@@ -33,15 +30,9 @@ fn _tensora_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(open_serverlessllm, m)?)?;
     m.add_function(wrap_pyfunction!(load_safetensors, m)?)?;
-    m.add_function(wrap_pyfunction!(load_safetensors_async, m)?)?;
-    m.add_function(wrap_pyfunction!(load_safetensors_sync, m)?)?;
-    #[cfg(target_os = "linux")]
-    m.add_function(wrap_pyfunction!(load_safetensors_io_uring, m)?)?;
+    m.add_function(wrap_pyfunction!(iter_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(load_serverlessllm, m)?)?;
-    m.add_function(wrap_pyfunction!(load_serverlessllm_async, m)?)?;
-    m.add_function(wrap_pyfunction!(load_serverlessllm_sync, m)?)?;
-    #[cfg(target_os = "linux")]
-    m.add_function(wrap_pyfunction!(load_serverlessllm_io_uring, m)?)?;
+    m.add_function(wrap_pyfunction!(iter_serverlessllm, m)?)?;
     m.add_function(wrap_pyfunction!(convert_safetensors_to_serverlessllm, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors_bytes, m)?)?;

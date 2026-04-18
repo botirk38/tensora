@@ -5,9 +5,6 @@ import pytest
 tf = pytest.importorskip("tensorflow")
 
 from tensora.tensorflow import load_safetensors as tf_load_safetensors
-from tensora.tensorflow import (
-    load_safetensors_async as tf_load_safetensors_async,
-)
 
 
 FIXED_SEED = 42
@@ -62,7 +59,7 @@ class TestTensorFlowLoad:
 
     def test_load_safetensors_async_basic(self, safetensors_path):
         """Test basic async loading with TensorFlow."""
-        weights = tf_load_safetensors_async(safetensors_path)
+        weights = tf_load_safetensors(safetensors_path, backend="async")
         assert isinstance(weights, dict)
         assert len(weights) > 0
         for name, tensor in weights.items():
@@ -86,7 +83,7 @@ class TestTensorFlowLoad:
 
     def test_attention_computation_async(self, safetensors_path, hidden_dim):
         """Test attention computation with async-loaded TensorFlow weights."""
-        tf_weights = tf_load_safetensors_async(safetensors_path)
+        tf_weights = tf_load_safetensors(safetensors_path, backend="async")
         output = _attention_computation(tf_weights, hidden_dim=hidden_dim)
         assert output.shape == (1, 10, hidden_dim)
 

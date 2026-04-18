@@ -11,7 +11,7 @@ use super::batch::{
     BatchResult, CoalescedRequestGroup, FlattenedResult, coalesce_requests, flatten_results,
 };
 use super::byte::OwnedBytes;
-use super::odirect::{alloc_aligned, can_use_direct_read, is_block_aligned, open_direct_read_sync};
+use super::odirect::{alloc_aligned, can_use_direct_read, is_block_aligned, open_direct_read};
 use super::{
     BackendKind, BatchRequest, IoResult, batch::group_requests_by_file, chunk_budget,
     file_chunk_plan, get_buffer_pool, range_batch_plan,
@@ -20,7 +20,6 @@ use io_uring::cqueue::CompletionQueue;
 use io_uring::{IoUring, opcode, types};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Seek;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,12 +28,6 @@ use std::thread;
 /// Maximum ring depth for NVMe/high-throughput workloads.
 const MAX_RING_DEPTH: u32 = 256;
 const MIN_RING_DEPTH: u32 = 32;
-
-/// Minimum batch size before we bother with io_uring at all.
-const IO_URING_MIN_BATCH_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-
-/// Small-read threshold below which sync is faster than io_uring setup.
-const SMALL_READ_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 
 const DEFAULT_SQPOLL_IDLE_MS: u32 = 2_000;
 
@@ -111,11 +104,6 @@ impl Reader {
 
         if file_size == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
-        }
-
-        if file_size < IO_URING_MIN_BATCH_BYTES {
-            drop(file);
-            return self.load_sync(path_ref, file_size);
         }
 
         self.ensure_ring_for_file_load(file_size, 1, file_size)?;
@@ -228,18 +216,12 @@ impl Reader {
                 continue;
             }
 
-            if file_size < IO_URING_MIN_BATCH_BYTES {
-                drop(file);
-                results[slot_idx] = Some((*request_idx, self.load_sync(path, file_size)?));
-                continue;
-            }
-
             let (file, mut buffer) = if can_use_direct_read(file_size, file_size) {
                 drop(file);
                 let mut aligned = alloc_aligned(file_size)?;
                 aligned.set_len(file_size);
                 (
-                    open_direct_read_sync(path)?,
+                    open_direct_read(path)?,
                     OwnedBytes::from_aligned(aligned),
                 )
             } else {
@@ -354,20 +336,12 @@ impl Reader {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
 
-        if len < SMALL_READ_THRESHOLD {
-            return self.load_range_sync(path.as_ref(), offset, len);
-        }
-
         self.ensure_ring_for_range_load(len, 1, len)?;
 
         let path_ref = path.as_ref();
 
-        if is_block_aligned(offset, len) {
-            match open_direct_read_sync(path_ref) {
-                Ok(file) => return self.load_range_direct(file, offset, len),
-                Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
-                Err(err) => return Err(err),
-            }
+        if is_block_aligned(offset, len) && let Ok(file) = open_direct_read(path_ref) {
+            return self.load_range_buffered(file, offset, len);
         }
 
         let file = File::open(path_ref)?;
@@ -561,107 +535,47 @@ impl Reader {
         Ok(results)
     }
 
-    fn load_sync(&self, path: &Path, file_size: usize) -> IoResult<OwnedBytes> {
-        let mut file = File::open(path)?;
-        let mut buf = vec![0u8; file_size];
-        std::io::Read::read_exact(&mut file, &mut buf[..])?;
-        Ok(OwnedBytes::from_vec(buf))
-    }
-
     fn load_buffered(&mut self, file: File, file_size: usize) -> IoResult<OwnedBytes> {
         let mut buffer = OwnedBytes::from_vec(vec![0u8; file_size]);
         let base_ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
-        let ring = self.ring_mut()?;
 
-        let plan = file_chunk_plan(file_size, BackendKind::IoUring);
-        let chunk_size = plan.chunk_size;
-        let chunks = plan.chunk_count;
-
-        if chunks == 0 {
-            return Ok(buffer);
-        }
-
-        let mut pending = chunks;
-        let mut submitted = 0;
-
-        while pending > 0 {
-            while submitted < chunks && ring.submission().capacity() > 0 {
-                let offset = (submitted * chunk_size) as u64;
-                let len = std::cmp::min(chunk_size, file_size - (submitted * chunk_size));
-                let ptr = unsafe { base_ptr.add(submitted * chunk_size) };
-
-                let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
-                    .offset(offset)
-                    .build()
-                    .user_data(submitted as u64);
-
-                unsafe {
-                    if ring.submission().push(&sqe).is_err() {
-                        break;
-                    }
-                }
-                submitted += 1;
-            }
-
-            let wait_for = pending.min(plan.wait_for).max(1);
-            ring.submit_and_wait(wait_for)?;
-
-            let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
-            for cqe in cq {
-                let idx = cqe.user_data() as usize;
-                let result = cqe.result();
-
-                if result < 0 {
-                    return Err(std::io::Error::other(format!(
-                        "read error at chunk {}: {}",
-                        idx, result
-                    )));
-                }
-
-                let bytes_read = result as usize;
-                let expected = std::cmp::min(chunk_size, file_size - (idx * chunk_size));
-                if bytes_read < expected {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!(
-                            "short read at chunk {}: expected {} bytes, got {}",
-                            idx, expected, bytes_read
-                        ),
-                    ));
-                }
-                pending -= 1;
-            }
-        }
+        self.read_chunks(fd, base_ptr, file_size)?;
 
         drop(file);
         Ok(buffer)
     }
 
     fn load_direct(&mut self, path: &Path, file_size: usize) -> IoResult<OwnedBytes> {
-        let file = open_direct_read_sync(path)?;
+        let file = open_direct_read(path)?;
         let mut aligned = alloc_aligned(file_size)?;
         aligned.set_len(file_size);
         let mut buffer = OwnedBytes::from_aligned(aligned);
         let base_ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
-        let ring = self.ring_mut()?;
 
+        self.read_chunks(fd, base_ptr, file_size)?;
+
+        Ok(buffer)
+    }
+
+    fn read_chunks(&mut self, fd: RawFd, base_ptr: *mut u8, file_size: usize) -> IoResult<()> {
         let plan = file_chunk_plan(file_size, BackendKind::IoUring);
         let chunk_size = plan.chunk_size;
         let chunks = plan.chunk_count;
 
         if chunks == 0 {
-            return Ok(buffer);
+            return Ok(());
         }
 
         let mut pending = chunks;
         let mut submitted = 0;
+        let ring = self.ring_mut()?;
 
         while pending > 0 {
             while submitted < chunks && ring.submission().capacity() > 0 {
                 let offset = (submitted * chunk_size) as u64;
-                let len = std::cmp::min(chunk_size, file_size - (submitted * chunk_size));
+                let len = chunk_size.min(file_size - submitted * chunk_size);
                 let ptr = unsafe { base_ptr.add(submitted * chunk_size) };
 
                 let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
@@ -686,36 +600,22 @@ impl Reader {
                 let result = cqe.result();
 
                 if result < 0 {
-                    return Err(std::io::Error::other(format!(
-                        "direct read error at chunk {}: {}",
-                        idx, result
-                    )));
+                    return Err(std::io::Error::other(format!("read error at chunk {}", idx)));
                 }
 
                 let bytes_read = result as usize;
-                let expected = std::cmp::min(chunk_size, file_size - (idx * chunk_size));
+                let expected = chunk_size.min(file_size - idx * chunk_size);
                 if bytes_read < expected {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
-                        format!(
-                            "short direct read at chunk {}: expected {} bytes, got {}",
-                            idx, expected, bytes_read
-                        ),
+                        format!("short read at chunk {}: expected {} bytes, got {}", idx, expected, bytes_read),
                     ));
                 }
                 pending -= 1;
             }
         }
 
-        Ok(buffer)
-    }
-
-    fn load_range_sync(&self, path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-        let mut file = File::open(path)?;
-        file.seek(std::io::SeekFrom::Start(offset))?;
-        let mut buf = vec![0u8; len];
-        std::io::Read::read_exact(&mut file, &mut buf[..])?;
-        Ok(OwnedBytes::from_vec(buf))
+        Ok(())
     }
 
     fn load_range_buffered(&mut self, file: File, offset: u64, len: usize) -> IoResult<OwnedBytes> {
@@ -744,10 +644,7 @@ impl Reader {
             .ok_or_else(|| std::io::Error::other("completion queue empty"))?;
 
         if cqe.result() < 0 {
-            return Err(std::io::Error::other(format!(
-                "read error: {}",
-                cqe.result()
-            )));
+            return Err(std::io::Error::other(format!("read error: {}", cqe.result())));
         }
 
         let bytes_read = cqe.result() as usize;
@@ -759,52 +656,6 @@ impl Reader {
         }
 
         drop(file);
-        Ok(buffer)
-    }
-
-    fn load_range_direct(&mut self, file: File, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-        let mut aligned = alloc_aligned(len)?;
-        aligned.set_len(len);
-        let mut buffer = OwnedBytes::from_aligned(aligned);
-        let ptr = buffer.as_mut_ptr();
-        let fd = file.as_raw_fd();
-        let ring = self.ring_mut()?;
-
-        let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
-            .offset(offset)
-            .build()
-            .user_data(0);
-
-        unsafe {
-            ring.submission()
-                .push(&sqe)
-                .map_err(|_| std::io::Error::other("submission queue is full"))?;
-        }
-        ring.submit_and_wait(1)?;
-
-        let mut cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
-        let cqe = cq
-            .next()
-            .ok_or_else(|| std::io::Error::other("completion queue empty"))?;
-
-        if cqe.result() < 0 {
-            return Err(std::io::Error::other(format!(
-                "direct read error: {}",
-                cqe.result()
-            )));
-        }
-
-        let bytes_read = cqe.result() as usize;
-        if bytes_read < len {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                format!(
-                    "short direct read: expected {} bytes, got {}",
-                    len, bytes_read
-                ),
-            ));
-        }
-
         Ok(buffer)
     }
 
