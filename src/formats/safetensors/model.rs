@@ -126,7 +126,7 @@ fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
         if stats.shard_count >= 4 && stats.avg_shard_bytes() >= 2 * 1024 * 1024 * 1024 {
             return LoadBackend::IoUring;
         }
-        if stats.total_bytes >= 10 * 1024 * 1024 * 1024 && stats.shard_count >= 8 {
+        if stats.total_bytes >= 8 * 1024 * 1024 * 1024 && stats.shard_count >= 4 {
             return LoadBackend::IoUring;
         }
         LoadBackend::Sync

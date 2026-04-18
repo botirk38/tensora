@@ -1,0 +1,149 @@
+================================================================================
+T3: Abstract Consistency Audit
+================================================================================
+Generated: 2026-04-16
+Paper: /home/botirk/repos/PROJECT/paper/
+
+--- FILES COMPARED ---
+
+1. paper/main.tex (abstract environment, lines 45-54)
+2. paper/arxiv_abstract_plain.txt (plain-text for arXiv web form)
+
+--- MAIN.TEX ABSTRACT ---
+
+Inference on large language models is often gated by loading weights from storage 
+into GPU memory. In serverless and multi-tenant settings, idle models are evicted 
+and must be reloaded on demand, so cold-start latency can hinge on how checkpoints 
+are read. Peak NVMe bandwidth is only an upper bound: request structure, checkpoint 
+layout, and software above the block layer often dominate realised throughput.
+
+This paper treats checkpoint loading as a measurement-driven systems problem. Using 
+TensorStore as a controlled experimental vehicle, we compare synchronous POSIX I/O, 
+Tokio-based async loading, io_uring, and an adaptive default policy across contiguous 
+SafeTensors and partitioned ServerlessLLM-style layouts, then check how those choices 
+survive Python bindings and vLLM integration.
+
+Findings. For contiguous SafeTensors, explicit synchronous loading wins at the small 
+end of our ladder, while explicit io_uring wins at the largest multi-shard scales 
+where queue depth matters. For partitioned ServerlessLLM, synchronous loading is 
+never fastest in our matrix; the relevant trade-off is among async, io_uring, and 
+default. These layout- and scale-dependent crossovers show that no single fixed 
+backend is the right default.
+
+The paper's central contribution is therefore an operational policy claim: backend 
+choice for LLM checkpoint loading should be format-aware and adaptive, with explicit 
+overrides, rather than treated as one universal loader decision. Python and vLLM 
+results support the same point by showing that integration overhead can reorder 
+backend rankings and that loader choice matters most for initialisation and 
+time-to-first-token, not steady-state decode. Appendix~documented harnesses, 
+result paths, and environment fields to record for replication.
+
+--- ARXIV_PLAIN.TXT ABSTRACT ---
+
+Inference on large language models is often gated by loading weights from storage 
+into GPU memory. In serverless and multi-tenant settings, idle models are evicted 
+and must be reloaded on demand, so cold-start latency can hinge on how checkpoints 
+are read. Peak NVMe bandwidth is only an upper bound: request structure, checkpoint 
+layout, and software above the block layer often dominate realised throughput.
+
+We present TensorStore, an open checkpoint-loading framework and evaluation harness 
+for Linux that supports SafeTensors and a partitioned ServerlessLLM-style layout, 
+with eager backends spanning synchronous POSIX I/O, Tokio-based async loading, and 
+io_uring. Python bindings and a custom vLLM integration extend the study beyond 
+Rust-only microbenchmarks. Experiments use six public checkpoints and both layouts.
+
+Findings. For contiguous SafeTensors, explicit synchronous loading wins at the small 
+end of our ladder, while explicit io_uring wins at the largest multi-shard scales 
+where queue depth matters. No single fixed backend tracks that crossover, so an 
+adaptive default policy (selector plus planning) is justified; it is not equivalent 
+to any one explicit column.
+
+For partitioned ServerlessLLM, synchronous loading is never fastest in our matrix; 
+the relevant trade-off is among async, io_uring, and default. Python adds enough 
+overhead to reorder some Rust-level conclusions unless the bindings are tuned. 
+In vLLM, loader choice affects initialisation and time-to-first-token far more than 
+steady-state decode. The operational recommendation is a format-aware adaptive 
+default with explicit overrides, not one universal backend. The reproducibility 
+appendix documents harnesses, result paths, and environment fields to record for 
+replication.
+
+--- CONSISTENCY ANALYSIS ---
+
+SIGNIFICANT DIFFERENCES FOUND:
+
+1. EXPERIMENTAL VEHICLE DESCRIPTION:
+   - main.tex: "Using TensorStore as a controlled experimental vehicle"
+   - arxiv_plain.txt: "We present TensorStore, an open checkpoint-loading framework..."
+   
+   The main.tex framing is more aligned with the paper's actual identity as a
+   measurement-driven systems paper. The plain text makes it sound more like
+   a framework/artifact paper.
+
+2. EXPERIMENT SCOPE:
+   - main.tex: "...then check how those choices survive Python bindings and vLLM integration"
+   - arxiv_plain.txt: "...Python bindings and a custom vLLM integration extend the 
+     study beyond Rust-only microbenchmarks. Experiments use six public checkpoints..."
+   
+   The plain text adds specifics (six public checkpoints) not in main.tex.
+
+3. FORMAT-AWARE FINDINGS:
+   - main.tex: "These layout- and scale-dependent crossovers show that no single 
+     fixed backend is the right default."
+   - arxiv_plain.txt: "No single fixed backend tracks that crossover, so an adaptive 
+     default policy (selector plus planning) is justified; it is not equivalent to 
+     any one explicit column."
+   
+   The plain text is more explicit about selector+planning, but the core claim is consistent.
+
+4. PYTHON OVERHEAD FINDING:
+   - main.tex: "Python and vLLM results support the same point by showing that 
+     integration overhead can reorder backend rankings..."
+   - arxiv_plain.txt: "Python adds enough overhead to reorder some Rust-level 
+     conclusions unless the bindings are tuned."
+   
+   The plain text is slightly more specific but consistent.
+
+5. REPRODUCIBILITY:
+   - main.tex: "Appendix~documented harnesses..." (truncated at "~")
+   - arxiv_plain.txt: "The reproducibility appendix documents harnesses, result 
+     paths, and environment fields to record for replication."
+   
+   The main.tex has a rendering issue with "Appendix~documented" - the reference
+   didn't render properly. The plain text is more complete.
+
+--- VERDICT ---
+
+CONSISTENCY: PARTIAL (2/3)
+
+The abstracts share the same core content and key findings, but there are 
+meaningful differences in framing:
+
+- Main.tex frames TensorStore as an "experimental vehicle"
+- Plain text frames TensorStore as something being "presented"
+
+This is a subtle but important distinction that reflects the paper's identity
+(as decided in T2): it should be a measurement-driven systems paper, not a 
+framework contribution paper.
+
+RECOMMENDATION: Update arxiv_abstract_plain.txt to match main.tex's framing:
+- Use "Using TensorStore as a controlled experimental vehicle" instead of 
+  "We present TensorStore, an open checkpoint-loading framework..."
+- This aligns the abstract with the paper's measurement-driven identity.
+
+--- METADATA CHECK ---
+
+Title in main.tex: "Load by Design: Adaptive Heuristics for LLM Checkpoint Loading"
+Title in 00README.json: (not specified - uses main.tex)
+
+The title should be entered in arXiv web form matching this exact string.
+
+Author: Botir Khaltaev (Independent, United Kingdom)
+
+Keywords in main.tex: large language models, checkpoint loading, I/O policy, 
+                      io_uring, cold start, vLLM, reproducibility
+
+The keywords match the content appropriately.
+
+================================================================================
+END OF ABSTRACT CONSISTENCY AUDIT
+================================================================================

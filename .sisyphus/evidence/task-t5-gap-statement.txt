@@ -1,0 +1,28 @@
+# TASK T5: Gap Statement Audit
+
+## What Prior Work Does NOT Settle
+
+The paper explicitly states the gap in multiple locations:
+
+### Primary Gap Statement (Introduction, lines 12-13)
+"None of these strands, alone, supplies operators with *controlled, end-to-end* evidence for *how* to submit reads for modern LLM checkpoints on Linux when bytes must flow through Rust tensor buffers, Python bindings, and an engine such as vLLM."
+
+### Secondary Gap Statement (Related Work Positioning, line 90-91)
+"Prior work supplies components (safe formats, scheduling around loads, database-style io_uring lessons, serving engines). It rarely answers the operational question *which read submission policy to deploy* for a given public checkpoint when the stack includes Rust, Python, and vLLM-style integration."
+
+### Thesis Statement (Introduction, line 14)
+"backend choice for LLM checkpoint loading depends jointly on layout and scale, so the right systems contribution is a measured, format-aware adaptive policy with explicit overrides, not a single universal loader"
+
+## Audit Assessment
+
+1. **Crispness**: The gap statement is clear and specific. It names exact components (Rust tensor buffers, Python bindings, vLLM) that prior work doesn't address together.
+
+2. **Non-defensive**: The positioning explicitly says "not a replacement" and "complements" - it's additive, not dismissive of prior work.
+
+3. **One short passage**: The primary gap statement in introduction is one sentence (2 lines). A reviewer can answer "what exact gap does this paper fill?" from this passage.
+
+4. **Not generic benchmark**: The gap focuses on OPERATIONAL POLICY for backend selection under specific integration constraints - not generic "compare I/O methods."
+
+## Conclusion: GAP STATEMENT IS ADEQUATE
+
+The paper has a clear, non-defensive gap statement that answers "what exact gap does this paper fill?" from a short passage. No modification needed.

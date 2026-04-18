@@ -1,0 +1,47 @@
+=== arXiv Packaging Checklist ===
+
+Source Files (per README.md):
+- main.tex: /home/botirk/repos/PROJECT/paper/main.tex
+EXISTS
+- 00README.json: /home/botirk/repos/PROJECT/paper/00README.json
+EXISTS
+- sections/: 12 .tex files (no backup files)
+- bib/references.bib: /home/botirk/repos/PROJECT/paper/bib/references.bib
+EXISTS
+- figures/: 2 PNG files
+
+Omitted (generated/auxiliary):
+- main.aux: /home/botirk/repos/PROJECT/paper/main.aux
+EXISTS (NOT IN ARCHIVE)
+- main.log: /home/botirk/repos/PROJECT/paper/main.log
+EXISTS (NOT IN ARCHIVE)
+- main.pdf: /home/botirk/repos/PROJECT/paper/main.pdf
+EXISTS (NOT IN ARCHIVE)
+- Backup files: 4 (NOT IN ARCHIVE)
+
+Processor Declaration (00README.json):
+{
+  "spec_version": 1,
+  "process": {
+    "compiler": "pdflatex"
+  },
+  "sources": [
+    {
+      "filename": "main.tex",
+      "usage": "toplevel"
+    }
+  ]
+}
+
+Dry-Run Validation:
+- PDF builds successfully: YES
+- Bibliography resolves: YES (main.bbl generated)
+- No compilation errors: YES (warnings only)
+- Output: main.pdf (28 pages, ~323KB)
+
+arXiv README Checklist Items:
+[✓] bib: plainnat.bst is in TeX Live on arXiv
+[✓] Metadata: Title/abstract in PDF match web form
+[✓] License: Selected in submission UI (not package's job)
+[✓] Processor: pdfLaTeX (matches 00README.json)
+[✓] Preview: PDF builds correctly for manual scan

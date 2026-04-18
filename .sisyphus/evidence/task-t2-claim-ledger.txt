@@ -1,0 +1,183 @@
+================================================================================
+CLAIM-TO-EVIDENCE LEDGER - Task T2
+================================================================================
+Generated: 2026-04-16
+Paper: Load by Design: Adaptive Heuristics for LLM Checkpoint Loading
+
+================================================================================
+SECTION: ABSTRACT
+================================================================================
+
+Claim: "For contiguous SafeTensors, explicit synchronous loading wins at the small end of our ladder"
+  Type: Empirical finding
+  Evidence: Table 1 (Rust cold-cache SafeTensors results)
+  Bounded: Qwen3-0.6B, SmolLM3-3B, Qwen3-4B favor sync; Table 1 row data
+
+Claim: "explicit io_uring wins at the largest multi-shard scales where queue depth matters"
+  Type: Empirical finding
+  Evidence: Table 1 (Rust cold-cache SafeTensors results)  
+  Bounded: Qwen3-8B, Qwen3-14B, Qwen3-32B favor io_uring; Table 1 row data
+
+Claim: "For partitioned ServerlessLLM, synchronous loading is never fastest in our matrix"
+  Type: Empirical finding
+  Evidence: Table 2 (Rust cold-cache ServerlessLLM results)
+  Bounded: ALL rows show sync NOT fastest (lowest); Table 2 data
+
+Claim: "Python and vLLM results support the same point by showing that integration overhead can reorder backend rankings"
+  Type: Empirical finding
+  Evidence: Table 4 (Python optimization), Tables 5-7 (vLLM results)
+  Bounded: Python timing reduction from 15.88s to 11.55s; vLLM loader variation
+
+Claim: "The paper's central contribution is therefore an operational policy claim: backend choice for LLM checkpoint loading should be format-aware and adaptive, with explicit overrides"
+  Type: Thesis/Interpretation
+  Evidence: Tables 1-2 showing layout-dependent crossovers
+  Bounded: Thesis statement - NOT "universal loader" - explicitly states "adaptive policy"
+
+================================================================================
+SECTION: INTRODUCTION
+================================================================================
+
+Claim: "backend choice for LLM checkpoint loading depends jointly on layout and scale"
+  Type: Thesis (locked from T1)
+  Evidence: Tables 1-2 showing SafeTensors vs ServerlessLLM different orderings
+  Bounded: Across two layouts and six-model ladder
+
+Claim: "sync fits smaller fixtures in Table 1"
+  Type: Empirical finding referrer
+  Evidence: Table 1 (Rust SafeTensors)
+  Bounded: Qwen3-0.6B, SmolLM3-3B, Qwen3-4B
+
+Claim: "io_uring fits the largest multi-shard cases"
+  Type: Empirical finding referrer
+  Evidence: Table 1 (Rust SafeTensors)
+  Bounded: Qwen3-8B, Qwen3-14B, Qwen3-32B
+
+Claim: "ServerlessLLM, where sync never leads the measured matrix"
+  Type: Empirical finding referrer
+  Evidence: Table 2
+  Bounded: All six rows in Table 2
+
+Claim: "medium-scale rows where the selector still trails explicit sync"
+  Type: Limitation acknowledgment
+  Evidence: Table 1 (SmolLM3-3B, Qwen3-4B), Section 5 (Limitations)
+  Bounded: Explicitly stated in Limitations Section 3.1
+
+================================================================================
+SECTION: DISCUSSION  
+================================================================================
+
+Claim: "explicit io_uring at the top of the ladder and explicit sync on several smaller fixtures"
+  Type: Empirical summary
+  Evidence: Tables 1-2
+  Bounded: SafeTensors largest vs smallest fixtures
+
+Claim: "ServerlessLLM partitioning breaks any sync-first rule from SafeTensors"
+  Type: Interpretation
+  Evidence: Table 2 (sync never best)
+  Bounded: ServerlessLLM matrix
+
+Claim: "io_uring is not a guaranteed win from the syscall name alone"
+  Type: Interpretation/Caveat
+  Evidence: Table 1 showing async weak; needs proper implementation
+  Bounded: Contextual - depends on workload matching
+
+================================================================================
+SECTION: CONCLUSION
+================================================================================
+
+Claim: "sync for smaller models, io_uring for larger ones"
+  Type: Empirical pattern summary
+  Evidence: Table 1 (SafeTensors)
+  Bounded: "for SafeTensors" explicitly stated
+
+Claim: "synchronous loading is never the fastest measured backend"
+  Type: Empirical finding
+  Evidence: Table 2 (ServerlessLLM)
+  Bounded: "for ServerlessLLM" explicitly stated
+
+Claim: "Python layer introduces significant overhead"
+  Type: Empirical finding
+  Evidence: Table 4 (Python optimizations)
+  Bounded: Qwen3-8B specific numbers
+
+Claim: "Backend gains survive into vLLM most clearly for model initialisation and TTFT"
+  Type: Empirical finding
+  Evidence: Tables 5-7
+  Bounded: TTFT and load_only metrics
+
+Claim: "loader choice matters most for initialisation and time-to-first-token, not steady-state decode"
+  Type: Empirical finding
+  Evidence: Tables 5-7, Section 3 (Results)
+  Bounded: Explicit in Results Section 3.3
+
+================================================================================
+HIGH-RISK TERM ANALYSIS
+================================================================================
+
+Term: "always" 
+  Found in: narrative_scope.tex line 8 (hypothetical), related_work (described literature)
+  Status: NOT an overclaim - hypothetical or properly scoped
+
+Term: "every"
+  Found in: introduction line 23 ("every backend" = tested backends), results line 135 ("every row" = table data)
+  Status: APPROPRIATELY BOUNDED - refers to scope tested
+
+Term: "optimal" 
+  Found in: conclusion line 28 ("not optimal on every matrix row"), limitations line 28
+  Status: ALREADY BOUNDED properly in Limitations Section
+
+Term: "general"/"universally"
+  Found in: No instances in abstract, intro, discussion, conclusion as overclaims
+  Status: NOT AN ISSUE
+
+================================================================================
+EMPIRICAL vs INTERPRETATION vs RECOMMENDATION SEPARATION
+================================================================================
+
+EMPIRICAL (What the data shows):
+- Tables 1-2 (Rust results): Raw timing data
+- Tables 4-7 (Python, vLLM results): Integration timing data
+- These are documented facts from measurements
+
+INTERPRETATION (Why it might work):
+- Discussion Section 4.1: Format-specific mechanics explanation
+- SafeTensors: whole-file loading benefits from bulk parallelism
+- ServerlessLLM: range-heavy partitioning benefits from request grouping
+
+OPERATIONAL RECOMMENDATION (What practitioners should do):
+- Conclusion: "use a format-aware adaptive default with explicit overrides"
+- This is properly framed as POLICY recommendation, not universal truth
+- Bounded by "in our matrix" and "for these layouts" qualifiers
+
+================================================================================
+EVIDENCE MAPPING SUMMARY
+================================================================================
+
+| Claim Area              | Primary Evidence      | Bounding qualifier           |
+|------------------------|----------------------|---------------------------|
+| SafeTensors sync→io_uring | Table 1 (Rust)      | "in this harness"         |
+| ServerlessLLM never sync  | Table 2 (Rust)      | "in our matrix"           |
+| Python overhead           | Table 4             | "Qwen3-8B"                |
+| vLLM init/TTFT          | Tables 5-7          | "for init and TTFT"       |
+| Adaptive policy         | Tables 1-2, 4-7    | "format-aware"           |
+
+================================================================================
+VERIFICATION CHECKLIST
+================================================================================
+[✓] Every strong claim in abstract maps to evidence (tables)
+[✓] Every strong claim in introduction maps to evidence  
+[✓] Every strong claim in discussion maps to evidence
+[✓] Every strong claim in conclusion maps to evidence
+[✓] "Always"/"optimal"/"universally" properly bounded
+[✓] Empirical claims separated from interpretations
+[✓] Limitations section already provides honest bounds
+[✓] Claim ledger exists at .sisyphus/evidence/task-t2-claim-ledger.txt
+
+================================================================================
+STATUS: TASK T2 COMPLETE
+================================================================================
+The manuscript already has appropriately bounded claim language.
+No significant claim-strengthening edits required.
+The Limitations section (Section 5) already provides honest bounds.
+Evidence mapping is complete and properly documented.
+================================================================================

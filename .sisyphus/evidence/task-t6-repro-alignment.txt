@@ -1,0 +1,102 @@
+# Task T6: Reproducibility and Repo-Paper Alignment Audit
+# Created: 2026-04-16
+
+## AUDIT SUMMARY
+
+### Discrepancy Found: FIXTURE vs MODEL-ID
+
+**Location**: paper/sections/appendix_reproducibility.tex line 25
+
+The paper appendix states:
+```
+cargo run --release --bin profile -- <format> <backend> \
+  --fixture <FIXTURE_NAME> [--iterations N]
+```
+
+The repository README.md (lines 51-54, 90-91) and actual profile binary usage shows:
+```
+cargo run --release --bin profile -- safetensors sync --model-id Qwen/Qwen3-8B --iterations 1
+```
+
+**Impact**: A reader following the paper's command would fail - the profile binary does not accept `--fixture`.
+
+---
+
+### Secondary Issue: FIXTURES DIRECTORY REFERENCE
+
+**Location**: paper/sections/appendix_reproducibility.tex line 25
+
+The paper states:
+"The fixture name refers to a directory under fixtures/ (for example, qwen-qwen3-8b), populated via scripts/download_models.py"
+
+**Repository Reality** (README.md lines 47-48):
+"SafeTensors shards are read from the Hugging Face Hub cache; ServerlessLLM conversions are stored under $XDG_CACHE_HOME/tensor_store/<slug>/serverlessllm. Nothing is required under a repository fixtures/ directory."
+
+**Impact**: The paper implies a manual setup step that is no longer required. The profile binary fetches directly from Hugging Face Hub.
+
+---
+
+### POSITIVE ALIGNMENTS (No Changes Needed)
+
+1. **Reproducibility Bounding**: Both documents correctly state that replication should aim for:
+   - Backend ordering and regime behavior
+   - NOT identical millisecond timings
+   
+   Paper (appendix_reproducibility.tex line 43-44): "prioritise ordering and regime behaviour"
+   Repository (README.md line 25): "Match backend ordering and regime behaviour"
+
+2. **Cold Cache Procedure**: Both documents describe the same procedure:
+   - sync followed by echo 3 > /proc/sys/vm/drop_caches
+   
+3. **Backend Naming**: When normalized (removing underscore vs hyphen):
+   - Paper uses "io_uring" in prose
+   - Code uses "io-uring" as backend identifier
+   - These are consistent - io_uring is the Linux API name, io-uring is the crate name
+
+4. **vLLM Version**: Both specify vllm 0.11.0 in bindings/python/uv.lock
+
+5. **Result Path Structure**: Both specify:
+   - Rust results: results/h100/profile/
+   - Python results: results/h100/python/
+   - vLLM results: results/h100/vllm/
+
+---
+
+### HIDDEN ASSUMPTIONS AUDIT
+
+The paper+repo together implicitly assume:
+
+1. Reader has Hugging Face credentials/configured cache (for rate limits)
+2. Reader has root/sudo for drop_caches
+3. Reader is on Linux (io_uring is Linux-only)
+4. Reader has dedicated machine (cold cache drops affect other tenants)
+5. Reader uses release builds (debug not representative)
+
+These are appropriately documented but could be emphasized more prominently.
+
+---
+
+### COMMAND REFERENCE ALIGNMENT
+
+| Document | Rust Profile Command Template |
+|----------|--------------------------------|
+| Paper Appdx | `cargo run --release --bin profile -- <format> <backend> --fixture <FIXTURE> [--iterations N]` |
+| Repo README | `cargo run --release --bin profile -- safetensors sync --model-id Qwen/Qwen3-8B --iterations 1` |
+| Actual Code | ACCEPTS `--model-id`, NOT `--fixture` |
+
+| Document | Python Benchmark |
+|----------|----------------|
+| Paper Appdx | TENSOR_STORE_BENCH_MODELS (via run_benchmarks.sh) |
+| Repo README | Same, correctly aligned |
+| Paper Appdx | scripts/download_models.py (deprecated) |
+| Repo README | Direct Hub fetches |
+
+---
+
+### VERDICT
+
+REQUIRES FIX: The paper appendix uses incorrect CLI argument (`--fixture`) that will cause reader confusion/failure. Recommended fix: Update appendix_reproducibility.tex to use `--model-id` and remove reference to fixtures/ directory.
+
+VERIFIED: Reproducibility bounding language is correct and aligned between paper and repository.
+
+NOTE: This audit assumed no modifications would be made - documenting findings only.

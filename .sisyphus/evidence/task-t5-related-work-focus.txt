@@ -1,0 +1,63 @@
+# TASK T5: Related Work Focus Audit
+
+## Subsection Analysis
+
+### 1. Scheduling research, format design, and submission policy (lines 6-10)
+**Purpose**: Establishes the three orthogonal research strands
+**Contribution to novelty positioning**: YES - Positions paper as complementary to all three, not replacing any
+**Bloat assessment**: MINIMAL - Sets up the core contrast
+
+### 2. Checkpoint Formats and Loading Behaviour (lines 12-33)
+**Purpose**: Reviews SafeTensors, PyTorch, GGUF, partitioned formats
+**Contribution to novelty positioning**: YES - Establishes what formats do NOT solve (loading strategy)
+**Bloat assessment**: ACCEPTABLE - Needed to establish format independence claim
+
+### 3. Serverless and Multi-Tenant Inference Systems (lines 34-46)
+**Purpose**: Reviews cold-start solutions (scheduling, optimization, loading)
+**Contribution to novelty positioning**: YES - Positions paper as orthogonal to scheduling work
+**Bloat assessment**: MINIMAL - Establishes the cold-start problem without solving it
+
+### 4. Linux I/O Interfaces (lines 48-70)
+**Purpose**: Reviews POSIX, Linux AIO, io_uring, memory-mapped
+**Contribution to novelty positioning**: YES - Provides the backend taxonomy
+**Bloat assessment**: ACCEPTABLE - Technical background for the four backends
+
+### 5. Submission policy versus peak bandwidth (lines 72-77)
+**Purpose**: Makes the submission vs. bandwidth argument
+**Contribution to novelty positioning**: YES - Justifies treating submission policy as the variable
+**Bloat assessment**: MINIMAL - Key conceptual bridge
+
+### 6. Synthesis: GGUF, mmap, and database parallels (lines 78-86)
+**Purpose**: Synthesizes three strands and justifies adaptive stance
+**Contribution to novelty positioning**: YES - Consolidates the gap into "operational policy"
+**Bloat assessment**: MINIMAL - Essential synthesis
+
+### 7. Positioning of this work (lines 88-92)
+**Purpose**: Explicitly states contribution
+**Contribution to novelty positioning**: YES - Clear positioning statement
+**Bloat assessment**: NONE - The payoff paragraph
+
+## Bloat Check: VERDICT
+
+Total subsections: 7
+All contribute to novelty positioning: YES
+Does any subsection feel like generic background without positioning value: NO
+
+The related work builds a cumulative case for why the OPERATIONAL QUESTION (which backend policy) is unanswered. Each subsection either:
+- Establishes what prior work does (formats, cold-start solutions, I/O APIs)
+- Establishes what prior work DOESN'T do (loading strategy, backend selection)
+
+No bloat detected. Related work is tightly scoped to supporting the novelty contrast.
+
+## Novelty Contrast Quality
+
+The final positioning paragraph (88-92) ends with:
+- "deliberately phrased as a heuristic backed by measurements"
+- "do NOT introduce a new weight format, prove hub security properties, or optimise distributed training checkpoints"
+- "scope is load mechanics and policy under integration constraints"
+
+This is NON-DEFENSIVE - it states what the paper IS without putting down other work.
+
+## Conclusion: RELATED WORK IS FOCUSED
+
+All subsections contribute to novelty positioning. The paper ends with a crisp, non-defensive novelty contrast. No bloat. No modification needed.

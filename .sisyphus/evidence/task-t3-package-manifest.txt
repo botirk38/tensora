@@ -1,0 +1,117 @@
+================================================================================
+T3: arXiv Packaging/Build Assumptions Audit
+================================================================================
+Generated: 2026-04-16
+Paper: /home/botirk/repos/PROJECT/paper/
+
+--- ARXIV REQUIRED FILES ---
+
+1. main.tex
+   Status: EXISTS
+   Path: /home/botirk/repos/PROJECT/paper/main.tex
+   Notes: Top-level source file, pdflatex compatible
+   Package: YES - include in root
+
+2. sections/
+   Status: EXISTS (12 .tex files)
+   Path: /home/botirk/repos/PROJECT/paper/sections/
+   Files:
+     - introduction.tex
+     - related_work.tex
+     - narrative_scope.tex
+     - design.tex
+     - engineering_process.tex
+     - experimental_setup.tex
+     - results.tex
+     - discussion.tex
+     - limitations.tex
+     - professional_issues.tex
+     - conclusion.tex
+     - appendix_reproducibility.tex
+   Package: YES - include directory (all 12 files referenced by main.tex)
+
+3. bib/
+   Status: EXISTS (1 .bib file)
+   Path: /home/botirk/repos/PROJECT/paper/bib/
+   Files:
+     - references.bib
+   Notes: Uses plainnat.bst (standard in TeX Live on arXiv)
+   Package: YES - include directory
+
+4. figures/
+   Status: EXISTS (2 .png files, but NOT USED in current source)
+   Path: /home/botirk/repos/PROJECT/paper/figures/
+   Files:
+     - safetensors-layout.png
+     - serverlessllm-layout.png
+   Notes: PNG files exist but are NOT referenced in current LaTeX source.
+          All figures are currently TikZ/pgfplots embedded in source.
+   Package: OPTIONAL - can include if figures added later (per README.md)
+
+5. 00README.json
+   Status: EXISTS
+   Path: /home/botirk/repos/PROJECT/paper/00README.json
+   Notes: Correctly declares pdflatex + main.tex as toplevel
+   Package: YES - include in root
+
+6. arxiv_abstract_plain.txt
+   Status: EXISTS
+   Path: /home/botirk/repos/PROJECT/paper/arxiv_abstract_plain.txt
+   Notes: Plain-text abstract for arXiv web form
+   Package: YES - include in root (for reference)
+
+--- GENERATED FILES (OMIT) ---
+
+   main.aux, main.log, main.pdf, main.out, main.bbl, main.blg
+   Status: Present but should NOT be packaged (per README.md)
+
+--- DEPENDENCY CHECK ---
+
+TeX Packages (all standard/available on arXiv):
+   - fontenc, geometry, graphicx, booktabs, array
+   - amsmath, amssymb
+   - microtype (with expansion=false option)
+   - natbib (with round,authoryear options)
+   - xurl
+   - hyperref (with hidelinks)
+   - listings
+   - tikz, pgfplots
+
+All packages are standard TeX Live / available on arXiv - NO custom packages needed.
+
+--- HIDDEN LOCAL DEPENDENCIES ---
+
+Checked: \input{} commands in main.tex
+  - All 12 section files exist in sections/ directory
+  - No hidden file dependencies found
+
+Checked: \bibliography{} command
+  - references.bib exists in bib/ directory
+
+Checked: Figures
+  - No \includegraphics commands in current source
+  - \figdir defined but not used
+  - All graphics are TikZ/pgfplots (embedded, no external files needed)
+
+--- BUILD INSTRUCTIONS (per README.md) ---
+
+Verified: pdflatex build process works
+  pdflatex main.tex (x2) + bibtex main (x1) + pdflatex (x2) = 3 passes
+  Or: latexmk -pdf -interaction=nonstopmode main.tex
+
+Verified: Build instructions in README.md are CORRECT
+
+--- POTENTIAL ISSUES ---
+
+1. WARNING: figures/ directory contains 2 PNG files that are NOT used
+   in current LaTeX source. If the authors intend to use these, they
+   need to be added via \includegraphics commands before packaging.
+   Currently: NO figures to include (all TikZ/pgfplots).
+
+2. NOTE: main.bbl exists but should NOT be included in package unless
+   specifically desired - arXiv will regenerate from references.bib.
+
+================================================================================
+SUMMARY: Package is ready for arXiv submission
+================================================================================
+All required files exist, all dependencies satisfied, build process verified.

@@ -1,0 +1,121 @@
+# Task T6: Reproducibility Bounding Audit
+# Created: 2026-04-16
+
+## REPRODUCIBILITY BOUNDING ANALYSIS
+
+### EXPECTATION MANAGEMENT
+
+The paper correctly distinguishes between three types of replication:
+
+1. **ORDERING** (primary goal for most experiments)
+   - "Reproduce the backend ranking: sync wins at small scale, io_uring wins at large scale"
+   - Evidence: Tables 1-2 show consistent ordering
+   - Appropriate for SafeTensors matrix
+
+2. **REGIME BEHAVIOR** (secondary goal)  
+   - "Reproduce crossover at the right scale threshold"
+   - Evidence: Qwen3-4B-8B band shows default selector decisions
+   - Appropriate for default policy evaluation
+
+3. **EXACT TIMING** (NOT claimed - NOT required)
+   - Paper explicitly says NOT to chase identical milliseconds
+   - Appendix line 43-44: "prioritise ordering and regime behaviour"
+   - Root README line 25: "Match backend ordering...not byte-identical timings"
+
+---
+
+### CORRECTLY BOUNDED CLAIMS
+
+From experimental_setup.tex:
+
+- "Backend gains do not propagate unchanged across layers" (line 113)
+  - This is a critical boundary: Rust vs Python vs vLLM behavior differs
+
+- "Backend gains...can only justify a constant backend choice" (line 75)
+  - Explicit acknowledgment that single-point benchmarks insufficient
+
+- "Cold-cache runs use sync and drop_caches so numbers reflect storage, not warm DRAM" (line 133)
+  - Clear statement of measurement condition
+
+- "SafeTensors sync->io_uring crossover" (line 131)
+  - Specific ordering claim tied to scale
+
+- "ServerlessLLM with sync off the front" (line 131, 134)
+  - Specific ordering claim tied to format
+
+From appendix_reproducibility.tex:
+
+- "Tracingability, not identical millisecond reproduction" (line 4)
+  - Clear scope statement
+
+- "Record git rev-parse HEAD next to exported results" (line 12)
+  - Provides path to version pinning
+
+- "Later commits may change timings even when ordering stays similar" (line 12)
+  - Acknowledges timing drift without ordering change
+
+---
+
+### POTENTIAL OVERCLAIM CHECKS
+
+1. **"io_uring wins at the largest multi-shard scales where queue depth matters"**
+   - Bounded: Explicitly states "largest scales" and "where queue depth matters"
+   - Lines 16-19 of claim ledger show proper scoping
+   - VERDICT: Properly bounded
+
+2. **"Python overhead large enough to matter"**
+   - Bounded to: "directional effects, not identical milliseconds"
+   - VERDICT: Properly bounded
+
+3. **"default policy selects correctly"**
+   - Bounded: "when the adaptive selector beats explicit backends"
+   - Limitations explicitly stated in Section 5
+   - VERDICT: Properly bounded
+
+4. **"ServerlessLLM without sync at the front"**
+   - Bounded: Table showing sync at bottom for serverlessllm
+   - VERDICT: Properly bounded
+
+---
+
+### NEW READER HIDDEN ASSUMPTIONS CHECK
+
+What a new reader might miss WITHOUT the full paper+repo combination:
+
+1. **Root requirement**: "Requires root for /proc/sys/vm/drop_caches"
+   - Hidden in: experimental_setup.tex line 81-82
+   - Impact: Cold cache replication impossible without this
+   - OK: Documented but could be more prominent
+
+2. **Dedicated machine requirement**: "assumed a dedicated host"
+   - Hidden in: experimental_setup.tex line 24 and appendix line 49
+   - Impact: Shared machine cache drops disrupt other tenants
+   - OK: Documented appropriately
+
+3. **Linux-only requirement**: "io_uring backend is Linux-only"
+   - Hidden in: experimental_setup.tex line 30 ("I/O experiments are Linux-only")
+   - OK: Explicitly stated
+
+4. **GPU requirement for vLLM**: "GPU only for vLLM/GPU-backed paths"
+   - Hidden in: README.md line 45
+   - OK: Documented
+
+5. **Model fetch behavior**: "downloads via Hub if needed"
+   - Implicit in: profile binary behavior, not explicit docs
+   - Issue: Paper mentions manual download script that is deprecated
+   - NEEDS FIX: Should clarify auto-download behavior
+
+---
+
+### SUMMARY
+
+BOUNDS ARE CORRECT: The reproducibility framework properly distinguishes:
+- Exact timing replication NOT expected
+- Ordering replication IS expected
+- Regime behavior replication IS expected
+
+The paper avoids claiming exact millisecond reproduction and instead anchors expectations on ordering and behavior.
+
+NO HIDDEN AGENDA: The experimental methodology is transparent about what can and cannot be replicated.
+
+NEW READER CAN FOLLOW: Combined paper + repository documentation provides sufficient guidance for a motivated reader to reproduce ordering results, with appropriate bounds stated.
