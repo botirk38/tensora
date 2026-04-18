@@ -1,4 +1,4 @@
-//! tensor_store Python bindings (PyTorch-first, performance-oriented).
+//! tensora Python bindings (PyTorch-first, performance-oriented).
 
 mod api;
 mod convert;
@@ -9,10 +9,10 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
 pyo3::create_exception!(
-    _tensor_store_rust,
-    TensorStoreError,
+    _tensora_rust,
+    TensoraError,
     PyException,
-    "Error raised by tensor_store Python bindings."
+    "Error raised by tensora Python bindings."
 );
 
 use api::{
@@ -26,8 +26,8 @@ use api::{load_safetensors_io_uring, load_serverlessllm_io_uring};
 
 /// Python module entry point.
 #[pymodule]
-#[pyo3(name = "_tensor_store_rust")]
-fn _tensor_store_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "_tensora_rust")]
+fn _tensora_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SafeTensorsHandlePy>()?;
     m.add_class::<ServerlessLLMHandlePy>()?;
     m.add_function(wrap_pyfunction!(open_safetensors, m)?)?;
@@ -46,6 +46,6 @@ fn _tensor_store_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors_bytes, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("TensorStoreError", m.py().get_type::<TensorStoreError>())?;
+    m.add("TensoraError", m.py().get_type::<TensoraError>())?;
     Ok(())
 }

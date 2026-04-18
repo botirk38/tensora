@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::{Path, PathBuf};
 
-use tensor_store::formats::serverlessllm::{MmapModel, Model};
+use tensora::formats::serverlessllm::{MmapModel, Model};
 
 use super::run_async;
 use crate::convert::{convert_tensor, convert_tensor_with_context, TensorData, TorchContext};

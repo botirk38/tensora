@@ -6,10 +6,10 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tensor_store::formats::safetensors::TensorView as SafetensorTensorView;
-use tensor_store::formats::safetensors::{Dtype, MmapModel, Model};
-use tensor_store::serialize;
-use tensor_store::TensorView;
+use tensora::formats::safetensors::TensorView as SafetensorTensorView;
+use tensora::formats::safetensors::{Dtype, MmapModel, Model};
+use tensora::serialize;
+use tensora::TensorView;
 
 use super::run_async;
 use crate::convert::{

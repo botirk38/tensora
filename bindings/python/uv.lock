@@ -3420,7 +3420,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tensor-store-py"
+name = "tensora-py"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

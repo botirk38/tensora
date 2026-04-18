@@ -24,8 +24,8 @@ pub use serverlessllm::{
 };
 
 fn run_async<T>(
-    future: impl Future<Output = tensor_store::ReaderResult<T>>,
-) -> tensor_store::ReaderResult<T> {
+    future: impl Future<Output = tensora::ReaderResult<T>>,
+) -> tensora::ReaderResult<T> {
     static RUNTIME: OnceLock<Result<Runtime, std::io::Error>> = OnceLock::new();
 
     let runtime = RUNTIME.get_or_init(|| {
@@ -37,6 +37,6 @@ fn run_async<T>(
 
     runtime
         .as_ref()
-        .map_err(|e| tensor_store::ReaderError::Io(std::io::Error::new(e.kind(), e.to_string())))?
+        .map_err(|e| tensora::ReaderError::Io(std::io::Error::new(e.kind(), e.to_string())))?
         .block_on(future)
 }
