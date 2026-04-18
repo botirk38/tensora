@@ -146,6 +146,13 @@ impl Reader {
             .unwrap_or(0);
 
         let worker_count = file_worker_count(paths.len(), total_bytes, max_file_bytes);
+        
+        #[cfg(feature = "debug-io-uring")]
+        eprintln!(
+            "DEBUG io_uring load_batch: files={}, total_bytes={}, max_file_bytes={}, worker_count={}",
+            paths.len(), total_bytes, max_file_bytes, worker_count
+        );
+        
         if worker_count > 1 {
             let indexed_paths: Vec<_> = paths.iter().cloned().enumerate().collect();
             let mut indexed_results = Vec::with_capacity(paths.len());
@@ -273,6 +280,9 @@ impl Reader {
             let mut submitted = 0usize;
             let ring = self.ring_mut()?;
 
+            let mut submit_rounds = 0usize;
+            let mut max_inflight = 0usize;
+
             while completed < ops.len() {
                 while submitted < ops.len() && ring.submission().capacity() > 0 {
                     let op = &ops[submitted];
@@ -291,10 +301,21 @@ impl Reader {
                         }
                     }
                     submitted += 1;
+                    let inflight = submitted - completed;
+                    if inflight > max_inflight {
+                        max_inflight = inflight;
+                    }
                 }
+                submit_rounds += 1;
 
                 let wait_for = load_plan.wait_for.min(ops.len() - completed).max(1);
                 ring.submit_and_wait(wait_for)?;
+
+                #[cfg(feature = "debug-io-uring")]
+                eprintln!(
+                    "DEBUG io_uring: round={}, submitted={}, completed={}, wait_for={}",
+                    submit_rounds, submitted, completed, wait_for
+                );
 
                 let cq: CompletionQueue<'_, io_uring::cqueue::Entry> = ring.completion();
                 for cqe in cq {
@@ -323,6 +344,12 @@ impl Reader {
                     completed += 1;
                 }
             }
+
+            #[cfg(feature = "debug-io-uring")]
+            eprintln!(
+                "DEBUG io_uring load_batch_indexed: ops={}, submit_rounds={}, max_inflight={}",
+                ops.len(), submit_rounds, max_inflight
+            );
         }
 
         for plan in plans {

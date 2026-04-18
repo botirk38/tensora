@@ -9,6 +9,10 @@ repository = "https://github.com/botirk38/tensora"
 keywords = ["tensor", "storage", "io", "performance", "llm"]
 categories = ["development-tools", "hardware-support"]
 
+[features]
+default = []
+debug-io-uring = []
+
 [lib]
 name = "tensora"
 path = "src/lib.rs"
