@@ -84,17 +84,17 @@ enum LoadBackend {
 
 /// Backend selection for ServerlessLLM on Linux.
 ///
-/// Based on repeated cold-cache measurements on H100 with multi-worker io_uring:
-/// - Low-partition range workloads: io_uring wins on Linux
-/// - Mid-sized many-partition range workloads: async wins
-/// - Large range workloads: io_uring wins again once total bytes dominate
+/// Based on cold-cache measurements across H100 environments:
+/// - On high-performance io_uring hosts: io_uring for large partitioned loads
+/// - On typical hosts: async dominates for most sizes, io_uring only for very large
+/// This selector prioritizes async as default, with io_uring for specific large regimes.
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        if stats.partition_count <= 4 && stats.avg_partition_bytes() >= 256 * 1024 * 1024 {
+        if stats.partition_count <= 4 && stats.avg_partition_bytes() >= 512 * 1024 * 1024 {
             return LoadBackend::IoUring;
         }
-        if stats.total_bytes >= 12 * 1024 * 1024 * 1024 {
+        if stats.total_bytes >= 20 * 1024 * 1024 * 1024 && stats.partition_count >= 16 {
             return LoadBackend::IoUring;
         }
         LoadBackend::TokioAsync

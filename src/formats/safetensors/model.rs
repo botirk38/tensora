@@ -113,10 +113,10 @@ enum LoadBackend {
 
 /// Backend selection for SafeTensors.
 ///
-/// Based on repeated cold-cache measurements on H100 with multi-worker io_uring:
-/// - Single-shard models: sync wins (io_uring ring overhead dominates)
-/// - Small two-shard eager loads: sync remains better
-/// - Larger multi-shard eager loads with enough shard fanout: io_uring wins
+/// Based on cold-cache measurements across H100 environments:
+/// - On io_uring-capable hosts: sync for small, io_uring for large multi-shard
+/// - On io_uring-slow hosts (high latency, limited parallelism): sync dominates everywhere
+/// This selector uses total_bytes and shard_count to estimate which regime applies.
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
@@ -124,6 +124,9 @@ fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
             return LoadBackend::Sync;
         }
         if stats.shard_count >= 4 && stats.avg_shard_bytes() >= 2 * 1024 * 1024 * 1024 {
+            return LoadBackend::IoUring;
+        }
+        if stats.total_bytes >= 10 * 1024 * 1024 * 1024 && stats.shard_count >= 8 {
             return LoadBackend::IoUring;
         }
         LoadBackend::Sync
