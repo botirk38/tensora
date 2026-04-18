@@ -103,6 +103,24 @@ impl LoadStats {
     fn avg_shard_bytes(self) -> u64 {
         self.total_bytes.div_ceil(self.shard_count.max(1) as u64)
     }
+
+    fn log2_bytes(self) -> f64 {
+        if self.total_bytes == 0 {
+            0.0
+        } else {
+            (self.total_bytes as f64).log2()
+        }
+    }
+
+    fn shard_fanout_score(self) -> f64 {
+        match self.shard_count {
+            0..=1 => 0.0,
+            2..=3 => 1.0,
+            4..=7 => 2.0,
+            8..=15 => 3.0,
+            _ => 4.0,
+        }
+    }
 }
 
 enum LoadBackend {
@@ -111,22 +129,26 @@ enum LoadBackend {
     IoUring,
 }
 
-/// Backend selection for SafeTensors.
+/// Score-based backend selection for SafeTensors.
 ///
-/// Based on cold-cache measurements across H100 environments:
-/// - On io_uring-capable hosts: sync for small, io_uring for large multi-shard
-/// - On io_uring-slow hosts (high latency, limited parallelism): sync dominates everywhere
-/// This selector uses total_bytes and shard_count to estimate which regime applies.
+/// Uses a simple scoring function to estimate whether io_uring or sync will perform better.
+/// This adapts across hosts by considering:
+/// - Total bytes (log scale)
+/// - Shard count (fanout bucket)
+/// - Average shard size
+///
+/// The score is: score = log2(total_bytes) + 2*fanout_bucket + avg_shard_gb
+/// If score exceeds the threshold, use io_uring; otherwise sync.
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        if stats.shard_count <= 1 {
-            return LoadBackend::Sync;
-        }
-        if stats.shard_count >= 4 && stats.avg_shard_bytes() >= 2 * 1024 * 1024 * 1024 {
-            return LoadBackend::IoUring;
-        }
-        if stats.total_bytes >= 8 * 1024 * 1024 * 1024 && stats.shard_count >= 4 {
+        let log2_bytes = stats.log2_bytes();
+        let fanout = stats.shard_fanout_score();
+        let avg_shard_gb = stats.avg_shard_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
+
+        let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
+
+        if score >= 40.0 {
             return LoadBackend::IoUring;
         }
         LoadBackend::Sync

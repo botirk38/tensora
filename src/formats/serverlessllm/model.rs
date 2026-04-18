@@ -63,6 +63,24 @@ impl LoadStats {
         self.total_bytes
             .div_ceil(self.partition_count.max(1) as u64)
     }
+
+    fn log2_bytes(self) -> f64 {
+        if self.total_bytes == 0 {
+            0.0
+        } else {
+            (self.total_bytes as f64).log2()
+        }
+    }
+
+    fn partition_fanout_score(self) -> f64 {
+        match self.partition_count {
+            0..=4 => 0.0,
+            5..=8 => 1.0,
+            9..=16 => 2.0,
+            17..=32 => 3.0,
+            _ => 4.0,
+        }
+    }
 }
 
 fn load_stats(index: &Index) -> LoadStats {
@@ -82,19 +100,21 @@ enum LoadBackend {
     IoUring,
 }
 
-/// Backend selection for ServerlessLLM on Linux.
+/// Score-based backend selection for ServerlessLLM on Linux.
 ///
-/// Based on cold-cache measurements across H100 environments:
-/// - On high-performance io_uring hosts: io_uring for large partitioned loads
-/// - On typical hosts: async dominates for most sizes, io_uring only for very large
-/// This selector prioritizes async as default, with io_uring for specific large regimes.
+/// Uses a simple scoring function to estimate whether io_uring or async will perform better.
+/// Score = log2(total_bytes) + 2*fanout_bucket + avg_partition_gb
+/// If score exceeds threshold, use io_uring; otherwise async.
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        if stats.partition_count <= 4 && stats.avg_partition_bytes() >= 512 * 1024 * 1024 {
-            return LoadBackend::IoUring;
-        }
-        if stats.total_bytes >= 20 * 1024 * 1024 * 1024 && stats.partition_count >= 16 {
+        let log2_bytes = stats.log2_bytes();
+        let fanout = stats.partition_fanout_score();
+        let avg_partition_gb = stats.avg_partition_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
+
+        let score = log2_bytes + 2.0 * fanout + avg_partition_gb;
+
+        if score >= 38.0 {
             return LoadBackend::IoUring;
         }
         LoadBackend::TokioAsync
