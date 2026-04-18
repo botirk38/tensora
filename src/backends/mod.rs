@@ -165,19 +165,19 @@ pub fn file_chunk_plan(file_size: usize, backend: BackendKind) -> FileIoPlan {
         }
         BackendKind::IoUring => {
             let target_depth = if file_size < 64 * 1024 * 1024 {
-                32
+                16
             } else if file_size < 512 * 1024 * 1024 {
-                64
+                32
             } else if file_size < 4 * 1024 * 1024 * 1024 {
-                128
+                48
             } else {
-                256
+                64
             };
             let raw_chunk = file_size.div_ceil(target_depth.max(1));
             let chunk_size = clamp_chunk_size(raw_chunk, MAX_IO_URING_CHUNK_SIZE);
             let chunk_count = file_size.div_ceil(chunk_size).max(1);
             let target_inflight = chunk_count.min(target_depth).clamp(1, MAX_IO_URING_DEPTH);
-            let wait_for = target_inflight.max(1);
+            let wait_for = target_inflight.div_ceil(2).max(1);
             
             #[cfg(feature = "debug-io-uring")]
             eprintln!(
