@@ -17,9 +17,14 @@ pub fn filesystem_slug(model_id: &str) -> String {
 }
 
 fn cache_root() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("tensora")
+    std::env::var("TENSORA_CACHE_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .unwrap_or_else(|| {
+            dirs::cache_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("tensora")
+        })
 }
 
 /// Errors while resolving a Hub model to local paths.
