@@ -1,0 +1,79 @@
+=== Starting benchmarks at Sat May  9 22:31:58 UTC 2026 ===
+=== 8B serverlessllm default ===
+Running default serverlessllm load for 'Qwen/Qwen3-8B' (1x)
+  iteration 1: 399 tensors, 16381470720 bytes, 11431.61ms
+  summary: mean 11431.61ms | min 11431.61ms | max 11431.61ms
+=== 32B safetensors default ===
+Running default safetensors load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 0 bytes, 43816.68ms
+  summary: mean 43816.68ms | min 43816.68ms | max 43816.68ms
+=== 32B serverlessllm default ===
+Running default serverlessllm load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 65524246528 bytes, 44854.60ms
+  summary: mean 44854.60ms | min 44854.60ms | max 44854.60ms
+=== DEFAULTS DONE ===
+--- Qwen/Qwen3-0.6B safetensors sync ---
+Running sync safetensors load for 'Qwen/Qwen3-0.6B' (1x)
+  iteration 1: 311 tensors, 0 bytes, 724.26ms
+  summary: mean 724.26ms | min 724.26ms | max 724.26ms
+--- Qwen/Qwen3-0.6B safetensors async ---
+Running async safetensors load for 'Qwen/Qwen3-0.6B' (1x)
+  iteration 1: 311 tensors, 0 bytes, 1094.43ms
+  summary: mean 1094.43ms | min 1094.43ms | max 1094.43ms
+--- Qwen/Qwen3-0.6B serverlessllm sync ---
+Running sync serverlessllm load for 'Qwen/Qwen3-0.6B' (1x)
+  iteration 1: 311 tensors, 1503264768 bytes, 2183.33ms
+  summary: mean 2183.33ms | min 2183.33ms | max 2183.33ms
+--- Qwen/Qwen3-0.6B serverlessllm async ---
+Running async serverlessllm load for 'Qwen/Qwen3-0.6B' (1x)
+  iteration 1: 311 tensors, 1503264768 bytes, 2250.91ms
+  summary: mean 2250.91ms | min 2250.91ms | max 2250.91ms
+--- Qwen/Qwen3-4B safetensors sync ---
+Running sync safetensors load for 'Qwen/Qwen3-4B' (1x)
+  iteration 1: 398 tensors, 0 bytes, 7598.41ms
+  summary: mean 7598.41ms | min 7598.41ms | max 7598.41ms
+--- Qwen/Qwen3-4B safetensors async ---
+Running async safetensors load for 'Qwen/Qwen3-4B' (1x)
+  iteration 1: 398 tensors, 0 bytes, 3532.11ms
+  summary: mean 3532.11ms | min 3532.11ms | max 3532.11ms
+--- Qwen/Qwen3-4B serverlessllm sync ---
+Running sync serverlessllm load for 'Qwen/Qwen3-4B' (1x)
+  iteration 1: 398 tensors, 8044936192 bytes, 7551.79ms
+  summary: mean 7551.79ms | min 7551.79ms | max 7551.79ms
+--- Qwen/Qwen3-4B serverlessllm async ---
+Running async serverlessllm load for 'Qwen/Qwen3-4B' (1x)
+  iteration 1: 398 tensors, 8044936192 bytes, 4486.75ms
+  summary: mean 4486.75ms | min 4486.75ms | max 4486.75ms
+--- Qwen/Qwen3-8B safetensors sync ---
+Running sync safetensors load for 'Qwen/Qwen3-8B' (1x)
+  iteration 1: 399 tensors, 0 bytes, 8412.36ms
+  summary: mean 8412.36ms | min 8412.36ms | max 8412.36ms
+--- Qwen/Qwen3-8B safetensors async ---
+Running async safetensors load for 'Qwen/Qwen3-8B' (1x)
+  iteration 1: 399 tensors, 0 bytes, 4235.21ms
+  summary: mean 4235.21ms | min 4235.21ms | max 4235.21ms
+--- Qwen/Qwen3-8B serverlessllm sync ---
+Running sync serverlessllm load for 'Qwen/Qwen3-8B' (1x)
+  iteration 1: 399 tensors, 16381470720 bytes, 14707.01ms
+  summary: mean 14707.01ms | min 14707.01ms | max 14707.01ms
+--- Qwen/Qwen3-8B serverlessllm async ---
+Running async serverlessllm load for 'Qwen/Qwen3-8B' (1x)
+  iteration 1: 399 tensors, 16381470720 bytes, 11528.26ms
+  summary: mean 11528.26ms | min 11528.26ms | max 11528.26ms
+--- Qwen/Qwen3-32B safetensors sync ---
+Running sync safetensors load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 0 bytes, 46923.42ms
+  summary: mean 46923.42ms | min 46923.42ms | max 46923.42ms
+--- Qwen/Qwen3-32B safetensors async ---
+Running async safetensors load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 0 bytes, 60807.34ms
+  summary: mean 60807.34ms | min 60807.34ms | max 60807.34ms
+--- Qwen/Qwen3-32B serverlessllm sync ---
+Running sync serverlessllm load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 65524246528 bytes, 56025.98ms
+  summary: mean 56025.98ms | min 56025.98ms | max 56025.98ms
+--- Qwen/Qwen3-32B serverlessllm async ---
+Running async serverlessllm load for 'Qwen/Qwen3-32B' (1x)
+  iteration 1: 707 tensors, 65524246528 bytes, 40472.54ms
+  summary: mean 40472.54ms | min 40472.54ms | max 40472.54ms
+=== ALL DONE at Sat May  9 22:39:09 UTC 2026 ===
