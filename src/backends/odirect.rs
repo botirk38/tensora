@@ -3,7 +3,7 @@
 //! Provides utilities for direct I/O that bypasses the kernel page cache.
 
 use super::IoResult;
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::fs::OpenOptions as StdOpenOptions;
 use std::io::{Error as IoError, ErrorKind};
 use std::os::unix::fs::OpenOptionsExt;

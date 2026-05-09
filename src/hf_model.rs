@@ -5,11 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-use hf_hub::api::sync::ApiBuilder;
 use hf_hub::Repo;
+use hf_hub::api::sync::ApiBuilder;
 
-use crate::recommended_partition_count;
 use crate::WriterError;
+use crate::recommended_partition_count;
 
 /// Slug used for cache subdirectories (`org-name` lowercased).
 pub fn filesystem_slug(model_id: &str) -> String {

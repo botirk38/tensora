@@ -133,7 +133,7 @@ pub fn coalesce_requests(
 
 #[cfg(test)]
 mod tests {
-    use super::{coalesce_requests, flatten_results, group_requests_by_file, BatchResult};
+    use super::{BatchResult, coalesce_requests, flatten_results, group_requests_by_file};
     use std::path::Path;
     use std::sync::Arc;
 

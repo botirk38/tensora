@@ -409,7 +409,7 @@ mod imp {
     }
 }
 
-pub use imp::{capture_disk_snapshot, compute_metrics, DiskSnapshot};
+pub use imp::{DiskSnapshot, capture_disk_snapshot, compute_metrics};
 
 pub fn display_io_metrics_delta(before: Option<DiskSnapshot>, duration: Duration) {
     match before {

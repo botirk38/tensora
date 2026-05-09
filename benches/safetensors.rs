@@ -7,7 +7,9 @@ use tensora::formats::safetensors;
 
 fn model_dirs() -> (String, PathBuf) {
     let id = std::env::var("TENSOR_STORE_MODEL_ID").unwrap_or_else(|_| {
-        eprintln!("Set TENSOR_STORE_MODEL_ID to a Hugging Face model id (e.g. openai-community/gpt2).");
+        eprintln!(
+            "Set TENSOR_STORE_MODEL_ID to a Hugging Face model id (e.g. openai-community/gpt2)."
+        );
         std::process::exit(1);
     });
     let dir = tensora::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {

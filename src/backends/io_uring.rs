@@ -39,7 +39,12 @@ pub fn availability() -> BackendAvailability {
 }
 
 fn probe_availability() -> BackendAvailability {
-    match IoUring::builder().build(MIN_RING_DEPTH) {
+    match build_ring_with_config(
+        MIN_RING_DEPTH,
+        MIN_RING_DEPTH * 2,
+        false,
+        DEFAULT_SQPOLL_IDLE_MS,
+    ) {
         Ok(_) => BackendAvailability::Available,
         Err(err) => unavailable_from_io_error(&err, "creating a minimal io_uring ring"),
     }

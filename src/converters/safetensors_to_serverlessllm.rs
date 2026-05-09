@@ -819,12 +819,8 @@ mod tests {
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out");
 
-        convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .expect("convert");
+        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+            .expect("convert");
 
         assert!(out.exists());
         assert!(out.join("tensor_index.json").exists());
@@ -851,12 +847,8 @@ mod tests {
         write_shard(&shard2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
-        convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            4,
-        )
-        .expect("convert multi-shard");
+        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 4)
+            .expect("convert multi-shard");
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
         let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();
@@ -906,12 +898,8 @@ mod tests {
         write_shard(&shard, vec![("a", view_a), ("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_single");
-        convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .unwrap();
+        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+            .unwrap();
 
         let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
@@ -942,12 +930,8 @@ mod tests {
         write_shard(&shard2, vec![("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_multi");
-        convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            4,
-        )
-        .unwrap();
+        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 4)
+            .unwrap();
 
         let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
         let a_tensor = converted.tensor("a").unwrap();

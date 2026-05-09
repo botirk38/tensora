@@ -18,11 +18,7 @@ fn dir_safetensors_total_bytes(dir: &Path) -> std::io::Result<u64> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|e| e == "safetensors")
-            && path.is_file()
-        {
+        if path.extension().is_some_and(|e| e == "safetensors") && path.is_file() {
             total += path.metadata()?.len();
         }
     }
@@ -35,10 +31,9 @@ pub fn run(scenario: &str, config: &DemoConfig) -> DemoResult {
         "sync" => demo_sync(config),
         "mmap" => demo_mmap(config),
         "metadata" => demo_metadata(config),
-        "parallel-sync" => Err(DemoError::new(
-            "parallel-sync demo is not wired for Hub-backed models yet",
-        )
-        .into()),
+        "parallel-sync" => {
+            Err(DemoError::new("parallel-sync demo is not wired for Hub-backed models yet").into())
+        }
         "all" => {
             demo_async(config)?;
             println!();

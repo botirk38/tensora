@@ -131,7 +131,10 @@ mod tests {
     fn scenario_string_mappings_are_stable() {
         assert_eq!(SafeTensorsScenario::ParallelSync.as_str(), "parallel-sync");
         assert_eq!(SafeTensorsScenario::Metadata.as_str(), "metadata");
-        assert_eq!(ServerlessLLMScenario::ParallelSync.as_str(), "parallel-sync");
+        assert_eq!(
+            ServerlessLLMScenario::ParallelSync.as_str(),
+            "parallel-sync"
+        );
         assert_eq!(ServerlessLLMScenario::All.as_str(), "all");
     }
 }

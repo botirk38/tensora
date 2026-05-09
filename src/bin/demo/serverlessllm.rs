@@ -50,10 +50,9 @@ pub fn run(scenario: &str, config: &DemoConfig) -> DemoResult {
         "sync" => demo_sync(config),
         "mmap" => demo_mmap(config),
         "metadata" => demo_metadata(config),
-        "parallel-sync" => Err(DemoError::new(
-            "parallel-sync demo is not wired for Hub-backed models yet",
-        )
-        .into()),
+        "parallel-sync" => {
+            Err(DemoError::new("parallel-sync demo is not wired for Hub-backed models yet").into())
+        }
         "all" => {
             demo_async(config)?;
             println!();
