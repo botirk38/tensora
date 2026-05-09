@@ -13,7 +13,7 @@ Three patterns emerge from the Rust matrices. \textbf{First, SafeTensors exhibit
 
 Across Python and vLLM, integration overhead does not erase the backend ranking---it reorders it. The adaptive policy still outperforms any fixed single backend, validating the operational conclusion: deploy a format-aware adaptive default with explicit overrides.
 
-\textbf{Fourth, the ordering regime transfers across environments but the winning backend does not.} Cross-environment validation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that the structural pattern---small-scale and large-scale models favour different backends---persists, but the identity of the large-scale winner depends on available kernel interfaces and storage topology (Section~\ref{sec:cross-env}). This makes the adaptive selector more valuable, not less: a fixed policy would require manual tuning per deployment site.
+\textbf{Fourth, the ordering regime transfers across environments but the winning backend does not.} Cross-environment validation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that the structural pattern---small models favour sync, mid-to-large models typically favour a different backend---holds on H100 and H200, while A100 shows a non-monotonic pattern where async dominates mid-range but sync recovers at the largest scale (Section~\ref{sec:cross-env}). This makes the adaptive selector more valuable, not less: a fixed policy would require manual tuning per deployment site.
 
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
@@ -255,7 +255,7 @@ The A100 SafeTensors results show a distinctive pattern: sync wins at 0.6B, asyn
 Table~\ref{tab:cross-env-best} summarises the best explicit backend per row across all three environments.
 
 \begin{table}[htbp]
-\caption{Best explicit backend by environment for SafeTensors. The crossover from sync to another backend persists across environments; which alternative wins depends on hardware and storage topology.}
+\caption{Best explicit backend by environment for SafeTensors. The crossover from sync to another backend persists on H100 and H200; A100 shows a non-monotonic pattern where sync recovers at 32B. Which alternative wins at mid-to-large scale depends on hardware and storage topology.}
 \label{tab:cross-env-best}
 \centering
 \begin{tabular}{llll}
@@ -367,4 +367,4 @@ The SafeTensors loader family consistently outperforms the ServerlessLLM family 
 
 \subsection{Layer summary}
 
-Four principles emerge. (1) Backend ranking depends on workload shape: SafeTensors favours sync at small scale and io\_uring at large scale; ServerlessLLM favours async or io\_uring and disfavours sync. (2) The adaptive default captures the dominant regime in most (9/12) Rust-layer cells; known misses on medium-scale rows motivate explicit override annotations. (3) Integration layers reorder but do not eliminate backend differences: Python adds tensor conversion overhead, vLLM adds initialisation cost, but format-aware adaptive policy outperforms any single fixed backend in both environments. (4) Cross-environment validation confirms the regime structure is portable: sync dominates small models everywhere, but the large-scale winner varies with kernel interface availability and storage topology. The adaptive selector's capability-gated fallback correctly adapts to these constraints.
+Four principles emerge. (1) Backend ranking depends on workload shape: SafeTensors favours sync at small scale and io\_uring at large scale; ServerlessLLM favours async or io\_uring and disfavours sync. (2) The adaptive default captures the dominant regime in most (9/12) Rust-layer cells; known misses on medium-scale rows motivate explicit override annotations. (3) Integration layers reorder but do not eliminate backend differences: Python adds tensor conversion overhead, vLLM adds initialisation cost, but format-aware adaptive policy outperforms any single fixed backend in both environments. (4) Cross-environment validation confirms that sync dominates small models everywhere; the mid-to-large-scale winner varies with kernel interface availability and storage topology, and A100 shows a non-monotonic pattern where sync recovers at the largest scale. The adaptive selector's capability-gated fallback correctly adapts to these constraints.
