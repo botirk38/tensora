@@ -49,6 +49,7 @@
 //! ```
 
 mod async_io;
+pub mod availability;
 pub mod batch;
 pub mod buffer_slice;
 pub mod byte;
@@ -178,7 +179,7 @@ pub fn file_chunk_plan(file_size: usize, backend: BackendKind) -> FileIoPlan {
             let chunk_count = file_size.div_ceil(chunk_size).max(1);
             let target_inflight = chunk_count.min(target_depth).clamp(1, MAX_IO_URING_DEPTH);
             let wait_for = target_inflight.div_ceil(2).max(1);
-            
+
             FileIoPlan {
                 chunk_size,
                 chunk_count,
@@ -278,7 +279,33 @@ static BUFFER_POOL: std::sync::OnceLock<BufferPool> = std::sync::OnceLock::new()
 
 pub type BatchRequest = (PathBuf, u64, usize);
 
+pub use availability::{
+    Backend, BackendAvailability, BackendCapabilities, BackendUnavailableReason,
+};
 pub use std::io::Result as IoResult;
+
+#[must_use]
+pub fn backend_capabilities() -> BackendCapabilities {
+    BackendCapabilities::new(
+        sync_io::availability(),
+        async_io::availability(),
+        mmap::availability(),
+        io_uring_availability(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn io_uring_availability() -> BackendAvailability {
+    io_uring::availability()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn io_uring_availability() -> BackendAvailability {
+    BackendAvailability::unavailable(
+        BackendUnavailableReason::UnsupportedPlatform,
+        "io_uring is only available on Linux",
+    )
+}
 
 pub fn get_buffer_pool() -> &'static BufferPool {
     BUFFER_POOL.get_or_init(|| {

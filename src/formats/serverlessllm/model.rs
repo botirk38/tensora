@@ -112,13 +112,14 @@ enum LoadBackend {
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
+        let capabilities = backends::backend_capabilities();
         let log2_bytes = stats.log2_bytes();
         let fanout = stats.partition_fanout_score();
         let avg_partition_gb = stats.avg_partition_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
 
         let score = log2_bytes + 2.0 * fanout + avg_partition_gb;
 
-        if score >= 25.0 {
+        if score >= 25.0 && capabilities.is_available(backends::Backend::IoUring) {
             return LoadBackend::IoUring;
         }
         LoadBackend::TokioAsync
@@ -641,7 +642,11 @@ mod tests {
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
         let b = choose_load_backend(&stats);
-        assert!(matches!(b, LoadBackend::IoUring | LoadBackend::TokioAsync));
+        match b {
+            LoadBackend::TokioAsync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => {}
+        }
     }
 
     #[test]
@@ -651,7 +656,11 @@ mod tests {
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
         let b = choose_load_backend(&stats);
-        assert!(matches!(b, LoadBackend::IoUring | LoadBackend::TokioAsync));
+        match b {
+            LoadBackend::TokioAsync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => {}
+        }
     }
 
     #[test]
@@ -661,7 +670,11 @@ mod tests {
             total_bytes: 524 * 1024 * 1024,
         };
         let b = choose_load_backend(&stats);
-        assert!(matches!(b, LoadBackend::TokioAsync | LoadBackend::IoUring));
+        match b {
+            LoadBackend::TokioAsync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => {}
+        }
     }
 
     #[test]
@@ -671,7 +684,11 @@ mod tests {
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
         let b = choose_load_backend(&stats);
-        assert!(matches!(b, LoadBackend::TokioAsync | LoadBackend::IoUring));
+        match b {
+            LoadBackend::TokioAsync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => {}
+        }
     }
 
     #[cfg(target_os = "linux")]

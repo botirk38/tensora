@@ -19,7 +19,10 @@
 //! let data = mmap.as_slice(); // No copy, just pointer
 //! ```
 
-use super::IoResult;
+use super::{
+    IoResult,
+    availability::{BackendAvailability, BackendUnavailableReason},
+};
 use std::fs::File;
 use std::io::{Error, ErrorKind};
 use std::path::Path;
@@ -27,6 +30,17 @@ use std::sync::Arc;
 
 use memmap2::MmapOptions;
 use region::page;
+
+pub fn availability() -> BackendAvailability {
+    let page_size = page::size();
+    if page_size == 0 {
+        return BackendAvailability::unavailable(
+            BackendUnavailableReason::MissingDependency,
+            "region returned a zero page size",
+        );
+    }
+    BackendAvailability::Available
+}
 
 /// Memory-mapped file region (zero-copy, lazy)
 #[derive(Debug, Clone)]

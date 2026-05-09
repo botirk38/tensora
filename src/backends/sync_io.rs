@@ -5,9 +5,14 @@
 //! - Other platforms: Simple buffered file reads
 
 use super::{BatchRequest, IoResult};
+use crate::backends::availability::BackendAvailability;
 use std::path::Path;
 
 type IndexedLoadResult = (usize, std::sync::Arc<[u8]>, usize, usize);
+
+pub(crate) const fn availability() -> BackendAvailability {
+    BackendAvailability::Available
+}
 
 // ---------------------------------------------------------------------------
 // Linux implementation with O_DIRECT support
@@ -453,7 +458,9 @@ mod tests {
         write_file(&path_b, 2 * 1024 * 1024, 2);
 
         let mut reader = SyncReaderEngine::new();
-        let results = reader.load_batch(&[path_a.clone(), path_b.clone()]).unwrap();
+        let results = reader
+            .load_batch(&[path_a.clone(), path_b.clone()])
+            .unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].as_ref(), std::fs::read(path_a).unwrap());
@@ -480,7 +487,10 @@ mod tests {
         for ((_, offset, len), (data, out_offset, out_len)) in requests.iter().zip(results.iter()) {
             assert_eq!(*out_offset, 0);
             assert_eq!(*out_len, *len);
-            assert_eq!(data.as_ref(), &bytes[*offset as usize..(*offset as usize + *len)]);
+            assert_eq!(
+                data.as_ref(),
+                &bytes[*offset as usize..(*offset as usize + *len)]
+            );
         }
     }
 }

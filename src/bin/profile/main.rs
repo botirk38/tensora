@@ -18,6 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print backend availability in the current process/environment
+    Capabilities {
+        /// Output format
+        #[arg(long, value_enum, default_value_t = CapabilityFormat::Text)]
+        format: CapabilityFormat,
+    },
+
     /// Profile SafeTensors loader
     Safetensors {
         /// Profiling case to run
@@ -53,6 +60,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         evict_page_cache: bool,
     },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum CapabilityFormat {
+    Text,
+    Shell,
+    Json,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -115,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Capabilities { format } => print_capabilities(format)?,
         Commands::Safetensors {
             case,
             model_id,
@@ -146,6 +161,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error::Error>> {
+    let capabilities = tensora::backends::backend_capabilities();
+    match format {
+        CapabilityFormat::Text => {
+            for (backend, availability) in capabilities.iter() {
+                println!("{backend:<10} {availability}");
+            }
+        }
+        CapabilityFormat::Shell => {
+            for (backend, availability) in capabilities.iter() {
+                let key = backend.as_str().replace('-', "_").to_ascii_uppercase();
+                println!(
+                    "TENSORA_BACKEND_{key}_AVAILABLE={}",
+                    availability.is_available()
+                );
+            }
+        }
+        CapabilityFormat::Json => {
+            let mut entries = serde_json::Map::new();
+            for (backend, availability) in capabilities.iter() {
+                let value = match availability {
+                    tensora::backends::BackendAvailability::Available => serde_json::json!({
+                        "available": true,
+                    }),
+                    tensora::backends::BackendAvailability::Unavailable { reason, details } => {
+                        serde_json::json!({
+                            "available": false,
+                            "reason": reason.code(),
+                            "details": details,
+                        })
+                    }
+                };
+                entries.insert(backend.as_str().to_owned(), value);
+            }
+            println!("{}", serde_json::Value::Object(entries));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +211,7 @@ mod tests {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
         assert!(help.contains("Profiling harness for tensora"));
+        assert!(help.contains("capabilities"));
         assert!(help.contains("safetensors"));
         assert!(help.contains("serverlessllm"));
     }

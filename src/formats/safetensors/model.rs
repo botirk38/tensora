@@ -127,6 +127,7 @@ impl LoadStats {
 
 enum LoadBackend {
     Sync,
+    TokioAsync,
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -146,20 +147,31 @@ enum LoadBackend {
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
+        let capabilities = backends::backend_capabilities();
         let log2_bytes = stats.log2_bytes();
         let fanout = stats.shard_fanout_score();
         let avg_shard_gb = stats.avg_shard_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
 
         let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
 
-        if score >= 48.0 {
+        if score >= 48.0 && capabilities.is_available(backends::Backend::IoUring) {
             return LoadBackend::IoUring;
         }
+
+        let large_multi_shard = stats.total_bytes >= 8 * 1024 * 1024 * 1024
+            || (stats.shard_count >= 8 && stats.total_bytes >= 4 * 1024 * 1024 * 1024);
+        if large_multi_shard && capabilities.is_available(backends::Backend::Async) {
+            return LoadBackend::TokioAsync;
+        }
+
         LoadBackend::Sync
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (stats.shard_count, stats.total_bytes);
+        let _ = stats.shard_count;
+        if stats.total_bytes >= 8 * 1024 * 1024 * 1024 {
+            return LoadBackend::TokioAsync;
+        }
         LoadBackend::Sync
     }
 }
@@ -380,6 +392,7 @@ impl Model {
         match choose_load_backend(&stats) {
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => Self::load_io_uring(path),
+            LoadBackend::TokioAsync => Self::load_async(path).await,
             LoadBackend::Sync => Self::load_sync(path),
         }
     }
@@ -846,6 +859,7 @@ mod tests {
 
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {}
         }
@@ -860,6 +874,7 @@ mod tests {
 
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => panic!("expected Sync, got IoUring"),
         }
@@ -873,6 +888,7 @@ mod tests {
         };
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {}
         }
@@ -886,6 +902,7 @@ mod tests {
         };
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => panic!("expected Sync for small 2-shard"),
         }
@@ -898,7 +915,10 @@ mod tests {
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
         match choose_load_backend(&stats) {
-            LoadBackend::IoUring | LoadBackend::Sync => {}
+            LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
+            #[cfg(target_os = "linux")]
+            LoadBackend::IoUring => {}
         }
     }
 
@@ -911,6 +931,7 @@ mod tests {
         };
         match choose_load_backend(&stats) {
             LoadBackend::Sync => {}
+            LoadBackend::TokioAsync => {}
             LoadBackend::IoUring => panic!("expected Sync below threshold"),
         }
     }

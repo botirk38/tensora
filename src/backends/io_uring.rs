@@ -7,6 +7,7 @@
 //! - Full CQ draining per wakeup
 //! - Alignment-aware direct I/O with buffered fallback
 
+use super::availability::{BackendAvailability, BackendUnavailableReason};
 use super::batch::{
     BatchResult, CoalescedRequestGroup, FlattenedResult, coalesce_requests, flatten_results,
 };
@@ -22,7 +23,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 
 /// Maximum ring depth for NVMe/high-throughput workloads.
@@ -30,6 +31,44 @@ const MAX_RING_DEPTH: u32 = 256;
 const MIN_RING_DEPTH: u32 = 32;
 
 const DEFAULT_SQPOLL_IDLE_MS: u32 = 2_000;
+
+static AVAILABILITY: OnceLock<BackendAvailability> = OnceLock::new();
+
+pub fn availability() -> BackendAvailability {
+    AVAILABILITY.get_or_init(probe_availability).clone()
+}
+
+fn probe_availability() -> BackendAvailability {
+    match IoUring::builder().build(MIN_RING_DEPTH) {
+        Ok(_) => BackendAvailability::Available,
+        Err(err) => unavailable_from_io_error(&err, "creating a minimal io_uring ring"),
+    }
+}
+
+fn unavailable_from_io_error(err: &std::io::Error, context: &str) -> BackendAvailability {
+    let details = match err.raw_os_error() {
+        Some(code) => format!("{context} failed with errno {code}: {err}"),
+        None => format!("{context} failed: {err}"),
+    };
+
+    let reason = match err.raw_os_error() {
+        Some(libc::EPERM | libc::EACCES) => BackendUnavailableReason::PermissionDenied,
+        Some(libc::ENOSYS) => BackendUnavailableReason::MissingKernelFeature,
+        Some(libc::EINVAL) => BackendUnavailableReason::InvalidKernelConfiguration,
+        _ => BackendUnavailableReason::Other(err.to_string()),
+    };
+
+    BackendAvailability::unavailable(reason, details)
+}
+
+pub fn unavailable_error() -> Option<std::io::Error> {
+    match availability() {
+        BackendAvailability::Available => None,
+        unavailable => Some(std::io::Error::other(format!(
+            "io-uring backend is {unavailable}"
+        ))),
+    }
+}
 
 /// A persistent io_uring reader that reuses a single ring across operations.
 pub struct Reader {
@@ -97,6 +136,9 @@ impl Reader {
 
     /// Load an entire file using the persistent ring.
     pub fn load(&mut self, path: impl AsRef<Path>) -> IoResult<OwnedBytes> {
+        if let Some(err) = unavailable_error() {
+            return Err(err);
+        }
         let path_ref = path.as_ref();
         let file = File::open(path_ref)?;
         let file_size = usize::try_from(file.metadata()?.len())
@@ -117,6 +159,9 @@ impl Reader {
     }
 
     pub fn load_batch(&mut self, paths: &[PathBuf]) -> IoResult<Vec<OwnedBytes>> {
+        if let Some(err) = unavailable_error() {
+            return Err(err);
+        }
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -134,7 +179,7 @@ impl Reader {
             .unwrap_or(0);
 
         let worker_count = file_worker_count(paths.len(), total_bytes, max_file_bytes);
-        
+
         if worker_count > 1 {
             let indexed_paths: Vec<_> = paths.iter().cloned().enumerate().collect();
             let mut indexed_results = Vec::with_capacity(paths.len());
@@ -220,10 +265,7 @@ impl Reader {
                 drop(file);
                 let mut aligned = alloc_aligned(file_size)?;
                 aligned.set_len(file_size);
-                (
-                    open_direct_read(path)?,
-                    OwnedBytes::from_aligned(aligned),
-                )
+                (open_direct_read(path)?, OwnedBytes::from_aligned(aligned))
             } else {
                 let pooled = get_buffer_pool().get(file_size);
                 (file, OwnedBytes::from_pooled(pooled))
@@ -332,6 +374,9 @@ impl Reader {
         offset: u64,
         len: usize,
     ) -> IoResult<OwnedBytes> {
+        if let Some(err) = unavailable_error() {
+            return Err(err);
+        }
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
@@ -340,7 +385,9 @@ impl Reader {
 
         let path_ref = path.as_ref();
 
-        if is_block_aligned(offset, len) && let Ok(file) = open_direct_read(path_ref) {
+        if is_block_aligned(offset, len)
+            && let Ok(file) = open_direct_read(path_ref)
+        {
             return self.load_range_buffered(file, offset, len);
         }
 
@@ -354,6 +401,9 @@ impl Reader {
         &mut self,
         requests: &[BatchRequest],
     ) -> IoResult<Vec<FlattenedResult>> {
+        if let Some(err) = unavailable_error() {
+            return Err(err);
+        }
         if requests.is_empty() {
             return Ok(Vec::new());
         }
@@ -600,7 +650,10 @@ impl Reader {
                 let result = cqe.result();
 
                 if result < 0 {
-                    return Err(std::io::Error::other(format!("read error at chunk {}", idx)));
+                    return Err(std::io::Error::other(format!(
+                        "read error at chunk {}",
+                        idx
+                    )));
                 }
 
                 let bytes_read = result as usize;
@@ -608,7 +661,10 @@ impl Reader {
                 if bytes_read < expected {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
-                        format!("short read at chunk {}: expected {} bytes, got {}", idx, expected, bytes_read),
+                        format!(
+                            "short read at chunk {}: expected {} bytes, got {}",
+                            idx, expected, bytes_read
+                        ),
                     ));
                 }
                 pending -= 1;
@@ -644,7 +700,10 @@ impl Reader {
             .ok_or_else(|| std::io::Error::other("completion queue empty"))?;
 
         if cqe.result() < 0 {
-            return Err(std::io::Error::other(format!("read error: {}", cqe.result())));
+            return Err(std::io::Error::other(format!(
+                "read error: {}",
+                cqe.result()
+            )));
         }
 
         let bytes_read = cqe.result() as usize;
@@ -774,6 +833,9 @@ pub struct Writer {
 
 impl Writer {
     pub fn new() -> IoResult<Self> {
+        if let Some(err) = unavailable_error() {
+            return Err(err);
+        }
         let ring = build_default_ring()?;
         Ok(Self { ring })
     }
@@ -899,13 +961,13 @@ fn file_worker_count(file_count: usize, total_bytes: usize, max_file_bytes: usiz
     }
 
     let base_workers = chunk_budget().clamp(1, 8).min(file_count);
-    
+
     let workers = if max_file_bytes >= 512 * 1024 * 1024 {
         (base_workers * 2).min(16)
     } else {
         base_workers.min(8)
     };
-    
+
     workers.max(1)
 }
 
