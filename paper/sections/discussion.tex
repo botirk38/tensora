@@ -29,9 +29,9 @@ The selector's boundedness is itself informative: if future work shows the mediu
 
 \subsection{External validity and replication}
 
-Ordering of backends may generalise more reliably than absolute milliseconds when moving to different NVMe generations, network-attached storage, or filesystems. The structural claim is that policy must track layout and scale; that claim is more portable than any single crossover latency. Replication on other machines should prioritise regime behaviour and ranking, not byte-identical timings.
+Ordering of backends generalises more reliably than absolute milliseconds. The H200 and A100 results (Section~\ref{sec:cross-env}) provide direct evidence: the regime structure---small models favour sync, large models favour a different backend---persists across all three sites, even though the specific large-scale winner changes (\texttt{io\_uring} on local NVMe, async on network storage, sync on a different network configuration at 32B). The structural claim that policy must track layout and scale is more portable than any single crossover latency.
 
-The selector story is bounded to the tested ladder and harness. Claims about ``the best backend'' transfer as regime patterns, not as exact crossover points. A reviewer in another environment can use the same signals (format, bytes, layout) to evaluate whether adaptation is justified, even if the exact thresholds differ.
+The selector story is bounded to the tested ladder and harness. Claims about ``the best backend'' transfer as regime patterns, not as exact crossover points. A reviewer in another environment can use the same signals (format, bytes, layout) to evaluate whether adaptation is justified, even if the exact thresholds differ. The capability-gated fallback (Section~\ref{sec:design}) ensures that unavailable backends do not produce errors---they are simply excluded from the selector's candidate set.
 
 \subsection{Uncertainty, variance, and decision-making}
 

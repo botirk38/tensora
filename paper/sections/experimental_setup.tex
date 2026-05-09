@@ -33,13 +33,31 @@ Each question maps to a specific measurement layer. RQ1 and RQ2 are answered pri
 
 \subsection{Experimental Platform}
 
-All final measurements were collected on a single dedicated Linux server with an NVIDIA H100 GPU and approximately 180 GB of host RAM. The host was used as an isolated experiment host with minimal concurrent tenant load. The CPU is a contemporary multi-core x86\_64 processor; the exact model should be recorded beside published timings if the submission requires it.
+Measurements were collected on three Linux environments to test whether backend ordering regimes transfer across hardware and deployment contexts.
 
-We make the single-host nature explicit because it is a known limitation. The claims in this paper are about \textbf{ordering regimes}---which backend wins at which scale and layout---rather than absolute timings that would hold across any machine. A second measurement site (different CPU, different NVMe generation, or cloud block storage) would directly test whether the observed SafeTensors and ServerlessLLM orderings transfer. Section~\ref{sec:limitations} states this explicitly.
+\begin{table}[htbp]
+\caption{Experimental platforms. The H100 host uses local NVMe with full \texttt{io\_uring} support. The H200 and A100 hosts are network-storage containers where \texttt{io\_uring} is blocked by a kernel security policy (\texttt{EPERM}), exposing the adaptive selector's fallback behaviour.}
+\label{tab:platforms}
+\centering
+\begin{tabular}{llll}
+\toprule
+ & \textbf{H100} & \textbf{H200} & \textbf{A100} \\
+\midrule
+GPU & NVIDIA H100 & NVIDIA H200 & NVIDIA A100 80GB \\
+CPU & x86\_64 multi-core & Intel Xeon 8568Y+ & AMD EPYC 7543 \\
+RAM & $\sim$180\,GB & $\sim$2\,TB & $\sim$1\,TB \\
+Storage & Local NVMe & Network-attached & Network-attached \\
+\texttt{io\_uring} & Available & Blocked (EPERM) & Blocked (EPERM) \\
+Kernel & 6.x (Ubuntu 24.04) & 6.8.0-83 (Ubuntu 22.04) & 6.5.0-45 (Ubuntu 22.04) \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-The software stack for final runs was Ubuntu 24.04, Python 3.12, and Rust 1.94 (\texttt{rustc 1.94.0}, stable). Kernel version was recorded beside exports (\texttt{uname -r}; 6.x on the measurement host). The optional vLLM dependency is pinned in \texttt{bindings/python/uv.lock} (resolved \texttt{vllm} 0.11.0); serving exports should record \texttt{pip show vllm} or \texttt{uv pip show vllm} next to tables. Appendix~\ref{app:repro} lists other environment fields to capture.
+The H100 host is the primary measurement site: a dedicated Linux server with local NVMe, used as an isolated experiment host with minimal concurrent tenant load. The H200 and A100 environments are containerised GPU instances with network-attached storage. In both containers, the kernel blocks \texttt{io\_uring} ring creation with \texttt{EPERM} (verified via \texttt{profile capabilities}). This constraint is not artificial---it reflects a common production deployment pattern where container security policies restrict kernel interfaces. The two restricted environments test whether the adaptive selector correctly falls back from \texttt{io\_uring} to the next-best backend and whether the resulting ranking still outperforms a fixed policy.
 
-Storage is local NVMe behind a standard Linux journaling filesystem with default metadata behaviour unless noted. Cold-cache runs for the Rust matrix use buffered I/O and external cache drops (procedure below), not O\_DIRECT, unless a specific backend documents otherwise.
+The software stack for final runs was Ubuntu 24.04 (H100) or 22.04 (H200, A100), Python 3.12, and Rust 1.94 (\texttt{rustc 1.94.0}, stable). Kernel version was recorded beside exports (\texttt{uname -r}). The optional vLLM dependency is pinned in \texttt{bindings/python/uv.lock} (resolved \texttt{vllm} 0.11.0); serving exports should record \texttt{pip show vllm} or \texttt{uv pip show vllm} next to tables. Appendix~\ref{app:repro} lists other environment fields to capture.
+
+The H100 host uses local NVMe behind a standard Linux journaling filesystem with default metadata behaviour. The H200 and A100 containers use network-attached storage, which changes the I/O latency profile. Cold-cache runs for the Rust matrix use buffered I/O and external cache drops (procedure below), not O\_DIRECT, unless a specific backend documents otherwise. On restricted containers where \texttt{drop\_caches} is unavailable, the \texttt{--evict-page-cache} flag provides in-process page-cache eviction via \texttt{posix\_fadvise}.
 
 GPU-backed vLLM runs are constrained by vLLM memory budgeting (KV cache, CUDA graphs, buffers), not only raw VRAM. I/O experiments are Linux-only because the io\_uring backend is Linux-specific.
 
@@ -140,7 +158,7 @@ Backend gains do not propagate unchanged across layers.
 
 \textbf{Statistical reporting.} Full matrices use representative cold-cache times; anchor cells use five repetitions to check variance. Appendix~\ref{app:anchor-stats} reports median wall-clock time and the min--max band for selected anchor configurations (SafeTensors and ServerlessLLM). Main tables omit per-cell standard deviations for readability, so small gaps in one cell should be read cautiously, while consistent ordering across many cells carries more weight.
 
-\textbf{Single-host bounds.} All measurements come from one dedicated H100 host with local NVMe. We do not claim that absolute timings transfer to other machines. The paper claims that \textbf{ordering regimes} (which backend wins at which scale and layout) transfer more plausibly, but that is itself an empirical claim tested by replication. Section~\ref{sec:limitations} elaborates.
+\textbf{Cross-environment scope.} The primary Rust and vLLM matrices come from the H100 host with local NVMe and full \texttt{io\_uring} support. The H200 and A100 environments provide cross-hardware validation under a different constraint: network-attached storage with \texttt{io\_uring} blocked. We do not claim that absolute timings transfer across machines. The paper claims that \textbf{ordering regimes} transfer more plausibly; the restricted environments test that claim directly by removing \texttt{io\_uring} from the available backend set and observing whether the adaptive selector produces reasonable fallback orderings. Section~\ref{sec:limitations} elaborates.
 
 \textbf{Linux-only scope.} The io\_uring backend is Linux-specific. Results on other operating systems would require a different I/O backend and are outside scope.
 
@@ -155,7 +173,7 @@ This claim would be falsified if:
 \item Synchronous loading was fastest across the entire ServerlessLLM matrix (opposite of observed)
 \end{itemize}
 
-The claim would be supported (but boundary location refined) if replication on different hardware showed the same ordering pattern but at different crossover points in the model ladder. Section~\ref{sec:limitations} states these falsification conditions explicitly.
+The claim would be supported (but boundary location refined) if replication on different hardware showed the same ordering pattern but at different crossover points in the model ladder. The H200 and A100 environments partially test this: they remove \texttt{io\_uring} from the available set and show that the adaptive selector falls back to appropriate alternatives. Section~\ref{sec:limitations} states these falsification conditions explicitly.
 
 The adaptive \texttt{default} policy claim would be falsified if the selector systematically lost to a single explicit backend across the full matrix. The evidence shows it wins on some rows and loses on others (medium-scale SafeTensors, notably SmolLM3-3B and Qwen3-4B). This is documented in the limitations section.
 
