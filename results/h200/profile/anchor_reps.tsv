@@ -1,0 +1,121 @@
+model	format	backend	rep	time_ms	tensors	bytes
+Qwen/Qwen3-0.6B	safetensors	sync	1	309.93	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	2	128.00	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	3	91.41	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	4	114.90	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	5	95.51	311	0
+Qwen/Qwen3-0.6B	safetensors	async	1	821.90	311	0
+Qwen/Qwen3-0.6B	safetensors	async	2	823.99	311	0
+Qwen/Qwen3-0.6B	safetensors	async	3	785.62	311	0
+Qwen/Qwen3-0.6B	safetensors	async	4	799.25	311	0
+Qwen/Qwen3-0.6B	safetensors	async	5	792.83	311	0
+Qwen/Qwen3-0.6B	safetensors	io-uring	1			
+Qwen/Qwen3-0.6B	safetensors	io-uring	2			
+Qwen/Qwen3-0.6B	safetensors	io-uring	3			
+Qwen/Qwen3-0.6B	safetensors	io-uring	4			
+Qwen/Qwen3-0.6B	safetensors	io-uring	5			
+Qwen/Qwen3-0.6B	safetensors	default	1	105.53	311	0
+Qwen/Qwen3-0.6B	safetensors	default	2	104.14	311	0
+Qwen/Qwen3-0.6B	safetensors	default	3	97.68	311	0
+Qwen/Qwen3-0.6B	safetensors	default	4	111.30	311	0
+Qwen/Qwen3-0.6B	safetensors	default	5	105.24	311	0
+Qwen/Qwen3-0.6B	serverlessllm	sync	1	1536.42	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	2	1437.25	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	3	1380.07	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	4	1267.33	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	5	1286.39	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	1	1447.32	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	2	1034.08	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	3	1017.62	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	4	932.25	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	5	1022.88	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	io-uring	1			
+Qwen/Qwen3-0.6B	serverlessllm	io-uring	2			
+Qwen/Qwen3-0.6B	serverlessllm	io-uring	3			
+Qwen/Qwen3-0.6B	serverlessllm	io-uring	4			
+Qwen/Qwen3-0.6B	serverlessllm	io-uring	5			
+Qwen/Qwen3-0.6B	serverlessllm	default	1			
+Qwen/Qwen3-0.6B	serverlessllm	default	2			
+Qwen/Qwen3-0.6B	serverlessllm	default	3			
+Qwen/Qwen3-0.6B	serverlessllm	default	4			
+Qwen/Qwen3-0.6B	serverlessllm	default	5			
+Qwen/Qwen3-8B	safetensors	sync	1	4017.89	399	0
+Qwen/Qwen3-8B	safetensors	sync	2	3883.95	399	0
+Qwen/Qwen3-8B	safetensors	sync	3	3695.86	399	0
+Qwen/Qwen3-8B	safetensors	sync	4	4286.66	399	0
+Qwen/Qwen3-8B	safetensors	sync	5	4101.07	399	0
+Qwen/Qwen3-8B	safetensors	async	1	3350.70	399	0
+Qwen/Qwen3-8B	safetensors	async	2	3064.88	399	0
+Qwen/Qwen3-8B	safetensors	async	3	3302.36	399	0
+Qwen/Qwen3-8B	safetensors	async	4	3075.54	399	0
+Qwen/Qwen3-8B	safetensors	async	5	3318.12	399	0
+Qwen/Qwen3-8B	safetensors	io-uring	1			
+Qwen/Qwen3-8B	safetensors	io-uring	2			
+Qwen/Qwen3-8B	safetensors	io-uring	3			
+Qwen/Qwen3-8B	safetensors	io-uring	4			
+Qwen/Qwen3-8B	safetensors	io-uring	5			
+Qwen/Qwen3-8B	safetensors	default	1	3986.70	399	0
+Qwen/Qwen3-8B	safetensors	default	2	4096.78	399	0
+Qwen/Qwen3-8B	safetensors	default	3	4271.20	399	0
+Qwen/Qwen3-8B	safetensors	default	4	3940.52	399	0
+Qwen/Qwen3-8B	safetensors	default	5	3916.54	399	0
+Qwen/Qwen3-8B	serverlessllm	sync	1	11422.31	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	2	10057.32	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	3	9066.79	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	4	9187.93	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	5	9214.86	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	1	7763.76	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	2	4716.28	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	3	4357.82	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	4	4215.27	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	5	4251.05	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	io-uring	1			
+Qwen/Qwen3-8B	serverlessllm	io-uring	2			
+Qwen/Qwen3-8B	serverlessllm	io-uring	3			
+Qwen/Qwen3-8B	serverlessllm	io-uring	4			
+Qwen/Qwen3-8B	serverlessllm	io-uring	5			
+Qwen/Qwen3-8B	serverlessllm	default	1			
+Qwen/Qwen3-8B	serverlessllm	default	2			
+Qwen/Qwen3-8B	serverlessllm	default	3			
+Qwen/Qwen3-8B	serverlessllm	default	4			
+Qwen/Qwen3-8B	serverlessllm	default	5			
+Qwen/Qwen3-32B	safetensors	sync	1	26469.80	707	0
+Qwen/Qwen3-32B	safetensors	sync	2	23967.56	707	0
+Qwen/Qwen3-32B	safetensors	sync	3	24447.21	707	0
+Qwen/Qwen3-32B	safetensors	sync	4	23664.15	707	0
+Qwen/Qwen3-32B	safetensors	sync	5	25481.16	707	0
+Qwen/Qwen3-32B	safetensors	async	1	11961.89	707	0
+Qwen/Qwen3-32B	safetensors	async	2	11564.47	707	0
+Qwen/Qwen3-32B	safetensors	async	3	11695.52	707	0
+Qwen/Qwen3-32B	safetensors	async	4	11674.13	707	0
+Qwen/Qwen3-32B	safetensors	async	5	11259.32	707	0
+Qwen/Qwen3-32B	safetensors	io-uring	1			
+Qwen/Qwen3-32B	safetensors	io-uring	2			
+Qwen/Qwen3-32B	safetensors	io-uring	3			
+Qwen/Qwen3-32B	safetensors	io-uring	4			
+Qwen/Qwen3-32B	safetensors	io-uring	5			
+Qwen/Qwen3-32B	safetensors	default	1	24438.73	707	0
+Qwen/Qwen3-32B	safetensors	default	2	26248.04	707	0
+Qwen/Qwen3-32B	safetensors	default	3	25337.59	707	0
+Qwen/Qwen3-32B	safetensors	default	4	24975.95	707	0
+Qwen/Qwen3-32B	safetensors	default	5	23656.59	707	0
+Qwen/Qwen3-32B	serverlessllm	sync	1	39620.69	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	sync	2	32910.12	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	sync	3	33916.65	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	sync	4	34656.14	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	sync	5	32290.87	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	1	21496.39	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	2	20302.83	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	3	22032.98	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	4	21867.38	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	5	19788.46	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	io-uring	1			
+Qwen/Qwen3-32B	serverlessllm	io-uring	2			
+Qwen/Qwen3-32B	serverlessllm	io-uring	3			
+Qwen/Qwen3-32B	serverlessllm	io-uring	4			
+Qwen/Qwen3-32B	serverlessllm	io-uring	5			
+Qwen/Qwen3-32B	serverlessllm	default	1			
+Qwen/Qwen3-32B	serverlessllm	default	2			
+Qwen/Qwen3-32B	serverlessllm	default	3			
+Qwen/Qwen3-32B	serverlessllm	default	4			
+Qwen/Qwen3-32B	serverlessllm	default	5			
