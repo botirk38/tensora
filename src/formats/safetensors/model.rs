@@ -104,6 +104,7 @@ impl LoadStats {
         self.total_bytes.div_ceil(self.shard_count.max(1) as u64)
     }
 
+    #[cfg(target_os = "linux")]
     fn log2_bytes(self) -> f64 {
         if self.total_bytes == 0 {
             0.0
@@ -112,6 +113,7 @@ impl LoadStats {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn shard_fanout_score(self) -> f64 {
         match self.shard_count {
             0..=1 => 0.0,

@@ -64,6 +64,7 @@ impl LoadStats {
             .div_ceil(self.partition_count.max(1) as u64)
     }
 
+    #[cfg(target_os = "linux")]
     fn log2_bytes(self) -> f64 {
         if self.total_bytes == 0 {
             0.0
@@ -72,6 +73,7 @@ impl LoadStats {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn partition_fanout_score(self) -> f64 {
         match self.partition_count {
             0..=4 => 0.0,

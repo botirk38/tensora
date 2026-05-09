@@ -1,12 +1,20 @@
 \documentclass[10pt,letterpaper]{article}
 
-\usepackage{PRIMEarxiv}
+\input{template}
+
+\ifarxiv
+  \usepackage{PRIMEarxiv}
+\fi
+\ifmlsys
+  % \usepackage{mlsys} % uncomment and provide mlsys.cls when targeting MLSys
+\fi
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
+\usepackage{array}
 \usepackage{amsfonts}
 \usepackage[expansion=false]{microtype}
 \usepackage{graphicx}
@@ -26,13 +34,13 @@
 \def\figdir{figures}
 
 \hypersetup{%
-  pdftitle={Format-Aware Checkpoint Loading: An Adaptive Backend Policy for LLMs},
+  pdftitle={Workload-Shaped Checkpoint Loading for Large Language Model Inference},
   pdfauthor={Botir Khaltaev},
-  pdfkeywords={large language models, checkpoint loading, io\_uring, cold start, vLLM, reproducibility}%
+  pdfkeywords={large language models, checkpoint loading, I/O policy, io\_uring, cold start, vLLM, reproducibility, systems measurement}%
 }
 
 %% Title
-\title{Format-Aware Checkpoint Loading: An Adaptive Backend Policy for LLMs}
+\title{Workload-Shaped Checkpoint Loading for Large Language Model Inference}
 
 %% Authors
 \author{
@@ -45,13 +53,13 @@
 \maketitle
 
 \begin{abstract}
-Inference on large language models requires loading weights from storage into GPU memory. In serverless settings where idle models are evicted, cold-start latency hinges on how checkpoints are read. Peak NVMe bandwidth is only an upper bound: checkpoint layout, request structure, and integration overhead often dominate realised throughput.
+LLM cold-start latency is dominated by reading checkpoint weights from storage into GPU memory. Peak NVMe bandwidth is only an upper bound: realized throughput depends on the I/O request geometry determined by checkpoint layout, the submission policy of the loading backend, and integration overhead from the serving stack. This paper shows that checkpoint layout determines request geometry, which changes the optimal loading backend across scales and integration layers.
 
-This paper treats checkpoint loading as a measurement-driven systems problem. Using Tensora, we compare synchronous POSIX I/O, Tokio async, io\_uring, and an adaptive \texttt{default} policy across contiguous SafeTensors and partitioned ServerlessLLM-style layouts, then trace those choices through Python bindings and vLLM integration.
+Using Tensora, an open checkpoint-loading measurement framework, we evaluate synchronous POSIX I/O, Tokio-based async, io\_uring, and an adaptive default policy across two layouts (SafeTensors contiguous shards and ServerlessLLM-style partitioned files) at three layers: a Rust microbenchmark for pure backend attribution (six public checkpoints from 0.6B to 32B parameters), Python bindings for user-facing overhead, and a custom vLLM integration for end-to-end serving impact.
 
-For contiguous SafeTensors, explicit sync wins at smaller scales while explicit io\_uring wins at the largest multi-shard scales where queue depth matters. For partitioned ServerlessLLM, sync never leads; the relevant trade-off is among async, io\_uring, and \texttt{default}. These layout- and scale-dependent crossovers show that no single fixed backend is optimal in all cases.
+Three findings emerge. First, SafeTensors exhibits a clear crossover: synchronous loading is fastest for small models, while io\_uring dominates for multi-shard checkpoints at 8B parameters and above; no fixed backend tracks both regimes. Second, the partitioned ServerlessLLM layout reverses the ranking---synchronous loading never wins, and the relevant trade-off is between async and io\_uring depending on partition structure. Third, Python tensor materialization and vLLM initialization overhead change which backend appears fastest, but adaptive policy consistently outperforms any single fixed choice. In vLLM cold start, Tensora's adaptive SafeTensors path reduces initialization time by 37--48\% compared to the native loader for 8B and 32B models.
 
-Deploy a format-aware adaptive \texttt{default} with explicit overrides, not a single universal loader. Python and vLLM results confirm that integration overhead can reorder backend rankings; loader choice matters most for initialisation and time-to-first-token.
+The operational conclusion is not a single universal loader. It is a format-aware adaptive policy with explicit overrides, grounded in measured workload features---bytes, shard count, partition count, and integration layer---rather than API names alone.
 \end{abstract}
 
 \keywords{large language models \and checkpoint loading \and I/O policy \and io\_uring \and cold start \and vLLM \and reproducibility}
@@ -63,7 +71,6 @@ Deploy a format-aware adaptive \texttt{default} with explicit overrides, not a s
 \input{sections/results}
 \input{sections/discussion}
 \input{sections/limitations}
-\input{sections/professional_issues}
 \input{sections/conclusion}
 
 \appendix

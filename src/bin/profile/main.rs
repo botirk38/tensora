@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 mod config;
+mod evict;
 mod safetensors;
 mod serverlessllm;
 mod stats;
@@ -30,6 +31,10 @@ enum Commands {
         /// Number of iterations to run (default: 1)
         #[arg(short, long, default_value_t = 1)]
         iterations: usize,
+
+        /// Evict kernel page cache between iterations
+        #[arg(long, default_value_t = false)]
+        evict_page_cache: bool,
     },
     /// Profile ServerlessLLM loader
     Serverlessllm {
@@ -43,6 +48,10 @@ enum Commands {
         /// Number of iterations to run (default: 1)
         #[arg(short, long, default_value_t = 1)]
         iterations: usize,
+
+        /// Evict kernel page cache between iterations
+        #[arg(long, default_value_t = false)]
+        evict_page_cache: bool,
     },
 }
 
@@ -110,10 +119,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             case,
             model_id,
             iterations,
+            evict_page_cache,
         } => {
             let config = ProfileConfig {
                 iterations,
                 model_id,
+                evict_page_cache,
             };
             safetensors::run(case.as_str(), &config)?;
         }
@@ -121,10 +132,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             case,
             model_id,
             iterations,
+            evict_page_cache,
         } => {
             let config = ProfileConfig {
                 iterations,
                 model_id,
+                evict_page_cache,
             };
             serverlessllm::run(case.as_str(), &config)?;
         }

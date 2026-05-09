@@ -4,110 +4,130 @@
 \providecommand\HyField@AuxAddToCoFields[2]{}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:introduction}{{1}{1}{Introduction}{section.1}{}}
-\citation{FU:2024}
-\citation{silva2021snapshot}
-\citation{safetensors_docs}
-\citation{serverlessllm_repo}
 \citation{pagedattention}
 \citation{orca}
-\citation{IOURING_DATABASE_GUIDELINES}
+\citation{sarathi_serve}
+\citation{deepspeed_inference_paper}
+\citation{FU:2024}
+\citation{hydraserve}
+\citation{silva2021snapshot}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Related Work}{2}{section.2}\protected@file@percent }
 \newlabel{sec:related_work}{{2}{2}{Related Work}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Where the gap is not}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Database io\_uring as a methodological anchor}{2}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Positioning}{2}{subsection.2.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Tensora architecture: the format layer produces a normalised read plan; policy selects a backend and planning parameters; backends execute I/O; evaluation harnesses attach at the boundary for measurement only.}}{3}{figure.1}\protected@file@percent }
-\newlabel{fig:tensorstore-arch}{{1}{3}{Tensora architecture: the format layer produces a normalised read plan; policy selects a backend and planning parameters; backends execute I/O; evaluation harnesses attach at the boundary for measurement only}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}LLM Serving Systems}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Serverless Cold Start}{2}{subsection.2.2}\protected@file@percent }
+\citation{safetensors_docs}
+\citation{serverlessllm_repo}
+\citation{blitzscale}
+\citation{fast26_maio}
+\citation{arxiv2512_checkpoint_io}
+\citation{IOURING_DATABASE_GUIDELINES}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Checkpoint Formats and Loading Systems}{3}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}I/O Backend Policy}{3}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Positioning}{3}{subsection.2.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {3}Tensora Design}{3}{section.3}\protected@file@percent }
 \newlabel{sec:design}{{3}{3}{Tensora Design}{section.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Design Goals}{3}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}System Architecture}{3}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Common Backend Interface}{3}{subsection.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Adaptive Loading Policy}{4}{subsection.3.4}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Adaptive policy control flow: features $\to $ backend selection $\to $ read planning $\to $ execution. SafeTensors uses sync for small and io\_uring for large loads; ServerlessLLM routes to async or io\_uring depending on partition structure.}}{4}{figure.2}\protected@file@percent }
-\newlabel{fig:policy-sketch}{{2}{4}{Adaptive policy control flow: features $\to $ backend selection $\to $ read planning $\to $ execution. SafeTensors uses sync for small and io\_uring for large loads; ServerlessLLM routes to async or io\_uring depending on partition structure}{figure.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Major design decisions and rationale.}}{4}{table.1}\protected@file@percent }
-\newlabel{tab:major_design_forks}{{1}{4}{Major design decisions and rationale}{table.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Backend Designs}{5}{subsection.3.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Evaluated \texttt  {io\_uring} backend structure.}}{5}{table.2}\protected@file@percent }
-\newlabel{tab:impl_io_uring_fork}{{2}{5}{Evaluated \texttt {io\_uring} backend structure}{table.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Checkpoint Formats}{5}{subsection.3.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Python Bindings}{5}{subsection.3.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Setup}{6}{section.4}\protected@file@percent }
-\newlabel{sec:experimental_setup}{{4}{6}{Experimental Setup}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}What is measured and why the separation matters}{6}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Research Questions}{6}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Experimental Platform}{7}{subsection.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}External baselines}{7}{subsection.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Backends Under Test}{7}{subsection.4.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Operational definitions and internal validity}{9}{subsection.4.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}What would and would not falsify the main claims}{10}{subsection.4.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}Reading the matrices and reproducing ordering}{10}{subsection.4.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{10}{section.5}\protected@file@percent }
-\newlabel{sec:results}{{5}{10}{Results}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Rust Backend Results}{10}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.1.1}SafeTensors Results}{10}{subsubsection.5.1.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Rust cold-cache SafeTensors results (ms).}}{11}{table.3}\protected@file@percent }
-\newlabel{tab:rust-safetensors}{{3}{11}{Rust cold-cache SafeTensors results (ms)}{table.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Rust cold-cache SafeTensors results (log scale).}}{11}{figure.3}\protected@file@percent }
-\newlabel{fig:safetensors-crossover}{{3}{11}{Rust cold-cache SafeTensors results (log scale)}{figure.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}ServerlessLLM Results}{11}{subsection.5.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Rust cold-cache ServerlessLLM results (ms).}}{12}{table.4}\protected@file@percent }
-\newlabel{tab:rust-serverlessllm}{{4}{12}{Rust cold-cache ServerlessLLM results (ms)}{table.4}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Rust cold-cache ServerlessLLM results (log scale).}}{12}{figure.4}\protected@file@percent }
-\newlabel{fig:serverlessllm-crossover}{{4}{12}{Rust cold-cache ServerlessLLM results (log scale)}{figure.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Interpretation}{12}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Python Results}{13}{subsection.5.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Python eager-load times for Qwen3-8B (seconds).}}{13}{table.5}\protected@file@percent }
-\newlabel{tab:python-optimisation}{{5}{13}{Python eager-load times for Qwen3-8B (seconds)}{table.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}vLLM Results}{13}{subsection.5.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Cold vLLM load\_only: native vs. Tensora (ms).}}{13}{table.6}\protected@file@percent }
-\newlabel{tab:vllm-baseline}{{6}{13}{Cold vLLM load\_only: native vs. Tensora (ms)}{table.6}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Best cold load\_only vLLM loader by model.}}{14}{table.7}\protected@file@percent }
-\newlabel{tab:vllm-load-only}{{7}{14}{Best cold load\_only vLLM loader by model}{table.7}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Best cold TTFT vLLM loader by model.}}{14}{table.8}\protected@file@percent }
-\newlabel{tab:vllm-ttft}{{8}{14}{Best cold TTFT vLLM loader by model}{table.8}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{14}{section.6}\protected@file@percent }
-\newlabel{sec:discussion}{{6}{14}{Discussion}{section.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Format-specific mechanics}{14}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Policy claims that survive scrutiny}{15}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}What would change the conclusion}{15}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}External validity and replication}{15}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Uncertainty, variance, and decision-making}{15}{subsection.6.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Limitations}{16}{section.7}\protected@file@percent }
-\newlabel{sec:limitations}{{7}{16}{Limitations}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}External validity}{16}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Construct validity}{16}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Internal validity and selector claims}{16}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}What would falsify the adaptive heuristic?}{17}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Ethics, safety, and reproducibility}{17}{section.8}\protected@file@percent }
-\newlabel{sec:professional_issues}{{8}{17}{Ethics, safety, and reproducibility}{section.8}{}}
-\citation{bcs_code}
-\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{18}{section.9}\protected@file@percent }
-\newlabel{sec:conclusion}{{9}{18}{Conclusion}{section.9}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Reproducibility}{18}{appendix.A}\protected@file@percent }
-\newlabel{app:repro}{{A}{18}{Reproducibility}{appendix.A}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Source bundle and public PDF}{18}{subsection.A.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Repository and revision}{18}{subsection.A.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Rust profiling harness}{18}{subsection.A.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Tensora architecture: the format layer produces a normalised read plan; policy selects a backend and planning parameters; backends execute I/O; evaluation harnesses attach at the boundary for measurement only.}}{4}{figure.1}\protected@file@percent }
+\newlabel{fig:tensorstore-arch}{{1}{4}{Tensora architecture: the format layer produces a normalised read plan; policy selects a backend and planning parameters; backends execute I/O; evaluation harnesses attach at the boundary for measurement only}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}System Architecture}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Common Backend Interface}{4}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Workload Features}{4}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Adaptive Loading Policy}{5}{subsection.3.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Adaptive policy control flow: features $\to $ backend selection $\to $ read planning $\to $ execution. SafeTensors uses sync for small and io\_uring for large loads; ServerlessLLM routes to async or io\_uring depending on partition structure.}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:policy-sketch}{{2}{5}{Adaptive policy control flow: features $\to $ backend selection $\to $ read planning $\to $ execution. SafeTensors uses sync for small and io\_uring for large loads; ServerlessLLM routes to async or io\_uring depending on partition structure}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Backend Designs}{5}{subsection.3.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Major design decisions and rationale.}}{6}{table.1}\protected@file@percent }
+\newlabel{tab:major_design_forks}{{1}{6}{Major design decisions and rationale}{table.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Evaluated \texttt  {io\_uring} backend structure.}}{6}{table.2}\protected@file@percent }
+\newlabel{tab:impl_io_uring_fork}{{2}{6}{Evaluated \texttt {io\_uring} backend structure}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Checkpoint Formats}{6}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Python Bindings}{7}{subsection.3.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Setup}{7}{section.4}\protected@file@percent }
+\newlabel{sec:experimental_setup}{{4}{7}{Experimental Setup}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}What is measured and why the separation matters}{7}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Research Questions}{8}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Experimental Platform}{8}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}External baselines}{8}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Backends Under Test}{8}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Operational definitions and internal validity}{10}{subsection.4.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}What would and would not falsify the main claims}{11}{subsection.4.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}Reading the matrices and reproducing ordering}{11}{subsection.4.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{11}{section.5}\protected@file@percent }
+\newlabel{sec:results}{{5}{11}{Results}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Headline findings}{12}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Rust Backend Results}{12}{subsection.5.2}\protected@file@percent }
+\newlabel{sec:rust-results}{{5.2}{12}{Rust Backend Results}{subsection.5.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.1}SafeTensors Results}{12}{subsubsection.5.2.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Rust cold-cache SafeTensors results (ms). The crossover from sync-favored small models to io\_uring-favored large multi-shard models is the evidential core behind the adaptive policy.}}{12}{table.3}\protected@file@percent }
+\newlabel{tab:rust-safetensors}{{3}{12}{Rust cold-cache SafeTensors results (ms). The crossover from sync-favored small models to io\_uring-favored large multi-shard models is the evidential core behind the adaptive policy}{table.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.2.2}ServerlessLLM Results}{12}{subsubsection.5.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces SafeTensors backend crossover (log scale). Sync dominates the left (small models); io\_uring dominates the right (large multi-shard models). Default trails on medium-scale rows where the heuristic's feature mapping is imprecise.}}{13}{figure.3}\protected@file@percent }
+\newlabel{fig:safetensors-crossover}{{3}{13}{SafeTensors backend crossover (log scale). Sync dominates the left (small models); io\_uring dominates the right (large multi-shard models). Default trails on medium-scale rows where the heuristic's feature mapping is imprecise}{figure.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Rust cold-cache ServerlessLLM results (ms). Synchronous loading never wins; the ranking shifts from async at smaller partition scales toward io\_uring at larger sizes.}}{13}{table.4}\protected@file@percent }
+\newlabel{tab:rust-serverlessllm}{{4}{13}{Rust cold-cache ServerlessLLM results (ms). Synchronous loading never wins; the ranking shifts from async at smaller partition scales toward io\_uring at larger sizes}{table.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Oracle analysis: how well does the adaptive default track the best backend?}{13}{subsection.5.3}\protected@file@percent }
+\newlabel{sec:oracle-analysis}{{5.3}{13}{Oracle analysis: how well does the adaptive default track the best backend?}{subsection.5.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces ServerlessLLM backend ordering (log scale). Sync is never the winner; the layout shifts the ranking toward async and io\_uring. Default benefits from read planning on large partitioned loads.}}{14}{figure.4}\protected@file@percent }
+\newlabel{fig:serverlessllm-crossover}{{4}{14}{ServerlessLLM backend ordering (log scale). Sync is never the winner; the layout shifts the ranking toward async and io\_uring. Default benefits from read planning on large partitioned loads}{figure.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Default versus per-row best explicit backend. Cells show \texttt  {default} / \texttt  {best\_explicit} ratio. Ratios $<1.0$ mean default wins; ratios $>1.0$ mean default trails.}}{14}{table.5}\protected@file@percent }
+\newlabel{tab:oracle}{{5}{14}{Default versus per-row best explicit backend. Cells show \texttt {default} / \texttt {best\_explicit} ratio. Ratios $<1.0$ mean default wins; ratios $>1.0$ mean default trails}{table.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Python Results}{14}{subsection.5.4}\protected@file@percent }
+\newlabel{sec:python-results}{{5.4}{14}{Python Results}{subsection.5.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Python eager-load times for Qwen3-8B (seconds). Binding tuning and selector redesign both contributed measurable improvements.}}{14}{table.6}\protected@file@percent }
+\newlabel{tab:python-optimisation}{{6}{14}{Python eager-load times for Qwen3-8B (seconds). Binding tuning and selector redesign both contributed measurable improvements}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}vLLM Results}{15}{subsection.5.5}\protected@file@percent }
+\newlabel{sec:vllm-results}{{5.5}{15}{vLLM Results}{subsection.5.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Cold vLLM load\_only: native vs. Tensora (ms). The gap is an end-to-end effect (CUDA context, memory pools, and loader policy), not a pure Rust microbenchmark.}}{15}{table.7}\protected@file@percent }
+\newlabel{tab:vllm-baseline}{{7}{15}{Cold vLLM load\_only: native vs. Tensora (ms). The gap is an end-to-end effect (CUDA context, memory pools, and loader policy), not a pure Rust microbenchmark}{table.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Best cold load\_only vLLM loader by model. The pattern follows the Rust SafeTensors regime: sync-style loading at small scales, io\_uring at large scales.}}{15}{table.8}\protected@file@percent }
+\newlabel{tab:vllm-load-only}{{8}{15}{Best cold load\_only vLLM loader by model. The pattern follows the Rust SafeTensors regime: sync-style loading at small scales, io\_uring at large scales}{table.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Layer summary}{15}{subsection.5.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Best cold TTFT vLLM loader by model.}}{16}{table.9}\protected@file@percent }
+\newlabel{tab:vllm-ttft}{{9}{16}{Best cold TTFT vLLM loader by model}{table.9}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{16}{section.6}\protected@file@percent }
+\newlabel{sec:discussion}{{6}{16}{Discussion}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Format-specific mechanics}{16}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Policy claims that survive scrutiny}{16}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}What would change the conclusion}{16}{subsection.6.3}\protected@file@percent }
+\citation{IOURING_DATABASE_GUIDELINES}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}External validity and replication}{17}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Uncertainty, variance, and decision-making}{17}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Limitations}{17}{section.7}\protected@file@percent }
+\newlabel{sec:limitations}{{7}{17}{Limitations}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}External validity}{17}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Construct validity}{18}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Internal validity and selector boundedness}{18}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Scope of claims}{18}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{18}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{18}{Conclusion}{section.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Reproducibility}{19}{appendix.A}\protected@file@percent }
+\newlabel{app:repro}{{A}{19}{Reproducibility}{appendix.A}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Source bundle and public PDF}{19}{subsection.A.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Repository and revision}{19}{subsection.A.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Rust profiling harness}{19}{subsection.A.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {A.4}Python and vLLM harnesses}{19}{subsection.A.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.5}Environment pins}{19}{subsection.A.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.6}What replication should check}{19}{subsection.A.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {A.7}Hub names, fixtures, and cache control}{19}{subsection.A.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {B}Cold-cache anchor statistics}{19}{appendix.B}\protected@file@percent }
-\newlabel{app:anchor-stats}{{B}{19}{Cold-cache anchor statistics}{appendix.B}{}}
 \bibstyle{unsrt}
 \bibdata{library}
-\bibcite{serverlessllm_repo}{Contributors(2024)}
-\bibcite{safetensors_docs}{Face(2024)}
-\bibcite{FU:2024}{Fu et~al.(2024)Fu, Xue, Huang, Brabete, Ustiugov, Patel, and Mai}
-\bibcite{IOURING_DATABASE_GUIDELINES}{Jasny et~al.(2025)Jasny, El-Hindi, Ziegler, Leis, and Binnig}
-\bibcite{pagedattention}{Kwon et~al.(2023)Kwon, Li, Zhuang, Sheng, Zheng, Yu, Gonzalez, Zhang, and Stoica}
-\bibcite{silva2021snapshot}{Silva and Pereira(2021)}
-\bibcite{bcs_code}{Society(2023)}
-\bibcite{orca}{Yu et~al.(2022)Yu, Jeong, Kim, Kim, and Chun}
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Anchor repetitions: median cold load time (ms) with min--max across five runs.}}{20}{table.9}\protected@file@percent }
-\newlabel{tab:anchor-summary}{{9}{20}{Anchor repetitions: median cold load time (ms) with min--max across five runs}{table.9}{}}
+\bibcite{pagedattention}{1}
+\bibcite{orca}{2}
+\bibcite{sarathi_serve}{3}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.5}Environment pins}{20}{subsection.A.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.6}What replication should check}{20}{subsection.A.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.7}Hub names, fixtures, and cache control}{20}{subsection.A.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Cold-cache anchor statistics}{20}{appendix.B}\protected@file@percent }
+\newlabel{app:anchor-stats}{{B}{20}{Cold-cache anchor statistics}{appendix.B}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Anchor repetitions: median cold load time (ms) with min--max across five runs.}}{20}{table.10}\protected@file@percent }
+\newlabel{tab:anchor-summary}{{10}{20}{Anchor repetitions: median cold load time (ms) with min--max across five runs}{table.10}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {C}Artefact layout}{20}{appendix.C}\protected@file@percent }
 \newlabel{app:artefact-layout}{{C}{20}{Artefact layout}{appendix.C}{}}
-\gdef \@abspage@last{20}
+\bibcite{deepspeed_inference_paper}{4}
+\bibcite{FU:2024}{5}
+\bibcite{hydraserve}{6}
+\bibcite{silva2021snapshot}{7}
+\bibcite{safetensors_docs}{8}
+\bibcite{serverlessllm_repo}{9}
+\bibcite{blitzscale}{10}
+\bibcite{fast26_maio}{11}
+\bibcite{arxiv2512_checkpoint_io}{12}
+\bibcite{IOURING_DATABASE_GUIDELINES}{13}
+\gdef \@abspage@last{21}

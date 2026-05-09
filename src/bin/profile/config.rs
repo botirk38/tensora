@@ -10,6 +10,8 @@ pub struct ProfileConfig {
     pub iterations: usize,
     /// Hugging Face model id (e.g. `Qwen/Qwen3-8B`).
     pub model_id: String,
+    /// Evict kernel page cache between iterations via posix_fadvise(DONTNEED).
+    pub evict_page_cache: bool,
 }
 
 impl ProfileConfig {

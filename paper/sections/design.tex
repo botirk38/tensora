@@ -57,15 +57,31 @@ All eager-loading backends implement the same public surface:
 
 This interface is deliberately narrow: it covers \texttt{SafeTensors} and \texttt{ServerlessLLM} without extra surface area, so backend differences remain interpretable.
 
+\subsection{Workload Features}
+
+The format layer extracts a common set of workload features from every checkpoint, regardless of layout. These features drive both the analysis and the adaptive policy:
+
+\begin{itemize}
+\item \textbf{Total bytes}: the aggregate checkpoint size across all shards or partitions.
+\item \textbf{Shard count}: number of discrete files (SafeTensors) or partitions (ServerlessLLM).
+\item \textbf{Request count}: number of byte-range reads required to load all tensors.
+\item \textbf{Contiguity ratio}: fraction of total bytes addressable as sequential ranges versus fragmented reads.
+\item \textbf{Format family}: SafeTensors (contiguous multi-shard) or ServerlessLLM (partitioned range-oriented).
+\end{itemize}
+
+SafeTensors checkpoints are characterized by low request count and high contiguity---tensors are stored as whole-file contiguous chunks. ServerlessLLM checkpoints have high request count and low contiguity---each tensor may span multiple partition files, producing many fragmented range reads. These differences are the root cause of the backend ordering reversals observed in Section~\ref{sec:results}.
+
 \subsection{Adaptive Loading Policy}
 
-The central design decision is that backend selection is handled as an adaptive heuristic rather than as a fixed policy. Evidence shows that no single backend is best across all checkpoint sizes and layouts.
+The central design decision is that backend selection is handled as an adaptive heuristic rather than as a fixed policy. The Rust matrix (Tables~\ref{tab:rust-safetensors} and~\ref{tab:rust-serverlessllm}) shows that no single backend is best across both layouts and all scales.
 
-The final \texttt{default} policy uses workload-aware signals and includes backend-internal planning such as chunking large files, coalescing nearby ranges, and workload-driven sizing decisions. This internal planning is part of what makes \texttt{default} effective in practice, but it means that \texttt{default} is not a pure selector among the explicit benchmark paths. Instead, \texttt{default} represents a higher-level policy that combines adaptive backend selection with execution-time planning decisions.
+The \texttt{default} policy operates in three stages. First, \texttt{extract\_features} reads workload signals from the format layer: total bytes, shard count, partition count, and contiguity features. Second, \texttt{heuristic\_select} maps features to a backend: sync for low-request-count, high-contiguity loads below the crossover threshold; io\_uring for high-request-count or large-scale loads; async for mid-range partitioned loads where grouped range reads fit its execution model. Third, \texttt{plan\_reads} applies backend-specific planning (chunking large files, coalescing nearby ranges, setting in-flight depth) before execution.
 
-For \texttt{SafeTensors}, the key factors are shard count and total checkpoint size. The adaptive policy is designed around the measured crossover: \textbf{keep synchronous execution for smaller eager loads}, and \textbf{move to the \texttt{io\_uring} path as scale increases}. For \texttt{ServerlessLLM}, the key factors are total bytes, partition count, and the degree to which the workload is range-heavy; the selector does \emph{not} assume that synchronous I/O is competitive on partitioned range workloads (the Rust matrix shows it is not). Smaller and mid-sized range-heavy workloads may use the Tokio async path; larger partitioned checkpoints use the adaptive \texttt{default} that selects \texttt{io\_uring}. The selector therefore remains format-aware rather than purely size-aware.
+This means \texttt{default} is not a pure selector among the explicit benchmark paths. It combines adaptive backend selection with execution-time planning decisions absent from the explicit columns. This design is intentional: in production, a loader should both choose the right backend \emph{and} execute it well, and comparing default against explicit backends separates the benefit of backend selection from the benefit of planning.
 
-The selector is \textbf{feature-driven} (bytes, shard and partition structure from the format layer), not a single hard-coded byte threshold. Exact internal cut-offs are omitted here to avoid false precision; regimes matter more than constants. Figure~\ref{fig:policy-sketch} summarises the control flow at a high level; threshold constants live in the open-source implementation alongside the harness revision recorded for the results.
+For \texttt{SafeTensors}, the heuristic maps shard count and total bytes to a regime decision: \textbf{synchronous execution for smaller eager loads}, \textbf{io\_uring for larger multi-shard loads}. For \texttt{ServerlessLLM}, the features are partition count and request count; the heuristic does \emph{not} route to synchronous I/O (the Rust matrix shows sync never wins on this layout). Smaller and mid-sized range-heavy workloads may use the Tokio async path; larger partitioned checkpoints route to \texttt{io\_uring}.
+
+The selector is \textbf{feature-driven}, not a single hard-coded byte threshold. Exact internal cut-offs are omitted here to avoid false precision; regimes matter more than constants. Figure~\ref{fig:policy-sketch} summarises control flow; threshold constants live in the open-source implementation alongside the harness revision recorded for results. Table~\ref{tab:oracle} in Section~\ref{sec:results} quantifies the selector's boundedness: it tracks the best explicit backend in 9 of 12 Rust-layer cells and deviates most where the medium-scale crossover region makes regime boundaries ambiguous.
 
 \begin{figure}[htbp]
 \centering

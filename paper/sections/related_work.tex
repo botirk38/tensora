@@ -1,28 +1,36 @@
 \section{Related Work}
 \label{sec:related_work}
 
-This section positions our thesis against existing literature. We show that the gap is operational policy, not format design or scheduling, and that database io\_uring findings translate qualitatively to checkpoint loading.
+This section positions our thesis---that LLM checkpoint loading performance depends on workload shape, not just peak bandwidth, and that backend policy must be format-aware and adaptive---against existing work. We cover serving systems, serverless cold-start solutions, checkpoint formats and loading systems, and I/O backend research. The common thread: prior work optimizes around the load, rather than measuring and adapting the load itself.
 
-\subsection{Where the gap is not}
+\subsection{LLM Serving Systems}
 
-Three strands of prior work address checkpoint loading from different angles, and none answer the question this paper asks.
+Production LLM serving engines optimize inference throughput and latency once weights are in GPU memory. vLLM introduces PagedAttention for efficient KV-cache management \cite{pagedattention}. Orca pioneers iteration-level batching \cite{orca}. Sarathi-Serve refines the prefill-decode scheduling trade-off \cite{sarathi_serve}. DeepSpeed Inference applies model parallelism and kernel fusion \cite{deepspeed_inference_paper}. These systems treat checkpoint loading as a one-time fixed cost before their pipeline starts. Faster loading directly reduces time-to-first-token, which these systems treat as an externally determined constant.
 
-\textbf{Scheduling and placement research} treats loading as a cost to avoid or hide. Warm pools, instance migration, and snapshot-based warm-up all optimise \emph{whether} and \emph{when} a load happens; they do not measure how fast bytes move once a load is required \cite{FU:2024,silva2021snapshot}. This paper holds scheduling fixed and measures load mechanics.
+Our work fills this gap by measuring and optimizing the loading phase that serving engines assume away.
 
-\textbf{Format design} (SafeTensors, GGUF, partitioned formats) determines what byte ranges exist and whether storage can pre-fetch effectively. SafeTensors standardises layout; GGUF optimises memory mapping; partitioned formats enable partial loading \cite{safetensors_docs,serverlessllm_repo}. All three leave the operational question unanswered: given a fixed format, which I/O backend submits reads fastest?
+\subsection{Serverless Cold Start}
 
-\textbf{Serverless serving systems} (vLLM, ORCA) improve runtime throughput through batching and scheduling \cite{pagedattention,orca}. Checkpoint loading sits before their pipeline starts; faster loading directly reduces time-to-first-token, which these systems treat as a constant.
+Serverless LLM serving introduces the cold-start problem: idle models are evicted and must be reloaded on demand. ServerlessLLM \cite{FU:2024} proposes multi-tier loading with GPU/NVMe/DRAM placement and live migration to reduce this cost. HydraServe \cite{hydraserve} minimizes cold-start latency in public clouds through pipeline parallelism and placement optimization. Snapshot-based warm-up approaches \cite{silva2021snapshot} pre-materialize model state to bypass loading altogether.
 
-The gap is therefore operational: \textbf{which backend policy to deploy for a given checkpoint on a given integration surface}, not format design, not scheduling, not serving architecture.
+All of these optimize \emph{whether} and \emph{when} loading occurs, or structure the storage hierarchy to reduce its frequency. None measure the I/O mechanics of the load itself---the submission policy, request geometry, and backend selection that determine how fast bytes move once loading is unavoidable. Our work holds scheduling fixed and measures these load mechanics across backends, formats, and integration layers.
 
-\subsection{Database io\_uring as a methodological anchor}
+\subsection{Checkpoint Formats and Loading Systems}
 
-Recent database work shows io\_uring benefits depend on workload shape and queue depth \cite{IOURING_DATABASE_GUIDELINES}. Bulk sequential reads already amortise syscall overhead; fragmented many-small workloads benefit from batched submission. This is directly relevant because checkpoint loading spans both regimes: contiguous SafeTensors shards resemble bulk sequential access, while partitioned ServerlessLLM layouts resemble fragmented range workloads.
+Checkpoint formats determine what byte ranges a loader must read and whether access is contiguous or fragmented. SafeTensors \cite{safetensors_docs} provides safe, fast tensor serialization with a contiguous multi-shard layout. GGUF optimizes for memory-mapped CPU inference at the cost of quantized weights. ServerlessLLM's partitioned layout \cite{serverlessllm_repo} distributes tensors across multiple files with a central index, enabling partial loading and tiered storage placement.
 
-Key qualitative translation: backend family (\texttt{sync}, \texttt{async}, \texttt{io\_uring}) is not enough - execution policy must match workload features (byte count, shard count, fragmentation). This motivates our adaptive policy as a heuristic, not a closed-form optimum.
+Recent systems work optimizes the loading path from different angles. BlitzScale \cite{blitzscale} uses O(1) GPU-side model caching over NVLink and RDMA to share already-loaded models between inference instances. Most relevant to our work, PPC/MAIO \cite{fast26_maio} optimizes model loading through a programmable kernel page cache, achieving substantial speedups by adapting prefetching and eviction policies to LLM I/O patterns. MAIO operates below the system-call interface; our work operates above it, comparing userspace I/O backends on identical logical read plans. The two approaches are complementary: MAIO optimizes how the kernel serves pages, while Tensora optimizes how the application submits reads.
 
-Memory-mapped formats (GGUF) and page-cache strategies target a different optimisation: eliminating copies. They complement eager-loading policy; we hold mmap out of scope for cold-cache eager loads and treat it as a synthesis topic.
+A separate line of characterization work studies LLM checkpoint/restore I/O patterns on parallel file systems \cite{arxiv2512_checkpoint_io}, covering buffered versus direct I/O paths and liburing performance. That work focuses on training checkpointing in HPC environments; our focus is inference checkpoint loading in single-node serving.
+
+The gap we address: given a fixed format, which I/O backend submits reads fastest, and how does the answer change with scale, layout, and integration layer?
+
+\subsection{I/O Backend Policy}
+
+The Linux I/O interface landscape spans synchronous POSIX, POSIX AIO, and io\_uring. Recent database research provides the closest methodological template for our work: Jasny et al. \cite{IOURING_DATABASE_GUIDELINES} show that io\_uring benefits depend on workload shape and queue depth, with bulk sequential reads already amortizing syscall overhead while fragmented many-small workloads benefit from batched submission. This is directly relevant because checkpoint loading spans both regimes: contiguous SafeTensors shards resemble bulk sequential access, while partitioned ServerlessLLM layouts resemble fragmented range workloads.
+
+Our work translates these database findings to a new domain (LLM checkpoint loading) and extends them with cross-layer evidence (Rust, Python, vLLM) and an adaptive policy grounded in workload features rather than API names.
 
 \subsection{Positioning}
 
-We do not introduce a new format, prove security properties, or optimise training checkpoints. We measure load mechanics across backend policies for public checkpoints and synthesise an adaptive policy with explicit overrides. This operational contribution is the missing piece between format design (what bytes exist) and serving (how they are used).
+We do not introduce a new checkpoint format, optimize serving throughput, or solve scheduling. We measure load mechanics across four backend policies and two layouts, for six public checkpoints, at three integration layers. The contribution is operational: evidence that backend choice depends jointly on layout and scale, and a format-aware adaptive policy with explicit overrides. This is the missing piece between format design (what bytes exist), serving engines (how they use loaded weights), and kernel-level cache optimization (how the page cache serves reads).

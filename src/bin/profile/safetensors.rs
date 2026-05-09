@@ -8,6 +8,7 @@ use std::time::Instant;
 use tensora::formats::safetensors;
 
 use crate::config::{ProfileConfig, ProfileError, ProfileResult};
+use crate::evict;
 use crate::stats::summarize;
 
 fn resolved_dir(config: &ProfileConfig) -> Result<(String, PathBuf), ProfileError> {
@@ -57,6 +58,9 @@ fn profile_load_sync(config: &ProfileConfig) -> ProfileResult {
             elapsed.as_secs_f64() * 1000.0
         );
         black_box((data.len(), total_bytes));
+        if config.evict_page_cache {
+            evict::evict_page_cache(&dir);
+        }
     }
 
     if let Some(summary) = summarize(&durations) {
@@ -91,6 +95,9 @@ fn profile_load_mmap(config: &ProfileConfig) -> ProfileResult {
             elapsed.as_secs_f64() * 1000.0
         );
         black_box((data.len(), total_bytes));
+        if config.evict_page_cache {
+            evict::evict_page_cache(&dir);
+        }
     }
 
     if let Some(summary) = summarize(&durations) {
@@ -132,6 +139,9 @@ fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
                 elapsed.as_secs_f64() * 1000.0
             );
             black_box((data.len(), total_bytes));
+            if config.evict_page_cache {
+                evict::evict_page_cache(&dir);
+            }
         }
 
         if let Some(summary) = summarize(&durations) {
@@ -169,6 +179,9 @@ fn profile_load_io_uring(config: &ProfileConfig) -> ProfileResult {
             elapsed.as_secs_f64() * 1000.0
         );
         black_box((data.len(), total_bytes));
+        if config.evict_page_cache {
+            evict::evict_page_cache(&dir);
+        }
     }
 
     if let Some(summary) = summarize(&durations) {

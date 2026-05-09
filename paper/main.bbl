@@ -1,69 +1,91 @@
-\begin{thebibliography}{8}
-\providecommand{\natexlab}[1]{#1}
-\providecommand{\url}[1]{\texttt{#1}}
-\expandafter\ifx\csname urlstyle\endcsname\relax
-  \providecommand{\doi}[1]{doi: #1}\else
-  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+\begin{thebibliography}{10}
 
-\bibitem[Contributors(2024)]{serverlessllm_repo}
-ServerlessLLM Contributors.
-\newblock Serverlessllm.
-\newblock \url{https://github.com/ServerlessLLM/ServerlessLLM}, 2024.
-\newblock GitHub repository.
+\bibitem{pagedattention}
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao Yu,
+  Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
+\newblock Efficient memory management for large language model serving with
+  {PagedAttention}.
+\newblock In {\em Proceedings of the 29th ACM Symposium on Operating Systems
+  Principles (SOSP 2023)}. ACM, 2023.
 
-\bibitem[Face(2024)]{safetensors_docs}
+\bibitem{orca}
+Gyeong-In Yu, Joo~Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun.
+\newblock Orca: A distributed serving system for transformer-based generative
+  models.
+\newblock In {\em 16th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 22)}, pages 521--538. USENIX Association, 2022.
+
+\bibitem{sarathi_serve}
+Amey Agrawal, Nitin Kedia, Ashish Panwar, et~al.
+\newblock Taming throughput-latency tradeoff in {LLM} inference with
+  {S}arathi-{S}erve.
+\newblock In {\em Proceedings of the 18th USENIX Symposium on Operating Systems
+  Design and Implementation (OSDI 2024)}. USENIX Association, 2024.
+
+\bibitem{deepspeed_inference_paper}
+Reza~Yazdani Aminabadi et~al.
+\newblock {D}eep{S}peed inference: Enabling efficient inference of transformer
+  models at unprecedented scale.
+\newblock In {\em Proceedings of the International Conference for High
+  Performance Computing, Networking, Storage and Analysis (SC 2022)}. IEEE/ACM,
+  2022.
+
+\bibitem{FU:2024}
+Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov,
+  Yuvraj Patel, and Luo Mai.
+\newblock Serverlessllm: Low-latency serverless inference for large language
+  models.
+\newblock In {\em Proceedings of the 18th USENIX Symposium on Operating Systems
+  Design and Implementation (OSDI 2024)}. USENIX Association, 2024.
+
+\bibitem{hydraserve}
+Anonymous Authors.
+\newblock {H}ydra{S}erve: Minimizing cold start latency for serverless {LLM}
+  serving in public clouds.
+\newblock 2025.
+\newblock arXiv:2502.15524.
+
+\bibitem{silva2021snapshot}
+Paulo Silva and Thiago~Emmanuel Pereira.
+\newblock Performance evaluation of snapshot methods to warm the serverless
+  cold start, 2021.
+
+\bibitem{safetensors_docs}
 Hugging Face.
 \newblock Safetensors documentation.
 \newblock \url{https://huggingface.co/docs/safetensors}, 2024.
 \newblock Accessed: April 2026.
 
-\bibitem[Fu et~al.(2024)Fu, Xue, Huang, Brabete, Ustiugov, Patel, and
-  Mai]{FU:2024}
-Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov,
-  Yuvraj Patel, and Luo Mai.
-\newblock Serverlessllm: Low-latency serverless inference for large language
-  models.
-\newblock In \emph{Proceedings of the 18th USENIX Symposium on Operating
-  Systems Design and Implementation (OSDI 2024)}. USENIX Association, 2024.
-\newblock URL \url{https://www.usenix.org/system/files/osdi24-fu.pdf}.
+\bibitem{serverlessllm_repo}
+ServerlessLLM Contributors.
+\newblock Serverlessllm.
+\newblock \url{https://github.com/ServerlessLLM/ServerlessLLM}, 2024.
+\newblock GitHub repository.
 
-\bibitem[Jasny et~al.(2025)Jasny, El-Hindi, Ziegler, Leis, and
-  Binnig]{IOURING_DATABASE_GUIDELINES}
+\bibitem{blitzscale}
+Zizhao Mo et~al.
+\newblock Blitzscale: Efficient large model serving with elastic {GPU} resource
+  sharing.
+\newblock In {\em Proceedings of the 2024 USENIX Annual Technical Conference
+  (ATC 2024)}. USENIX Association, 2024.
+
+\bibitem{fast26_maio}
+Yubo Liu, Hongbo Li, Xiaojia Huang, Yongfeng Wang, Hanjun Guo, Hui Chen, Yuxin
+  Ren, and Ning Jia.
+\newblock Accelerating model loading in {LLM} inference by programmable page
+  cache.
+\newblock In {\em Proceedings of the 24th USENIX Conference on File and Storage
+  Technologies (FAST 2026)}. USENIX Association, 2026.
+
+\bibitem{arxiv2512_checkpoint_io}
+Nicolas Pretet et~al.
+\newblock Understanding {LLM} checkpoint/restore {I/O} strategies and patterns,
+  2025.
+
+\bibitem{IOURING_DATABASE_GUIDELINES}
 Matthias Jasny, Muhammad El-Hindi, Tobias Ziegler, Viktor Leis, and Carsten
   Binnig.
 \newblock High-performance {DBMS}s with io\_uring: When and how to use it,
   2025.
-\newblock URL \url{https://arxiv.org/abs/2512.04859}.
-
-\bibitem[Kwon et~al.(2023)Kwon, Li, Zhuang, Sheng, Zheng, Yu, Gonzalez, Zhang,
-  and Stoica]{pagedattention}
-Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao Yu,
-  Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
-\newblock Efficient memory management for large language model serving with
-  {PagedAttention}.
-\newblock In \emph{Proceedings of the 29th ACM Symposium on Operating Systems
-  Principles (SOSP 2023)}. ACM, 2023.
-\newblock \doi{10.1145/3600006.3613165}.
-\newblock URL \url{https://arxiv.org/abs/2309.06180}.
-
-\bibitem[Silva and Pereira(2021)]{silva2021snapshot}
-Paulo Silva and Thiago~Emmanuel Pereira.
-\newblock Performance evaluation of snapshot methods to warm the serverless
-  cold start, 2021.
-\newblock URL \url{https://arxiv.org/abs/2105.13894}.
-
-\bibitem[Society(2023)]{bcs_code}
-British~Computer Society.
-\newblock Code of conduct for professional engineers.
-\newblock \url{https://www.bcs.org/media/4411/code-of-conduct.pdf}, 2023.
-\newblock Accessed: April 2026.
-
-\bibitem[Yu et~al.(2022)Yu, Jeong, Kim, Kim, and Chun]{orca}
-Gyeong-In Yu, Joo~Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun.
-\newblock Orca: A distributed serving system for transformer-based generative
-  models.
-\newblock In \emph{16th USENIX Symposium on Operating Systems Design and
-  Implementation (OSDI 22)}, pages 521--538. USENIX Association, 2022.
-\newblock URL \url{https://www.usenix.org/conference/osdi22/presentation/yu}.
 
 \end{thebibliography}
