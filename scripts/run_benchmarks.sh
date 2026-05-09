@@ -83,9 +83,15 @@ for model_id in "${models[@]}"; do
     echo ""
     echo "==> Running vLLM benchmarks for ${model_id}"
 
+    vllm_pytest_args=()
+    if [[ -n "${TENSORA_BENCH_SKIP_LOADERS:-}" ]]; then
+      vllm_pytest_args+=("-k" "not (${TENSORA_BENCH_SKIP_LOADERS})")
+    fi
+
     if ! uv --directory "${py_dir}" run pytest \
       benchmarks/bench_vllm.py \
       -v \
+      "${vllm_pytest_args[@]}" \
       --model-id "${model_id}" \
       --cache-dir "${cache_dir}" \
       --benchmark-json="${bench_json}.vllm" \
