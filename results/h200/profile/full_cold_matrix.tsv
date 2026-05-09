@@ -15,10 +15,10 @@ HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	3945.68	326	6150197248
 HuggingFaceTB/SmolLM3-3B	serverlessllm	async	1947.39	326	6150197248
 HuggingFaceTB/SmolLM3-3B	serverlessllm	io-uring			
 HuggingFaceTB/SmolLM3-3B	serverlessllm	default	1987.07	326	6150197248
-Qwen/Qwen3-4B	safetensors	sync	2467.55	398	0
-Qwen/Qwen3-4B	safetensors	async	2316.47	398	0
+Qwen/Qwen3-4B	safetensors	sync	909.83	398	0
+Qwen/Qwen3-4B	safetensors	async	2478.10	398	0
 Qwen/Qwen3-4B	safetensors	io-uring			
-Qwen/Qwen3-4B	safetensors	default	970.34	398	0
+Qwen/Qwen3-4B	safetensors	default	941.24	398	0
 Qwen/Qwen3-4B	serverlessllm	sync	5100.25	398	8044936192
 Qwen/Qwen3-4B	serverlessllm	async	2489.27	398	8044936192
 Qwen/Qwen3-4B	serverlessllm	io-uring			
