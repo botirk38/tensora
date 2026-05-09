@@ -2,48 +2,48 @@ model	format	backend	time_ms	tensors	bytes
 Qwen/Qwen3-0.6B	safetensors	sync	604.34	311	0
 Qwen/Qwen3-0.6B	safetensors	async	852.17	311	0
 Qwen/Qwen3-0.6B	safetensors	io-uring			
-Qwen/Qwen3-0.6B	safetensors	default	104.97	311	0
+Qwen/Qwen3-0.6B	safetensors	default	649.23	311	0
 Qwen/Qwen3-0.6B	serverlessllm	sync	1565.27	311	1503264768
 Qwen/Qwen3-0.6B	serverlessllm	async	1491.44	311	1503264768
 Qwen/Qwen3-0.6B	serverlessllm	io-uring			
-Qwen/Qwen3-0.6B	serverlessllm	default			
+Qwen/Qwen3-0.6B	serverlessllm	default	1586.84	311	1503264768
 HuggingFaceTB/SmolLM3-3B	safetensors	sync	2013.66	326	0
 HuggingFaceTB/SmolLM3-3B	safetensors	async	2938.30	326	0
 HuggingFaceTB/SmolLM3-3B	safetensors	io-uring			
-HuggingFaceTB/SmolLM3-3B	safetensors	default	553.95	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	2130.51	326	0
 HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	3945.68	326	6150197248
 HuggingFaceTB/SmolLM3-3B	serverlessllm	async	1947.39	326	6150197248
 HuggingFaceTB/SmolLM3-3B	serverlessllm	io-uring			
-HuggingFaceTB/SmolLM3-3B	serverlessllm	default			
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	1987.07	326	6150197248
 Qwen/Qwen3-4B	safetensors	sync	2467.55	398	0
 Qwen/Qwen3-4B	safetensors	async	2316.47	398	0
 Qwen/Qwen3-4B	safetensors	io-uring			
-Qwen/Qwen3-4B	safetensors	default	1076.08	398	0
+Qwen/Qwen3-4B	safetensors	default	970.34	398	0
 Qwen/Qwen3-4B	serverlessllm	sync	5100.25	398	8044936192
 Qwen/Qwen3-4B	serverlessllm	async	2489.27	398	8044936192
 Qwen/Qwen3-4B	serverlessllm	io-uring			
-Qwen/Qwen3-4B	serverlessllm	default			
+Qwen/Qwen3-4B	serverlessllm	default	2809.79	398	8044936192
 Qwen/Qwen3-8B	safetensors	sync	3924.69	399	0
 Qwen/Qwen3-8B	safetensors	async	2977.59	399	0
 Qwen/Qwen3-8B	safetensors	io-uring			
-Qwen/Qwen3-8B	safetensors	default	4195.30	399	0
+Qwen/Qwen3-8B	safetensors	default	3213.01	399	0
 Qwen/Qwen3-8B	serverlessllm	sync	10788.88	399	16381470720
 Qwen/Qwen3-8B	serverlessllm	async	6045.47	399	16381470720
 Qwen/Qwen3-8B	serverlessllm	io-uring			
-Qwen/Qwen3-8B	serverlessllm	default			
+Qwen/Qwen3-8B	serverlessllm	default	6098.06	399	16381470720
 Qwen/Qwen3-14B	safetensors	sync	25872.03	443	0
 Qwen/Qwen3-14B	safetensors	async	4767.67	443	0
 Qwen/Qwen3-14B	safetensors	io-uring			
-Qwen/Qwen3-14B	safetensors	default	12423.02	443	0
+Qwen/Qwen3-14B	safetensors	default	4906.13	443	0
 Qwen/Qwen3-14B	serverlessllm	sync	17765.28	443	29536614400
 Qwen/Qwen3-14B	serverlessllm	async	14450.40	443	29536614400
 Qwen/Qwen3-14B	serverlessllm	io-uring			
-Qwen/Qwen3-14B	serverlessllm	default			
+Qwen/Qwen3-14B	serverlessllm	default	15453.47	443	29536614400
 Qwen/Qwen3-32B	safetensors	sync	36205.91	707	0
 Qwen/Qwen3-32B	safetensors	async	10623.83	707	0
 Qwen/Qwen3-32B	safetensors	io-uring			
-Qwen/Qwen3-32B	safetensors	default	25886.30	707	0
+Qwen/Qwen3-32B	safetensors	default	12356.23	707	0
 Qwen/Qwen3-32B	serverlessllm	sync	39061.57	707	65524246528
 Qwen/Qwen3-32B	serverlessllm	async	27367.74	707	65524246528
 Qwen/Qwen3-32B	serverlessllm	io-uring			
-Qwen/Qwen3-32B	serverlessllm	default			
+Qwen/Qwen3-32B	serverlessllm	default	24259.15	707	65524246528
