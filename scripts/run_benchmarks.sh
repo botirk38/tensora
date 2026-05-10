@@ -83,6 +83,11 @@ for model_id in "${models[@]}"; do
     echo ""
     echo "==> Running vLLM benchmarks for ${model_id}"
 
+    # Kill lingering vLLM engine processes from previous tests to free GPU memory
+    pkill -9 -f "EngineCore" 2>/dev/null || true
+    pkill -9 -f "VLLM" 2>/dev/null || true
+    sleep 5
+
     vllm_pytest_args=()
     if [[ -n "${TENSORA_BENCH_SKIP_LOADERS:-}" ]]; then
       vllm_pytest_args+=("-k" "not (${TENSORA_BENCH_SKIP_LOADERS})")
@@ -98,6 +103,11 @@ for model_id in "${models[@]}"; do
       --benchmark-min-rounds=1; then
       echo "WARNING: vLLM tests failed for ${model_id}; continuing"
     fi
+
+    # Clean up GPU after vLLM run
+    pkill -9 -f "EngineCore" 2>/dev/null || true
+    pkill -9 -f "VLLM" 2>/dev/null || true
+    sleep 5
   fi
 
   echo "==> Completed ${model_id}"

@@ -5,8 +5,11 @@ Uses explicit loaders via vLLM's registered model loader mechanism.
 """
 
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +29,17 @@ def _drop_linux_page_cache() -> None:
         drop.write_text("3", encoding="utf-8")
     except OSError:
         pass
+
+
+def _kill_vllm_processes() -> None:
+    """Kill lingering vLLM engine processes to free GPU memory between tests."""
+    for pattern in ("EngineCore", "VLLM"):
+        subprocess.run(
+            ["pkill", "-9", "-f", pattern],
+            capture_output=True,
+            timeout=10,
+        )
+    time.sleep(3)
 
 
 @pytest.mark.parametrize("loader", LOADERS)
@@ -66,9 +80,15 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
                     pass
         raise RuntimeError("Could not parse JSON from vLLM runner")
 
+    # Kill lingering engine processes before starting to ensure clean GPU state
+    _kill_vllm_processes()
+
     # One subprocess load per test: default benchmark(...) repeats many rounds and would
     # relaunch vLLM repeatedly (OOM / spurious failures / huge runtime).
-    data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
+    try:
+        data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
+    finally:
+        _kill_vllm_processes()
 
     if benchmark_kind == "load_only":
         assert "init_ms" in data
