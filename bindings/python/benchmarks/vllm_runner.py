@@ -64,6 +64,19 @@ def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
     return base_kwargs
 
 
+def _cleanup_engine(llm: object) -> None:
+    """Shut down a vLLM LLM instance and release GPU memory."""
+    import gc
+
+    import torch
+
+    del llm
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+
 def run_benchmark(
     model_id: str,
     loader: str,
@@ -104,35 +117,40 @@ def run_benchmark(
     init_ms = (init_end - init_start) * 1000
     results = {"init_ms": init_ms}
 
-    if benchmark_kind == "load_only":
+    try:
+        if benchmark_kind == "load_only":
+            return results
+
+        if benchmark_kind == "ttft":
+            generation_start = time.perf_counter()
+            sampling_params = SamplingParams(max_tokens=num_tokens)
+            _ = llm.generate("Hello, my name is", sampling_params=sampling_params)
+            generation_end = time.perf_counter()
+            first_token_ms = (generation_end - generation_start) * 1000
+            results["first_token_ms"] = first_token_ms
+            results["ttft_ms"] = init_ms + first_token_ms
+
+        if benchmark_kind == "steady_state_decode":
+            warmup_params = SamplingParams(max_tokens=8)
+            _ = llm.generate(
+                "The quick brown fox jumps over the lazy dog.", warmup_params
+            )
+
+            decode_times = []
+            for _ in range(5):
+                decode_start = time.perf_counter()
+                sampling_params = SamplingParams(max_tokens=8)
+                _ = llm.generate("Hello", sampling_params=sampling_params)
+                decode_end = time.perf_counter()
+                decode_times.append((decode_end - decode_start) * 1000)
+
+            results["decode_avg_ms"] = sum(decode_times) / len(decode_times)
+            results["decode_min_ms"] = min(decode_times)
+            results["decode_max_ms"] = max(decode_times)
+
         return results
-
-    if benchmark_kind == "ttft":
-        generation_start = time.perf_counter()
-        sampling_params = SamplingParams(max_tokens=num_tokens)
-        _ = llm.generate("Hello, my name is", sampling_params=sampling_params)
-        generation_end = time.perf_counter()
-        first_token_ms = (generation_end - generation_start) * 1000
-        results["first_token_ms"] = first_token_ms
-        results["ttft_ms"] = init_ms + first_token_ms
-
-    if benchmark_kind == "steady_state_decode":
-        warmup_params = SamplingParams(max_tokens=8)
-        _ = llm.generate("The quick brown fox jumps over the lazy dog.", warmup_params)
-
-        decode_times = []
-        for _ in range(5):
-            decode_start = time.perf_counter()
-            sampling_params = SamplingParams(max_tokens=8)
-            _ = llm.generate("Hello", sampling_params=sampling_params)
-            decode_end = time.perf_counter()
-            decode_times.append((decode_end - decode_start) * 1000)
-
-        results["decode_avg_ms"] = sum(decode_times) / len(decode_times)
-        results["decode_min_ms"] = min(decode_times)
-        results["decode_max_ms"] = max(decode_times)
-
-    return results
+    finally:
+        _cleanup_engine(llm)
 
 
 def main():

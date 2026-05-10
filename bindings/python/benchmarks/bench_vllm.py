@@ -5,11 +5,8 @@ Uses explicit loaders via vLLM's registered model loader mechanism.
 """
 
 import json
-import os
-import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -40,7 +37,7 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
     def run_subprocess():
         if cache_mode == "cold":
             _drop_linux_page_cache()
-        proc = subprocess.Popen(
+        result = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -52,29 +49,15 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
                 "--model-id",
                 model_id,
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
-            start_new_session=True,
+            timeout=1200,
         )
-        try:
-            stdout, stderr = proc.communicate(timeout=1200)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait()
-            raise
-        finally:
-            # Kill the entire process group to clean up EngineCore children
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
-            time.sleep(3)
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"vLLM subprocess failed: {stderr}")
+        if result.returncode != 0:
+            raise RuntimeError(f"vLLM subprocess failed: {result.stderr}")
 
-        for line in reversed(stdout.strip().split("\n")):
+        for line in reversed(result.stdout.strip().split("\n")):
             line = line.strip()
             if line.startswith("{"):
                 try:
