@@ -31,17 +31,6 @@ def _drop_linux_page_cache() -> None:
         pass
 
 
-def _kill_vllm_processes() -> None:
-    """Kill lingering vLLM engine processes to free GPU memory between tests."""
-    for pattern in ("EngineCore", "VLLM"):
-        subprocess.run(
-            ["pkill", "-9", "-f", pattern],
-            capture_output=True,
-            timeout=10,
-        )
-    time.sleep(3)
-
-
 @pytest.mark.parametrize("loader", LOADERS)
 @pytest.mark.parametrize("benchmark_kind", BENCHMARK_KINDS)
 @pytest.mark.parametrize("cache_mode", CACHE_MODES)
@@ -51,7 +40,7 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
     def run_subprocess():
         if cache_mode == "cold":
             _drop_linux_page_cache()
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
@@ -63,15 +52,29 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
                 "--model-id",
                 model_id,
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=600,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=1200)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+            raise
+        finally:
+            # Kill the entire process group to clean up EngineCore children
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            time.sleep(3)
 
-        if result.returncode != 0:
-            raise RuntimeError(f"vLLM subprocess failed: {result.stderr}")
+        if proc.returncode != 0:
+            raise RuntimeError(f"vLLM subprocess failed: {stderr}")
 
-        for line in reversed(result.stdout.strip().split("\n")):
+        for line in reversed(stdout.strip().split("\n")):
             line = line.strip()
             if line.startswith("{"):
                 try:
@@ -80,15 +83,9 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
                     pass
         raise RuntimeError("Could not parse JSON from vLLM runner")
 
-    # Kill lingering engine processes before starting to ensure clean GPU state
-    _kill_vllm_processes()
-
     # One subprocess load per test: default benchmark(...) repeats many rounds and would
     # relaunch vLLM repeatedly (OOM / spurious failures / huge runtime).
-    try:
-        data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
-    finally:
-        _kill_vllm_processes()
+    data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
 
     if benchmark_kind == "load_only":
         assert "init_ms" in data
