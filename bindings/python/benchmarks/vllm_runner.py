@@ -6,10 +6,15 @@ Usage:
 Output is machine-readable JSON for parsing by benchmark harness.
 """
 
+# Must be set before any huggingface_hub import so constants.py
+# reads the flag at module scope.  The xet background writer thread
+# cannot survive the multiprocessing.fork() used by vLLM 0.20.2.
+import os
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 
@@ -84,10 +89,6 @@ def run_benchmark(
 
     os.environ["VLLM_LOGGING_LEVEL"] = "CRITICAL"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    # Disable the xet/hf_transfer download protocol.  vLLM 0.20.2 forks
-    # EngineCore via multiprocessing; the xet background writer thread
-    # cannot survive the fork and raises "Background writer channel closed".
-    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
     config = LOADER_CONFIG.get(loader)
 
