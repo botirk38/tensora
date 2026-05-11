@@ -64,25 +64,6 @@ def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
     return base_kwargs
 
 
-def _cleanup_engine(llm: object) -> None:
-    """Shut down a vLLM LLM instance and release GPU memory.
-
-    vLLM freezes the GC during engine init (gc.freeze()) to avoid scanning
-    large model weights.  EngineCore.shutdown() calls gc.unfreeze() so
-    those objects become visible to the collector again.
-    """
-    import gc
-
-    import torch
-
-    llm.llm_engine.engine_core.shutdown()
-    del llm
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-
-
 def run_benchmark(
     model_id: str,
     loader: str,
@@ -90,7 +71,10 @@ def run_benchmark(
     num_tokens: int = 1,
 ) -> dict:
     """Run vLLM benchmark and return timing results."""
+    import gc
     import warnings
+
+    import torch
 
     warnings.filterwarnings("ignore")
 
@@ -156,7 +140,17 @@ def run_benchmark(
 
         return results
     finally:
-        _cleanup_engine(llm)
+        # Shut down the EngineCore child process and release GPU memory.
+        # vLLM 0.20.2 freezes the GC during init (gc.freeze()) so model
+        # weights are invisible to the collector.  shutdown() calls
+        # gc.unfreeze() and terminates the EngineCore process.  We must
+        # del the local before gc.collect() so refcount drops to zero.
+        llm.llm_engine.engine_core.shutdown(timeout=10)
+        del llm
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
 
 def main():
