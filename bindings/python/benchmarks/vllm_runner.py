@@ -41,7 +41,7 @@ LOADER_CONFIG = {
 }
 
 
-def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
+def get_llm_kwargs(model_id: str) -> dict:
     """Get vLLM engine kwargs, with model-specific memory settings."""
     base_kwargs = {
         "model": model_id,
@@ -50,15 +50,12 @@ def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
         "enforce_eager": True,
     }
 
-    is_custom = loader and loader.startswith("ts_")
-
     if "8B" in model_id or "8b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.70
     elif "14B" in model_id or "14b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.50
     elif "32B" in model_id or "32b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.95
-        base_kwargs["max_model_len"] = 16384
     elif (
         "72B" in model_id or "72b" in model_id or "70B" in model_id or "70b" in model_id
     ):
@@ -100,7 +97,7 @@ def run_benchmark(
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
 
-    llm_kwargs = get_llm_kwargs(model_id, loader)
+    llm_kwargs = get_llm_kwargs(model_id)
 
     if config is not None:
         llm_kwargs["load_format"] = "tensora"
