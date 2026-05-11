@@ -7,6 +7,7 @@ Uses explicit loaders via vLLM's registered model loader mechanism.
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,32 @@ import pytest
 from benchmarks.vllm_runner import BENCHMARK_KINDS, LOADERS
 
 CACHE_MODES = ["warm", "cold"]
+
+_GPU_FREE_TIMEOUT = 30
+
+
+def _wait_for_gpu_idle() -> None:
+    """Poll nvidia-smi until GPU memory is <5% used, up to timeout."""
+    deadline = time.monotonic() + _GPU_FREE_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            r = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode == 0:
+                used, total = (int(x) for x in r.stdout.strip().split(","))
+                if used < total * 0.05:
+                    return
+        except (OSError, ValueError):
+            pass
+        time.sleep(2)
 
 
 def _drop_linux_page_cache() -> None:
@@ -51,8 +78,10 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
             ],
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=1200,
         )
+
+        _wait_for_gpu_idle()
 
         if result.returncode != 0:
             raise RuntimeError(f"vLLM subprocess failed: {result.stderr}")
@@ -69,6 +98,7 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
     # One subprocess load per test: default benchmark(...) repeats many rounds and would
     # relaunch vLLM repeatedly (OOM / spurious failures / huge runtime).
     data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
+    benchmark.extra_info.update(data)
 
     if benchmark_kind == "load_only":
         assert "init_ms" in data

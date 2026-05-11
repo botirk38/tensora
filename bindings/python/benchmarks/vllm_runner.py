@@ -6,10 +6,15 @@ Usage:
 Output is machine-readable JSON for parsing by benchmark harness.
 """
 
+# Must be set before any huggingface_hub import so constants.py
+# reads the flag at module scope.  The xet background writer thread
+# cannot survive the multiprocessing.fork() used by vLLM 0.20.2.
+import os
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 
@@ -36,7 +41,7 @@ LOADER_CONFIG = {
 }
 
 
-def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
+def get_llm_kwargs(model_id: str) -> dict:
     """Get vLLM engine kwargs, with model-specific memory settings."""
     base_kwargs = {
         "model": model_id,
@@ -45,15 +50,12 @@ def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
         "enforce_eager": True,
     }
 
-    is_custom = loader and loader.startswith("ts_")
-
     if "8B" in model_id or "8b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.70
     elif "14B" in model_id or "14b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.50
     elif "32B" in model_id or "32b" in model_id:
         base_kwargs["gpu_memory_utilization"] = 0.95
-        base_kwargs["max_model_len"] = 16384
     elif (
         "72B" in model_id or "72b" in model_id or "70B" in model_id or "70b" in model_id
     ):
@@ -71,7 +73,10 @@ def run_benchmark(
     num_tokens: int = 1,
 ) -> dict:
     """Run vLLM benchmark and return timing results."""
+    import gc
     import warnings
+
+    import torch
 
     warnings.filterwarnings("ignore")
 
@@ -92,7 +97,7 @@ def run_benchmark(
     from vllm import LLM
     from vllm.sampling_params import SamplingParams
 
-    llm_kwargs = get_llm_kwargs(model_id, loader)
+    llm_kwargs = get_llm_kwargs(model_id)
 
     if config is not None:
         llm_kwargs["load_format"] = "tensora"
@@ -104,35 +109,50 @@ def run_benchmark(
     init_ms = (init_end - init_start) * 1000
     results = {"init_ms": init_ms}
 
-    if benchmark_kind == "load_only":
+    try:
+        if benchmark_kind == "load_only":
+            return results
+
+        if benchmark_kind == "ttft":
+            generation_start = time.perf_counter()
+            sampling_params = SamplingParams(max_tokens=num_tokens)
+            _ = llm.generate("Hello, my name is", sampling_params=sampling_params)
+            generation_end = time.perf_counter()
+            first_token_ms = (generation_end - generation_start) * 1000
+            results["first_token_ms"] = first_token_ms
+            results["ttft_ms"] = init_ms + first_token_ms
+
+        if benchmark_kind == "steady_state_decode":
+            warmup_params = SamplingParams(max_tokens=8)
+            _ = llm.generate(
+                "The quick brown fox jumps over the lazy dog.", warmup_params
+            )
+
+            decode_times = []
+            for _ in range(5):
+                decode_start = time.perf_counter()
+                sampling_params = SamplingParams(max_tokens=8)
+                _ = llm.generate("Hello", sampling_params=sampling_params)
+                decode_end = time.perf_counter()
+                decode_times.append((decode_end - decode_start) * 1000)
+
+            results["decode_avg_ms"] = sum(decode_times) / len(decode_times)
+            results["decode_min_ms"] = min(decode_times)
+            results["decode_max_ms"] = max(decode_times)
+
         return results
-
-    if benchmark_kind == "ttft":
-        generation_start = time.perf_counter()
-        sampling_params = SamplingParams(max_tokens=num_tokens)
-        _ = llm.generate("Hello, my name is", sampling_params=sampling_params)
-        generation_end = time.perf_counter()
-        first_token_ms = (generation_end - generation_start) * 1000
-        results["first_token_ms"] = first_token_ms
-        results["ttft_ms"] = init_ms + first_token_ms
-
-    if benchmark_kind == "steady_state_decode":
-        warmup_params = SamplingParams(max_tokens=8)
-        _ = llm.generate("The quick brown fox jumps over the lazy dog.", warmup_params)
-
-        decode_times = []
-        for _ in range(5):
-            decode_start = time.perf_counter()
-            sampling_params = SamplingParams(max_tokens=8)
-            _ = llm.generate("Hello", sampling_params=sampling_params)
-            decode_end = time.perf_counter()
-            decode_times.append((decode_end - decode_start) * 1000)
-
-        results["decode_avg_ms"] = sum(decode_times) / len(decode_times)
-        results["decode_min_ms"] = min(decode_times)
-        results["decode_max_ms"] = max(decode_times)
-
-    return results
+    finally:
+        # Shut down the EngineCore child process and release GPU memory.
+        # vLLM 0.20.2 freezes the GC during init (gc.freeze()) so model
+        # weights are invisible to the collector.  shutdown() calls
+        # gc.unfreeze() and terminates the EngineCore process.  We must
+        # del the local before gc.collect() so refcount drops to zero.
+        llm.llm_engine.engine_core.shutdown(timeout=10)
+        del llm
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
 
 def main():

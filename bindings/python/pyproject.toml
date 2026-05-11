@@ -39,16 +39,17 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-benchmark>=5.2.3",
     "safetensors>=0.7.0",
-    "huggingface_hub>=0.20.0",
+    "huggingface_hub>=1.2.0",
 ]
 torch = [
     "torch>=2.1",
-    "transformers>=4.45,<5.0",
+    "transformers>=4.45",
     "accelerate>=0.20.0",
 ]
 vllm = [
-    "vllm>=0.6.0",
+    "vllm>=0.20.2",
     "torch>=2.1",
     "accelerate>=0.20.0",
-    "transformers>=4.45,<5.0",
+    "transformers>=4.45",
+    "huggingface_hub>=1.2.0",
 ]

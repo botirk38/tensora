@@ -24,19 +24,19 @@ cargo run --release --bin profile -- <format> <backend> \
 
 \noindent where \texttt{<format>} is \texttt{safetensors} or \texttt{serverlessllm}, and \texttt{<backend>} is \texttt{sync}, \texttt{async}, \texttt{io-uring}, or \texttt{default}. The fixture name refers to a directory under \texttt{fixtures/} (for example, \texttt{qwen-qwen3-8b}), populated via \texttt{scripts/download\_models.py} and, for ServerlessLLM, the repository's conversion steps.
 
-Cold-cache runs use \texttt{--iterations 1} with the cache-drop procedure in Section~\ref{sec:experimental_setup}. The published full cold matrix (\path{results/h100/profile/full_cold_matrix.tsv}) was produced by looping formats, fixtures, and backends with \texttt{sync} and \texttt{echo 3 > /proc/sys/vm/drop\_caches} before each \texttt{profile} invocation; replicate by driving the same binary with the same ritual rather than expecting a fixed shell driver in the repository.
+Cold-cache runs use \texttt{--iterations 1} with the cache-drop procedure in Section~\ref{sec:experimental_setup}. The published full cold matrix (\path{results/h100/rust.tsv}) was produced by looping formats, fixtures, and backends with \texttt{sync} and \texttt{echo 3 > /proc/sys/vm/drop\_caches} before each \texttt{profile} invocation; replicate by driving the same binary with the same ritual rather than expecting a fixed shell driver in the repository.
 
-Five-repetition anchors for selected models (\path{results/h100/profile/anchor_reps.tsv}) used the same \texttt{profile} invocation and cache-drop procedure repeated five times per anchor to sanity-check variance; main tables use representative single cold-cache rows per cell.
+Five-repetition anchors for selected models (\path{results/h100/anchor.tsv}) used the same \texttt{profile} invocation and cache-drop procedure repeated five times per anchor to sanity-check variance; main tables use representative single cold-cache rows per cell.
 
 \subsection{Python and vLLM harnesses}
 
 Python benchmarks call the public binding API under \path{bindings/python/benchmarks/} (for example \texttt{uv run pytest benchmarks/...}), with optional extras when Torch or vLLM are required.
-The repository provides \path{scripts/run\_benchmarks.sh}, which runs the pytest suites and writes one JSON file per model under \path{results/benchmarks/} as \texttt{pytest\_benchmark\_<slug>.json} (\textbf{slug}: hub id with ``\texttt{/}'' $\rightarrow$ ``\texttt{-}'').
+The repository provides \path{scripts/run\_benchmarks.sh}, which runs the pytest suites and writes one JSON file per model under \path{results/<env>/raw/} as \texttt{<size>.<type>.json} (\textbf{slug}: hub id with ``\texttt{/}'' $\rightarrow$ ``\texttt{-}'').
 Set \texttt{TENSOR\_STORE\_BENCH\_MODELS} to Hugging Face model ids (space- or comma-separated). Optional \texttt{TENSOR\_STORE\_BENCH\_JSON} selects output; each run uses a distinct \texttt{--cache-dir} to keep parallel jobs safe.
 When vLLM benchmarks are enabled, the script runs one model at a time. For the six-model ladder (Section~\ref{sec:experimental_setup}), \path{scripts/paper\_pytest\_ladder.sh} sets \texttt{TENSOR\_STORE\_BENCH\_MODELS} and invokes \texttt{run\_benchmarks.sh}.
-Archived exports also appear under \path{results/h100/python/} for traceability.
+Archived exports also appear under \path{results/h100/raw/} for traceability.
 
-vLLM runs use the pytest integration under \texttt{bindings/python/benchmarks/bench\_vllm.py}, invoked via \texttt{scripts/run\_benchmarks.sh} (or manual \texttt{uv run pytest} with the same flags). Large matrices archived under \texttt{results/h100/vllm/} were produced on a dedicated host by sweeping loaders, fixtures, and kinds (\texttt{load\_only}, \texttt{TTFT}, \texttt{steady\_state\_decode}), with \texttt{sync} and cache drops before cold conditions; reproduce the procedure rather than a removed batch script.
+vLLM runs use the pytest integration under \texttt{bindings/python/benchmarks/bench\_vllm.py}, invoked via \texttt{scripts/run\_benchmarks.sh} (or manual \texttt{uv run pytest} with the same flags). Large matrices archived under \texttt{results/h100/vllm.tsv} were produced on a dedicated host by sweeping loaders, fixtures, and kinds (\texttt{load\_only}, \texttt{TTFT}, \texttt{steady\_state\_decode}), with \texttt{sync} and cache drops before cold conditions; reproduce the procedure rather than a removed batch script.
 
 \subsection{Environment pins}
 
@@ -55,7 +55,7 @@ Dropping the page cache requires \texttt{/proc/sys/vm/drop\_caches} (typically p
 \section{Cold-cache anchor statistics}
 \label{app:anchor-stats}
 
-Table~\ref{tab:anchor-summary} summarises five cold-cache repetitions for selected anchors; the source file is \path{results/h100/profile/anchor_reps.tsv}. Median wall-clock time is reported with the min--max band across repetitions. These anchors motivated selector thresholds; the main matrices still use one representative cold run per cell for presentation.
+Table~\ref{tab:anchor-summary} summarises five cold-cache repetitions for selected anchors; the source file is \path{results/h100/anchor.tsv}. Median wall-clock time is reported with the min--max band across repetitions. These anchors motivated selector thresholds; the main matrices still use one representative cold run per cell for presentation.
 
 \begin{table}[htbp]
 \centering
@@ -80,4 +80,4 @@ Qwen3-8B & ServerlessLLM & default & 8059.26 & 7586.28--9143.26 \\
 \section{Artefact layout}
 \label{app:artefact-layout}
 
-Rust results sit under \path{results/h100/profile/}; Python benchmark JSON under \path{results/h100/python/} where applicable; vLLM outputs under \path{results/h100/vllm/}. That separation preserves the distinction between backend attribution (Rust), binding cost (Python), and serving-stack effects (vLLM).
+Each environment directory (\path{results/h100/}, \path{results/h200/}, \path{results/a100/}) contains \texttt{rust.tsv} (Rust-layer cold-cache profiles), \texttt{vllm.tsv} (vLLM integration benchmarks), \texttt{anchor.tsv} (repetition anchors where available), and \texttt{raw/} (pytest-benchmark JSON artefacts).

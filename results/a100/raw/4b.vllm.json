@@ -1,0 +1,1470 @@
+{
+    "machine_info": {
+        "node": "7d0ccbcae3f4",
+        "processor": "x86_64",
+        "machine": "x86_64",
+        "python_compiler": "Clang 22.1.3 ",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.13",
+        "python_version": "3.12.13",
+        "python_build": [
+            "main",
+            "May  8 2026 18:32:55"
+        ],
+        "release": "6.5.0-45-generic",
+        "system": "Linux",
+        "cpu": {
+            "python_version": "3.12.13.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "X86_64",
+            "bits": 64,
+            "count": 128,
+            "arch_string_raw": "x86_64",
+            "vendor_id_raw": "AuthenticAMD",
+            "brand_raw": "AMD EPYC 7543 32-Core Processor",
+            "hz_advertised_friendly": "1.5000 GHz",
+            "hz_actual_friendly": "1.5000 GHz",
+            "hz_advertised": [
+                1500000000,
+                0
+            ],
+            "hz_actual": [
+                1500000000,
+                0
+            ],
+            "stepping": 1,
+            "model": 1,
+            "family": 25,
+            "flags": [
+                "3dnowext",
+                "3dnowprefetch",
+                "abm",
+                "adx",
+                "aes",
+                "amd_ppin",
+                "aperfmperf",
+                "apic",
+                "arat",
+                "avx",
+                "avx2",
+                "bmi1",
+                "bmi2",
+                "bpext",
+                "brs",
+                "cat_l3",
+                "cdp_l3",
+                "clflush",
+                "clflushopt",
+                "clwb",
+                "clzero",
+                "cmov",
+                "cmp_legacy",
+                "constant_tsc",
+                "cpb",
+                "cpuid",
+                "cqm",
+                "cqm_llc",
+                "cqm_mbm_local",
+                "cqm_mbm_total",
+                "cqm_occup_llc",
+                "cr8_legacy",
+                "cx16",
+                "cx8",
+                "dbx",
+                "de",
+                "decodeassists",
+                "extapic",
+                "extd_apicid",
+                "f16c",
+                "flushbyasid",
+                "fma",
+                "fpu",
+                "fsgsbase",
+                "fxsr",
+                "fxsr_opt",
+                "ht",
+                "hw_pstate",
+                "ibpb",
+                "ibrs",
+                "ibs",
+                "invpcid",
+                "invpcid_single",
+                "irperf",
+                "lahf_lm",
+                "lbrv",
+                "lm",
+                "mba",
+                "mca",
+                "mce",
+                "misalignsse",
+                "mmx",
+                "mmxext",
+                "monitor",
+                "movbe",
+                "msr",
+                "mtrr",
+                "mwaitx",
+                "nonstop_tsc",
+                "nopl",
+                "npt",
+                "nrip_save",
+                "nx",
+                "ospke",
+                "osvw",
+                "osxsave",
+                "overflow_recov",
+                "pae",
+                "pat",
+                "pausefilter",
+                "pci_l2i",
+                "pcid",
+                "pclmulqdq",
+                "pdpe1gb",
+                "perfctr_core",
+                "perfctr_llc",
+                "perfctr_nb",
+                "pfthreshold",
+                "pge",
+                "pku",
+                "pni",
+                "popcnt",
+                "pqe",
+                "pqm",
+                "pse",
+                "pse36",
+                "rapl",
+                "rdpid",
+                "rdpru",
+                "rdrand",
+                "rdrnd",
+                "rdseed",
+                "rdt_a",
+                "rdtscp",
+                "rep_good",
+                "sep",
+                "sha",
+                "sha_ni",
+                "skinit",
+                "smap",
+                "smca",
+                "smep",
+                "ssbd",
+                "sse",
+                "sse2",
+                "sse4_1",
+                "sse4_2",
+                "sse4a",
+                "ssse3",
+                "stibp",
+                "succor",
+                "svm",
+                "svm_lock",
+                "syscall",
+                "tce",
+                "topoext",
+                "tsc",
+                "tsc_scale",
+                "umip",
+                "v_spec_ctrl",
+                "v_vmsave_vmload",
+                "vaes",
+                "vgif",
+                "vmcb_clean",
+                "vme",
+                "vmmcall",
+                "vpclmulqdq",
+                "wbnoinvd",
+                "wdt",
+                "xgetbv1",
+                "xsave",
+                "xsavec",
+                "xsaveerptr",
+                "xsaveopt",
+                "xsaves"
+            ],
+            "l3_cache_size": 524288,
+            "l2_cache_size": 33554432,
+            "l1_data_cache_size": 2097152,
+            "l1_instruction_cache_size": 2097152,
+            "l2_cache_line_size": 512,
+            "l2_cache_associativity": 6
+        }
+    },
+    "commit_info": {
+        "id": "dcaf37afaf0ca3b777524a7974868e44638b691d",
+        "time": "2026-05-09T17:51:14+01:00",
+        "author_time": "2026-05-09T17:51:14+01:00",
+        "dirty": false,
+        "project": "tensora",
+        "branch": "main"
+    },
+    "benchmarks": [
+        {
+            "group": null,
+            "name": "test_vllm[warm-load_only-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-load_only-native]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "load_only",
+                "loader": "native"
+            },
+            "param": "warm-load_only-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 172.86215063929558,
+                "max": 172.86215063929558,
+                "mean": 172.86215063929558,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 172.86215063929558,
+                "iqr": 0.0,
+                "q1": 172.86215063929558,
+                "q3": 172.86215063929558,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 172.86215063929558,
+                "hd15iqr": 172.86215063929558,
+                "ops": 0.005784956373050451,
+                "total": 172.86215063929558,
+                "data": [
+                    172.86215063929558
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-load_only-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-load_only-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "load_only",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "warm-load_only-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 164.95904172956944,
+                "max": 164.95904172956944,
+                "mean": 164.95904172956944,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 164.95904172956944,
+                "iqr": 0.0,
+                "q1": 164.95904172956944,
+                "q3": 164.95904172956944,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 164.95904172956944,
+                "hd15iqr": 164.95904172956944,
+                "ops": 0.00606211087016,
+                "total": 164.95904172956944,
+                "data": [
+                    164.95904172956944
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-load_only-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-load_only-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "load_only",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "warm-load_only-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 163.39784057438374,
+                "max": 163.39784057438374,
+                "mean": 163.39784057438374,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 163.39784057438374,
+                "iqr": 0.0,
+                "q1": 163.39784057438374,
+                "q3": 163.39784057438374,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 163.39784057438374,
+                "hd15iqr": 163.39784057438374,
+                "ops": 0.006120031920157287,
+                "total": 163.39784057438374,
+                "data": [
+                    163.39784057438374
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-load_only-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-load_only-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "load_only",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "warm-load_only-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 203.96452677249908,
+                "max": 203.96452677249908,
+                "mean": 203.96452677249908,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 203.96452677249908,
+                "iqr": 0.0,
+                "q1": 203.96452677249908,
+                "q3": 203.96452677249908,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 203.96452677249908,
+                "hd15iqr": 203.96452677249908,
+                "ops": 0.004902813326531993,
+                "total": 203.96452677249908,
+                "data": [
+                    203.96452677249908
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-load_only-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-load_only-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "load_only",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "warm-load_only-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 164.86918760836124,
+                "max": 164.86918760836124,
+                "mean": 164.86918760836124,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 164.86918760836124,
+                "iqr": 0.0,
+                "q1": 164.86918760836124,
+                "q3": 164.86918760836124,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 164.86918760836124,
+                "hd15iqr": 164.86918760836124,
+                "ops": 0.006065414735805283,
+                "total": 164.86918760836124,
+                "data": [
+                    164.86918760836124
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-ttft-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-ttft-native]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "ttft",
+                "loader": "native"
+            },
+            "param": "warm-ttft-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 174.30831607431173,
+                "max": 174.30831607431173,
+                "mean": 174.30831607431173,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 174.30831607431173,
+                "iqr": 0.0,
+                "q1": 174.30831607431173,
+                "q3": 174.30831607431173,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 174.30831607431173,
+                "hd15iqr": 174.30831607431173,
+                "ops": 0.005736960935206766,
+                "total": 174.30831607431173,
+                "data": [
+                    174.30831607431173
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-ttft-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-ttft-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "ttft",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "warm-ttft-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 168.62906893342733,
+                "max": 168.62906893342733,
+                "mean": 168.62906893342733,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 168.62906893342733,
+                "iqr": 0.0,
+                "q1": 168.62906893342733,
+                "q3": 168.62906893342733,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 168.62906893342733,
+                "hd15iqr": 168.62906893342733,
+                "ops": 0.005930175659066158,
+                "total": 168.62906893342733,
+                "data": [
+                    168.62906893342733
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-ttft-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-ttft-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "ttft",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "warm-ttft-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 143.30512779951096,
+                "max": 143.30512779951096,
+                "mean": 143.30512779951096,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 143.30512779951096,
+                "iqr": 0.0,
+                "q1": 143.30512779951096,
+                "q3": 143.30512779951096,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 143.30512779951096,
+                "hd15iqr": 143.30512779951096,
+                "ops": 0.006978117359478135,
+                "total": 143.30512779951096,
+                "data": [
+                    143.30512779951096
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-ttft-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-ttft-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "ttft",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "warm-ttft-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 146.14831587672234,
+                "max": 146.14831587672234,
+                "mean": 146.14831587672234,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 146.14831587672234,
+                "iqr": 0.0,
+                "q1": 146.14831587672234,
+                "q3": 146.14831587672234,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 146.14831587672234,
+                "hd15iqr": 146.14831587672234,
+                "ops": 0.006842364169584484,
+                "total": 146.14831587672234,
+                "data": [
+                    146.14831587672234
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-ttft-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-ttft-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "ttft",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "warm-ttft-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 174.5997778326273,
+                "max": 174.5997778326273,
+                "mean": 174.5997778326273,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 174.5997778326273,
+                "iqr": 0.0,
+                "q1": 174.5997778326273,
+                "q3": 174.5997778326273,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 174.5997778326273,
+                "hd15iqr": 174.5997778326273,
+                "ops": 0.0057273841491288025,
+                "total": 174.5997778326273,
+                "data": [
+                    174.5997778326273
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-steady_state_decode-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-steady_state_decode-native]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "native"
+            },
+            "param": "warm-steady_state_decode-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 192.00605315715075,
+                "max": 192.00605315715075,
+                "mean": 192.00605315715075,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 192.00605315715075,
+                "iqr": 0.0,
+                "q1": 192.00605315715075,
+                "q3": 192.00605315715075,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 192.00605315715075,
+                "hd15iqr": 192.00605315715075,
+                "ops": 0.0052081691361132885,
+                "total": 192.00605315715075,
+                "data": [
+                    192.00605315715075
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-steady_state_decode-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-steady_state_decode-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "warm-steady_state_decode-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 172.63863319903612,
+                "max": 172.63863319903612,
+                "mean": 172.63863319903612,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 172.63863319903612,
+                "iqr": 0.0,
+                "q1": 172.63863319903612,
+                "q3": 172.63863319903612,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 172.63863319903612,
+                "hd15iqr": 172.63863319903612,
+                "ops": 0.005792446229848761,
+                "total": 172.63863319903612,
+                "data": [
+                    172.63863319903612
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-steady_state_decode-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-steady_state_decode-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "warm-steady_state_decode-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 194.38577480614185,
+                "max": 194.38577480614185,
+                "mean": 194.38577480614185,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 194.38577480614185,
+                "iqr": 0.0,
+                "q1": 194.38577480614185,
+                "q3": 194.38577480614185,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 194.38577480614185,
+                "hd15iqr": 194.38577480614185,
+                "ops": 0.005144409363274065,
+                "total": 194.38577480614185,
+                "data": [
+                    194.38577480614185
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-steady_state_decode-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-steady_state_decode-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "warm-steady_state_decode-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 179.0486347079277,
+                "max": 179.0486347079277,
+                "mean": 179.0486347079277,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 179.0486347079277,
+                "iqr": 0.0,
+                "q1": 179.0486347079277,
+                "q3": 179.0486347079277,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 179.0486347079277,
+                "hd15iqr": 179.0486347079277,
+                "ops": 0.005585074701246651,
+                "total": 179.0486347079277,
+                "data": [
+                    179.0486347079277
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[warm-steady_state_decode-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[warm-steady_state_decode-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "warm",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "warm-steady_state_decode-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 180.9913115426898,
+                "max": 180.9913115426898,
+                "mean": 180.9913115426898,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 180.9913115426898,
+                "iqr": 0.0,
+                "q1": 180.9913115426898,
+                "q3": 180.9913115426898,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 180.9913115426898,
+                "hd15iqr": 180.9913115426898,
+                "ops": 0.005525127098513419,
+                "total": 180.9913115426898,
+                "data": [
+                    180.9913115426898
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-load_only-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-load_only-native]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "load_only",
+                "loader": "native"
+            },
+            "param": "cold-load_only-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 178.61390613019466,
+                "max": 178.61390613019466,
+                "mean": 178.61390613019466,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 178.61390613019466,
+                "iqr": 0.0,
+                "q1": 178.61390613019466,
+                "q3": 178.61390613019466,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 178.61390613019466,
+                "hd15iqr": 178.61390613019466,
+                "ops": 0.005598668220553237,
+                "total": 178.61390613019466,
+                "data": [
+                    178.61390613019466
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-load_only-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-load_only-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "load_only",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "cold-load_only-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 159.82093247771263,
+                "max": 159.82093247771263,
+                "mean": 159.82093247771263,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 159.82093247771263,
+                "iqr": 0.0,
+                "q1": 159.82093247771263,
+                "q3": 159.82093247771263,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 159.82093247771263,
+                "hd15iqr": 159.82093247771263,
+                "ops": 0.006257002662272992,
+                "total": 159.82093247771263,
+                "data": [
+                    159.82093247771263
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-load_only-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-load_only-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "load_only",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "cold-load_only-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 175.1473817229271,
+                "max": 175.1473817229271,
+                "mean": 175.1473817229271,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 175.1473817229271,
+                "iqr": 0.0,
+                "q1": 175.1473817229271,
+                "q3": 175.1473817229271,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 175.1473817229271,
+                "hd15iqr": 175.1473817229271,
+                "ops": 0.005709477299420561,
+                "total": 175.1473817229271,
+                "data": [
+                    175.1473817229271
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-load_only-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-load_only-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "load_only",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "cold-load_only-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 164.26381128281355,
+                "max": 164.26381128281355,
+                "mean": 164.26381128281355,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 164.26381128281355,
+                "iqr": 0.0,
+                "q1": 164.26381128281355,
+                "q3": 164.26381128281355,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 164.26381128281355,
+                "hd15iqr": 164.26381128281355,
+                "ops": 0.006087768158978709,
+                "total": 164.26381128281355,
+                "data": [
+                    164.26381128281355
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-load_only-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-load_only-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "load_only",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "cold-load_only-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 180.78539510071278,
+                "max": 180.78539510071278,
+                "mean": 180.78539510071278,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 180.78539510071278,
+                "iqr": 0.0,
+                "q1": 180.78539510071278,
+                "q3": 180.78539510071278,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 180.78539510071278,
+                "hd15iqr": 180.78539510071278,
+                "ops": 0.00553142027564182,
+                "total": 180.78539510071278,
+                "data": [
+                    180.78539510071278
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-ttft-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-ttft-native]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "ttft",
+                "loader": "native"
+            },
+            "param": "cold-ttft-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 169.9527681991458,
+                "max": 169.9527681991458,
+                "mean": 169.9527681991458,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 169.9527681991458,
+                "iqr": 0.0,
+                "q1": 169.9527681991458,
+                "q3": 169.9527681991458,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 169.9527681991458,
+                "hd15iqr": 169.9527681991458,
+                "ops": 0.005883987713740729,
+                "total": 169.9527681991458,
+                "data": [
+                    169.9527681991458
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-ttft-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-ttft-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "ttft",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "cold-ttft-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 158.5790665000677,
+                "max": 158.5790665000677,
+                "mean": 158.5790665000677,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 158.5790665000677,
+                "iqr": 0.0,
+                "q1": 158.5790665000677,
+                "q3": 158.5790665000677,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 158.5790665000677,
+                "hd15iqr": 158.5790665000677,
+                "ops": 0.006306002564339557,
+                "total": 158.5790665000677,
+                "data": [
+                    158.5790665000677
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-ttft-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-ttft-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "ttft",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "cold-ttft-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 160.82158666849136,
+                "max": 160.82158666849136,
+                "mean": 160.82158666849136,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 160.82158666849136,
+                "iqr": 0.0,
+                "q1": 160.82158666849136,
+                "q3": 160.82158666849136,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 160.82158666849136,
+                "hd15iqr": 160.82158666849136,
+                "ops": 0.006218070724929136,
+                "total": 160.82158666849136,
+                "data": [
+                    160.82158666849136
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-ttft-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-ttft-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "ttft",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "cold-ttft-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 156.39792335033417,
+                "max": 156.39792335033417,
+                "mean": 156.39792335033417,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 156.39792335033417,
+                "iqr": 0.0,
+                "q1": 156.39792335033417,
+                "q3": 156.39792335033417,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 156.39792335033417,
+                "hd15iqr": 156.39792335033417,
+                "ops": 0.006393946790201184,
+                "total": 156.39792335033417,
+                "data": [
+                    156.39792335033417
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-ttft-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-ttft-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "ttft",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "cold-ttft-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 168.90126997977495,
+                "max": 168.90126997977495,
+                "mean": 168.90126997977495,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 168.90126997977495,
+                "iqr": 0.0,
+                "q1": 168.90126997977495,
+                "q3": 168.90126997977495,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 168.90126997977495,
+                "hd15iqr": 168.90126997977495,
+                "ops": 0.005920618596412832,
+                "total": 168.90126997977495,
+                "data": [
+                    168.90126997977495
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-steady_state_decode-native]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-steady_state_decode-native]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "native"
+            },
+            "param": "cold-steady_state_decode-native",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 162.59953372180462,
+                "max": 162.59953372180462,
+                "mean": 162.59953372180462,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 162.59953372180462,
+                "iqr": 0.0,
+                "q1": 162.59953372180462,
+                "q3": 162.59953372180462,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 162.59953372180462,
+                "hd15iqr": 162.59953372180462,
+                "ops": 0.006150079136825346,
+                "total": 162.59953372180462,
+                "data": [
+                    162.59953372180462
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-steady_state_decode-ts_safetensors_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-steady_state_decode-ts_safetensors_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_safetensors_default"
+            },
+            "param": "cold-steady_state_decode-ts_safetensors_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 161.70559974759817,
+                "max": 161.70559974759817,
+                "mean": 161.70559974759817,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 161.70559974759817,
+                "iqr": 0.0,
+                "q1": 161.70559974759817,
+                "q3": 161.70559974759817,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 161.70559974759817,
+                "hd15iqr": 161.70559974759817,
+                "ops": 0.006184077741036009,
+                "total": 161.70559974759817,
+                "data": [
+                    161.70559974759817
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-steady_state_decode-ts_safetensors_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-steady_state_decode-ts_safetensors_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_safetensors_sync"
+            },
+            "param": "cold-steady_state_decode-ts_safetensors_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 163.22307313978672,
+                "max": 163.22307313978672,
+                "mean": 163.22307313978672,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 163.22307313978672,
+                "iqr": 0.0,
+                "q1": 163.22307313978672,
+                "q3": 163.22307313978672,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 163.22307313978672,
+                "hd15iqr": 163.22307313978672,
+                "ops": 0.00612658480669326,
+                "total": 163.22307313978672,
+                "data": [
+                    163.22307313978672
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-steady_state_decode-ts_serverlessllm_default]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-steady_state_decode-ts_serverlessllm_default]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_serverlessllm_default"
+            },
+            "param": "cold-steady_state_decode-ts_serverlessllm_default",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 168.11245830357075,
+                "max": 168.11245830357075,
+                "mean": 168.11245830357075,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 168.11245830357075,
+                "iqr": 0.0,
+                "q1": 168.11245830357075,
+                "q3": 168.11245830357075,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 168.11245830357075,
+                "hd15iqr": 168.11245830357075,
+                "ops": 0.005948399125746172,
+                "total": 168.11245830357075,
+                "data": [
+                    168.11245830357075
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vllm[cold-steady_state_decode-ts_serverlessllm_sync]",
+            "fullname": "benchmarks/bench_vllm.py::test_vllm[cold-steady_state_decode-ts_serverlessllm_sync]",
+            "params": {
+                "cache_mode": "cold",
+                "benchmark_kind": "steady_state_decode",
+                "loader": "ts_serverlessllm_sync"
+            },
+            "param": "cold-steady_state_decode-ts_serverlessllm_sync",
+            "extra_info": {},
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 1,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 171.53452196717262,
+                "max": 171.53452196717262,
+                "mean": 171.53452196717262,
+                "stddev": 0,
+                "rounds": 1,
+                "median": 171.53452196717262,
+                "iqr": 0.0,
+                "q1": 171.53452196717262,
+                "q3": 171.53452196717262,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 171.53452196717262,
+                "hd15iqr": 171.53452196717262,
+                "ops": 0.005829730298787172,
+                "total": 171.53452196717262,
+                "data": [
+                    171.53452196717262
+                ],
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-05-10T03:35:45.283064+00:00",
+    "version": "5.2.3"
+}

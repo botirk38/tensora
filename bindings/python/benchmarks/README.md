@@ -11,7 +11,7 @@ export TENSORA_BENCH_MODELS=openai-community/gpt2   # required (one or more ids)
 ./scripts/run_benchmarks.sh
 ```
 
-This runs `uv sync` (dev + vLLM groups), `maturin develop --release`, then pytest on `bench_safetensors.py`, `bench_serverlessllm.py`, and `bench_vllm.py`. JSON is written to **`results/benchmarks/pytest_benchmark_<slug>.json`** per model (slug: repo id with `/` → `-`, lowercased). Set **`TENSORA_BENCH_JSON`** to an **output directory** to place those files elsewhere. Each run uses a distinct **`--cache-dir`** under that directory’s `.cache/<slug>/` so parallel jobs do not collide.
+This runs `uv sync` (dev + vLLM groups), `maturin develop --release`, then pytest on `bench_safetensors.py`, `bench_serverlessllm.py`, and `bench_vllm.py`. JSON is written to **`results/<env>/raw/<size>.<type>.json`** per model. Set **`TENSORA_BENCH_JSON`** to an **output directory** to place those files elsewhere. Each run uses a distinct **`--cache-dir`** under that directory’s `.cache/<slug>/` so parallel jobs do not collide.
 
 ### Environment variables
 
@@ -37,7 +37,7 @@ uv run pytest benchmarks/bench_vllm.py -v --model-id openai-community/gpt2
 
 Add `--benchmark-json=path.json` to capture machine-readable timings.
 
-**Rust cold matrices and archived TSVs:** Large sweeps that produced `results/h100/profile/*.tsv` and `results/h100/vllm/*.tsv` were run on a dedicated host by invoking the `profile` binary (Rust) and pytest/vLLM benchmarks with the cold-cache procedure from the paper—not via a bundled shell matrix. Treat those paths as **archival**; reproduce **ordering and regime behaviour** on your machine.
+**Rust cold matrices and archived TSVs:** Large sweeps that produced `results/h100/rust.tsv` and `results/h100/vllm.tsv` were run on a dedicated host by invoking the `profile` binary (Rust) and pytest/vLLM benchmarks with the cold-cache procedure from the paper—not via a bundled shell matrix. Treat those paths as **archival**; reproduce **ordering and regime behaviour** on your machine.
 
 ## CLI Options (pytest)
 

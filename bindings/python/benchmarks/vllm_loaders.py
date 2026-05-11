@@ -96,6 +96,7 @@ def register_tensora_loader() -> None:
             try:
                 hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
                     source.model_or_path,
+                    getattr(source, "subfolder", None),
                     getattr(source, "revision", None),
                     getattr(source, "fall_back_to_pt", False),
                     getattr(source, "allow_patterns_overrides", None),
