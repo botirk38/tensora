@@ -84,6 +84,7 @@ def run_benchmark(
 
     os.environ["VLLM_LOGGING_LEVEL"] = "CRITICAL"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     config = LOADER_CONFIG.get(loader)
 
