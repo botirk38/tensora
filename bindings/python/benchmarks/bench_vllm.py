@@ -7,6 +7,7 @@ Uses explicit loaders via vLLM's registered model loader mechanism.
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,12 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
             text=True,
             timeout=1200,
         )
+
+        # Allow GPU memory to be fully reclaimed by the driver after
+        # the EngineCore child process exits.  Without this pause, the
+        # very next subprocess may fork before CUDA has finished tearing
+        # down, causing the new EngineCore to see reduced free memory.
+        time.sleep(5)
 
         if result.returncode != 0:
             raise RuntimeError(f"vLLM subprocess failed: {result.stderr}")
