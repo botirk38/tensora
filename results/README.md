@@ -1,19 +1,33 @@
 # Results
 
-Experimental results from the H100 benchmark suite.
+Cross-environment benchmark results for the Tensora checkpoint loading paper.
 
 ## Structure
 
-- `analysis/` — Profiling notes and bottleneck analysis from early investigation
-- `profile/` — Rust-layer benchmark outputs
-  - `full_cold_matrix.tsv` — Full cold-cache matrix across formats, fixtures, and backends
-  - `anchor_reps.tsv` — Five-repetition cold-cache anchor measurements
-  - `safetensors_cold.tsv` — Earlier SafeTensors cold runs
-- `python/` — Python benchmark JSON artifacts (pytest-benchmark output)
-- `vllm/` — vLLM benchmark results
-  - `full_matrix.tsv` — Complete vLLM matrix across all fixtures, loaders, and benchmark kinds
-  - `raw/` — Raw vLLM benchmark logs (ignored in git, present on experiment host)
+Each environment directory (`h100/`, `h200/`, `a100/`) contains:
+
+- `rust.tsv` — Rust-layer cold-cache tensor loading times (ms)
+- `vllm.tsv` — vLLM integration benchmarks (H100: measured, A100: estimated from Rust-layer ratios)
+- `anchor.tsv` — Five-repetition cold-cache anchor measurements (H100/H200 only)
+- `env.txt` — Environment metadata (H200/A100)
+- `raw/` — Raw pytest-benchmark JSON artifacts
+- `analysis/` — Profiling notes (H100 only)
+
+### TSV Formats
+
+**rust.tsv** — `model, format, backend, time_ms, tensors, bytes`
+
+**vllm.tsv** — `model, loader, kind, cache_mode, metric, value, status`
+
+## Environments
+
+| GPU | Storage | io_uring | Notes |
+|-----|---------|----------|-------|
+| H100 | Local NVMe | Working | Baseline |
+| H200 | Network | Blocked (EPERM) | Selector adapts to async |
+| A100 | Network | Blocked (EPERM) | vLLM metrics estimated |
 
 ## Reproducing
 
-Rust profiling results were generated on a dedicated H100 Linux server. Use the `profile` binary and cold-cache procedure in the repository root `README.md`; Python/vLLM numbers use `scripts/run_benchmarks.sh` (see `bindings/python/benchmarks/README.md`). These TSVs are **archival** checkpoints from that host.
+Rust profiling: `profile` binary with cold-cache procedure (see root `README.md`).
+Python/vLLM: `scripts/run_benchmarks.sh` (see `bindings/python/benchmarks/README.md`).
