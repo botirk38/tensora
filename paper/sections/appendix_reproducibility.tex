@@ -1,61 +1,70 @@
 \section{Reproducibility}
 \label{app:repro}
 
-This appendix summarises how measurements were produced: what to hold constant, where artefacts live, and which commands reproduce the Rust-layer backend ordering. The goal is traceability, not identical millisecond reproduction on other hardware.
+This appendix summarises how measurements were produced: what to hold constant, where artefacts live, and which commands reproduce the Rust-layer backend ordering. The goal is traceability and comparable ordering, not byte-identical millisecond reproduction on other hardware.
 
 \subsection{Source bundle and public PDF}
 
-For public distribution (for example arXiv), submit \texttt{main.tex}, the \texttt{sections/} tree, figures, and \texttt{bib/references.bib}. Build with \texttt{pdflatex main.tex}, \texttt{bibtex main}, then \texttt{pdflatex main.tex} twice, or use \texttt{latexmk}. If you later adopt a conference-supplied document class, follow that venue's template and submission rules separately.
+For public distribution, submit \texttt{main.tex}, \texttt{template.tex}, \texttt{PRIMEarxiv.sty}, the \texttt{sections/} tree, \texttt{figures/}, \texttt{library.bib}, and \texttt{00README.json}. Build from \texttt{paper/} with:
+
+\begin{verbatim}
+pdflatex -interaction=nonstopmode main.tex
+bibtex main
+pdflatex -interaction=nonstopmode main.tex
+pdflatex -interaction=nonstopmode main.tex
+\end{verbatim}
+
+If a conference-supplied document class is adopted later, follow that venue's template and submission rules separately.
 
 \subsection{Repository and revision}
 
-The implementation and harnesses are open source. The canonical public clone URL is \url{https://github.com/botirk38/tensora}; the Rust crate \texttt{tensora}, Python package \texttt{tensora\_py}, and benchmark scripts are distributed under the Apache License, Version~2.0 (see the repository \texttt{LICENSE} file). Commands, default output paths, and a minimal environment block to paste beside tables are in the repository root \texttt{README.md}. Tabulated timings should correspond to a \textbf{specific commit hash}; record \texttt{git rev-parse HEAD} next to exported results. Later commits may change timings even when ordering stays similar.
-
-The Rust crate builds a profiling binary \texttt{profile} (\texttt{cargo build --release --bin profile}). Release mode matters: debug builds are not representative of the optimised paths evaluated in the matrices.
+The implementation and harnesses are open source at \url{https://github.com/botirk38/tensora}. The Rust crate \texttt{tensora}, Python package \texttt{tensora\_py}, and benchmark scripts are distributed under the Apache License, Version~2.0. Commands, default output paths, and a minimal environment block are in the repository root \texttt{README.md}. Tabulated timings should correspond to a specific commit hash; record \texttt{git rev-parse HEAD} and \texttt{git status -sb} next to exported results.
 
 \subsection{Rust profiling harness}
 
-The Rust layer is invoked as:
+Build the profiling binary in release mode:
+
+\begin{verbatim}
+cargo build --release --bin profile
+\end{verbatim}
+
+Invoke the Rust layer with a public Hugging Face model id:
 
 \begin{verbatim}
 cargo run --release --bin profile -- <format> <backend> \
-  --fixture <FIXTURE_NAME> [--iterations N]
+  --model-id <MODEL_ID> --iterations 1
 \end{verbatim}
 
-\noindent where \texttt{<format>} is \texttt{safetensors} or \texttt{serverlessllm}, and \texttt{<backend>} is \texttt{sync}, \texttt{async}, \texttt{io-uring}, or \texttt{default}. The fixture name refers to a directory under \texttt{fixtures/} (for example, \texttt{qwen-qwen3-8b}), populated via \texttt{scripts/download\_models.py} and, for ServerlessLLM, the repository's conversion steps.
+\noindent where \texttt{<format>} is \texttt{safetensors} or \texttt{serverlessllm}, and \texttt{<backend>} is \texttt{sync}, \texttt{async}, \texttt{io-uring}, or \texttt{default}. SafeTensors shards are read from the Hugging Face Hub cache. ServerlessLLM-style conversions are stored under the platform cache directory (for example \texttt{\$XDG\_CACHE\_HOME/tensora/<slug>/serverlessllm}).
 
-Cold-cache runs use \texttt{--iterations 1} with the cache-drop procedure in Section~\ref{sec:experimental_setup}. The published full cold matrix (\path{results/h100/rust.tsv}) was produced by looping formats, fixtures, and backends with \texttt{sync} and \texttt{echo 3 > /proc/sys/vm/drop\_caches} before each \texttt{profile} invocation; replicate by driving the same binary with the same ritual rather than expecting a fixed shell driver in the repository.
+Cold-cache runs use \texttt{--iterations 1} with the cache-drop procedure in Section~\ref{sec:experimental_setup}. The published H100 cold matrix (\path{results/h100/rust.tsv}) was produced by looping formats, model ids, and backends with \texttt{sync} and \texttt{echo 3 > /proc/sys/vm/drop\_caches} before each \texttt{profile} invocation. On restricted containers where \texttt{drop\_caches} is unavailable, use the repository-supported cache-eviction flag and record that deviation beside the result.
 
-Five-repetition anchors for selected models (\path{results/h100/anchor.tsv}) used the same \texttt{profile} invocation and cache-drop procedure repeated five times per anchor to sanity-check variance; main tables use representative single cold-cache rows per cell.
+Five-repetition anchors for selected models (\path{results/h100/anchor.tsv} and \path{results/h200/anchor.tsv} where available) used the same binary and cache-control ritual repeated five times per anchor. Main tables use representative single cold-cache rows for readability.
 
 \subsection{Python and vLLM harnesses}
 
-Python benchmarks call the public binding API under \path{bindings/python/benchmarks/} (for example \texttt{uv run pytest benchmarks/...}), with optional extras when Torch or vLLM are required.
-The repository provides \path{scripts/run\_benchmarks.sh}, which runs the pytest suites and writes one JSON file per model under \path{results/<env>/raw/} as \texttt{<size>.<type>.json} (\textbf{slug}: hub id with ``\texttt{/}'' $\rightarrow$ ``\texttt{-}'').
-Set \texttt{TENSOR\_STORE\_BENCH\_MODELS} to Hugging Face model ids (space- or comma-separated). Optional \texttt{TENSOR\_STORE\_BENCH\_JSON} selects output; each run uses a distinct \texttt{--cache-dir} to keep parallel jobs safe.
-When vLLM benchmarks are enabled, the script runs one model at a time. For the six-model ladder (Section~\ref{sec:experimental_setup}), \path{scripts/paper\_pytest\_ladder.sh} sets \texttt{TENSOR\_STORE\_BENCH\_MODELS} and invokes \texttt{run\_benchmarks.sh}.
-Archived exports also appear under \path{results/h100/raw/} for traceability.
+Python benchmarks call the public binding API under \path{bindings/python/benchmarks/}. The repository provides \path{scripts/run\_benchmarks.sh}, which runs pytest-benchmark suites and writes JSON artefacts under \path{results/benchmarks/} by default. Set \texttt{TENSORA\_BENCH\_MODELS} to one or more Hugging Face model ids, separated by spaces or commas. Set \texttt{TENSORA\_BENCH\_NO\_VLLM=1} to skip vLLM when a GPU-backed serving environment is unavailable.
 
-vLLM runs use the pytest integration under \texttt{bindings/python/benchmarks/bench\_vllm.py}, invoked via \texttt{scripts/run\_benchmarks.sh} (or manual \texttt{uv run pytest} with the same flags). Large matrices archived under \texttt{results/h100/vllm.tsv} were produced on a dedicated host by sweeping loaders, fixtures, and kinds (\texttt{load\_only}, \texttt{TTFT}, \texttt{steady\_state\_decode}), with \texttt{sync} and cache drops before cold conditions; reproduce the procedure rather than a removed batch script.
+When vLLM benchmarks are enabled, the script serialises vLLM runs to one model at a time. Archived exports used in the paper appear under \path{results/h100/}, \path{results/h200/}, and \path{results/a100/}. The H100 vLLM matrix in \path{results/h100/vllm.tsv} was produced on a dedicated host by sweeping loaders, model ids, benchmark kinds (\texttt{load\_only}, \texttt{TTFT}, \texttt{steady\_state\_decode}), and cache modes.
 
 \subsection{Environment pins}
 
-Capture at least \texttt{uname -r}, Python and Rust versions, vLLM package version, and \texttt{nvidia-smi} driver output beside result tables. Kernel and CUDA versions affect \texttt{io\_uring} behaviour and GPU initialisation. The repository lockfile resolves \texttt{vllm} to 0.11.0 when the optional extra is installed through \texttt{uv}; still record the active environment's \texttt{pip show vllm} line with exports so a reader can match wheels and CUDA builds.
+Capture at least \texttt{date -u}, \texttt{uname -a}, \texttt{rustc --version}, \texttt{python3 --version}, \texttt{nvidia-smi} GPU and driver output, and the active vLLM package version. Kernel and CUDA versions affect \texttt{io\_uring} behaviour and GPU initialisation. The repository lockfile resolves \texttt{vllm} to 0.11.0 when installed through \texttt{uv}; still record the active environment's package line with exports so a reader can match wheels and CUDA builds.
 
 \subsection{What replication should check}
 
-On different machines, prioritise \textbf{ordering} and \textbf{regime behaviour}: SafeTensors crossover with scale; ServerlessLLM without sync at the front of the ranking; Python overhead large enough to matter; vLLM initialisation sensitive to loader choice while decode is not. Matching every millisecond is unnecessary for validating the main findings.
+On different machines, prioritise ordering and regime behaviour: SafeTensors crossover with scale; ServerlessLLM without sync at the front of the ranking; Python overhead large enough to matter; vLLM initialisation sensitive to loader choice while decode is not. Matching every millisecond is unnecessary for validating the main findings.
 
-\subsection{Hub names, fixtures, and cache control}
+\subsection{Hub names and cache control}
 
-The main text uses public hub names (for example, \texttt{Qwen/Qwen3-8B}); scripts use matching filesystem slugs (for example, \texttt{qwen-qwen3-8b}). Mixing ad hoc checkpoint paths can change shard counts and invalidate comparisons. Prefer hub checksum verification when available.
+The main text uses public hub names such as \texttt{Qwen/Qwen3-8B}. Scripts derive filesystem slugs from those ids. Mixing ad hoc checkpoint paths can change shard counts and invalidate comparisons. Prefer hub checksum verification when available.
 
-Dropping the page cache requires \texttt{/proc/sys/vm/drop\_caches} (typically privileged). The experiments assumed a dedicated host so cache drops do not disturb unrelated tenants. Run \texttt{sync} before \texttt{drop\_caches} so cold reads exercise storage rather than stale clean buffers.
+Dropping the page cache requires \texttt{/proc/sys/vm/drop\_caches}, typically with elevated privileges. The experiments assumed a dedicated host so cache drops do not disturb unrelated tenants. Run \texttt{sync} before \texttt{drop\_caches} so cold reads exercise storage rather than stale clean buffers.
 
 \section{Cold-cache anchor statistics}
 \label{app:anchor-stats}
 
-Table~\ref{tab:anchor-summary} summarises five cold-cache repetitions for selected anchors; the source file is \path{results/h100/anchor.tsv}. Median wall-clock time is reported with the min--max band across repetitions. These anchors motivated selector thresholds; the main matrices still use one representative cold run per cell for presentation.
+Table~\ref{tab:anchor-summary} summarises five cold-cache repetitions for selected anchors; source files include \path{results/h100/anchor.tsv} and \path{results/h200/anchor.tsv}. Median wall-clock time is reported with the min--max band across repetitions. These anchors sanity-check variance; the main matrices still use one representative cold run per cell for presentation.
 
 \begin{table}[htbp]
 \centering
@@ -80,4 +89,4 @@ Qwen3-8B & ServerlessLLM & default & 8059.26 & 7586.28--9143.26 \\
 \section{Artefact layout}
 \label{app:artefact-layout}
 
-Each environment directory (\path{results/h100/}, \path{results/h200/}, \path{results/a100/}) contains \texttt{rust.tsv} (Rust-layer cold-cache profiles), \texttt{vllm.tsv} (vLLM integration benchmarks), \texttt{anchor.tsv} (repetition anchors where available), and \texttt{raw/} (pytest-benchmark JSON artefacts).
+Each environment directory (\path{results/h100/}, \path{results/h200/}, \path{results/a100/}) contains \texttt{rust.tsv} for Rust-layer cold-cache profiles, \texttt{vllm.tsv} for vLLM integration benchmarks where available, \texttt{anchor.tsv} for repetition anchors where available, \texttt{env.txt} for environment metadata where recorded, and \texttt{raw/} for pytest-benchmark JSON artefacts.

@@ -19,17 +19,17 @@ These are not interchangeable. A claim that ``io\_uring is faster'' at the Rust 
 
 \subsection{Research Questions}
 
-The evaluation is organised around five research questions:
+The evaluation is organised around five research questions, each tied to a specific measurement layer:
 
 \begin{itemize}
-\item RQ1: How much does backend choice affect checkpoint loading time for real LLM checkpoints?
-\item RQ2: How does checkpoint layout change the relative ordering of backends?
-\item RQ3: How much overhead is introduced by the Python binding layer, and how much of that overhead can be reduced with binding-specific optimisation?
-\item RQ4: To what extent do backend gains survive integration into a serving stack such as vLLM?
-\item RQ5: What engineering lessons emerge when turning backend-specific microbenchmarks into a practical adaptive loading system?
+\item \textbf{RQ1: Backend attribution.} How much does backend choice affect checkpoint loading time for real LLM checkpoints?
+\item \textbf{RQ2: Layout dependence.} How does checkpoint layout change the relative ordering of backends?
+\item \textbf{RQ3: Public API overhead.} How much overhead is introduced by the Python binding layer, and how much can binding-specific optimisation remove?
+\item \textbf{RQ4: Serving impact.} To what extent do backend gains survive integration into vLLM?
+\item \textbf{RQ5: Operational policy.} What lessons emerge when backend-specific microbenchmarks become a practical adaptive loading system?
 \end{itemize}
 
-Each question maps to a specific measurement layer. RQ1 and RQ2 are answered primarily by Rust-layer matrices. RQ3 is answered by Python-layer benchmarks. RQ4 is answered by vLLM-layer integration. RQ5 draws on all three.
+RQ1 and RQ2 are answered primarily by Rust-layer matrices. RQ3 is answered by Python-layer benchmarks. RQ4 is answered by vLLM-layer integration. RQ5 draws on all three and is bounded by the limitations in Section~\ref{sec:limitations}.
 
 \subsection{Experimental Platform}
 
@@ -132,7 +132,7 @@ Three benchmark kinds were collected:
 \item \textbf{steady\_state\_decode}: average per-request decode latency after warm-up
 \end{itemize}
 
-Both warm and cold cache conditions were collected. The full vLLM matrix covers all six fixtures and all available benchmark loaders.
+Both warm and cold cache conditions were collected. The full vLLM matrix covers all six model checkpoints and all available benchmark loaders.
 
 Three rules were used to keep the evaluation interpretable.
 
@@ -154,7 +154,7 @@ Backend gains do not propagate unchanged across layers.
 
 \textbf{Variance and anchor repetitions.} NVMe and kernel subsystems exhibit run-to-run jitter. Single cold numbers are therefore \emph{representative} rather than statistically exhaustive. The five-repetition anchor set exists to confirm that observed crossovers are not one-off artefacts for a handful of ladder points (small, large, and mid-scale anchors across formats). The full matrices use one cold iteration per cell for readability. Interpreting a 5\% gap as meaningful without repeats is risky; interpreting a consistent ordering across many cells and formats with anchors showing stable bands is much less so.
 
-\textbf{Comparability across backends.} Each backend receives the same logical tensor read plan for a given fixture and format: the same sequence of byte ranges must be satisfied. Differences in wall time come from submission strategy, parallelism, and buffer management, not from silently skipping work. When \texttt{default} loses to an explicit backend on a row, that is an empirical fact about the selector and planner under the same harness constraints, not a different problem instance.
+\textbf{Comparability across backends.} Each backend receives the same logical tensor read plan for a given model and format: the same sequence of byte ranges must be satisfied. Differences in wall time come from submission strategy, parallelism, and buffer management, not from silently skipping work. When \texttt{default} loses to an explicit backend on a row, that is an empirical fact about the selector and planner under the same harness constraints, not a different problem instance.
 
 \textbf{Statistical reporting.} Full matrices use representative cold-cache times; anchor cells use five repetitions to check variance. Appendix~\ref{app:anchor-stats} reports median wall-clock time and the min--max band for selected anchor configurations (SafeTensors and ServerlessLLM). Main tables omit per-cell standard deviations for readability, so small gaps in one cell should be read cautiously, while consistent ordering across many cells carries more weight.
 
@@ -162,7 +162,7 @@ Backend gains do not propagate unchanged across layers.
 
 \textbf{Linux-only scope.} The io\_uring backend is Linux-specific. Results on other operating systems would require a different I/O backend and are outside scope.
 
-\subsection{What would and would not falsify the main claims}
+\subsection{Claim boundaries and falsification criteria}
 
 The central claim is that backend choice depends jointly on layout and scale, so a fixed global backend is wrong in principle. The evidence for this is the crossover pattern: sync wins at small SafeTensors scale, io\_uring wins at large SafeTensors scale, and sync never wins for partitioned ServerlessLLM.
 
@@ -175,7 +175,7 @@ This claim would be falsified if:
 
 The claim would be supported (but boundary location refined) if replication on different hardware showed the same ordering pattern but at different crossover points in the model ladder. The H200 and A100 environments partially test this: they remove \texttt{io\_uring} from the available set and show that the adaptive selector falls back to appropriate alternatives. Section~\ref{sec:limitations} states these falsification conditions explicitly.
 
-The adaptive \texttt{default} policy claim would be falsified if the selector systematically lost to a single explicit backend across the full matrix. The evidence shows it wins on some rows and loses on others (medium-scale SafeTensors, notably SmolLM3-3B and Qwen3-4B). This is documented in the limitations section.
+The adaptive \texttt{default} policy claim would be falsified if the selector systematically lost to a single explicit backend across the full matrix. The evidence shows it wins on some rows and loses on others (medium-scale SafeTensors, notably SmolLM3-3B and Qwen3-4B). This is documented in Section~\ref{sec:limitations}.
 
 vLLM results would not falsify the Rust-layer I/O claims because they conflate loader choice with engine bring-up. They instead test whether backend differences survive into deployment, which is a different question. The limitations section makes this construct distinction explicit.
 

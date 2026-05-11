@@ -42,8 +42,7 @@ Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov,
 Anonymous Authors.
 \newblock {H}ydra{S}erve: Minimizing cold start latency for serverless {LLM}
   serving in public clouds.
-\newblock 2025.
-\newblock arXiv:2502.15524.
+\newblock arXiv preprint arXiv:2502.15524, 2025.
 
 \bibitem{silva2021snapshot}
 Paulo Silva and Thiago~Emmanuel Pereira.

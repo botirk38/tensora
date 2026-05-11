@@ -1,28 +1,32 @@
 \section{Limitations}
 \label{sec:limitations}
 
-The results support regime claims in a controlled harness; this section states what does \emph{not} follow without further evidence.
+The results support a regime-based policy claim in a controlled harness. They do not establish a universally optimal loader.
 
 \subsection{External validity}
 
-The primary Rust and vLLM matrices come from one H100 host with local NVMe. Two additional environments---an H200 container and an A100 container, both with network-attached storage and \texttt{io\_uring} blocked---provide partial cross-hardware validation (Section~\ref{sec:cross-env}). The structural pattern (different backends dominate at different scales) persists across all three sites, but the identity of the large-scale winner varies: \texttt{io\_uring} on H100, async on H200, sync on A100 at 32B SafeTensors. This confirms that ordering regimes are more portable than absolute timings, while also showing that the specific crossover point depends on storage topology and kernel interface availability.
+The primary Rust and vLLM matrices come from one H100 host with local NVMe and working \texttt{io\_uring}. H200 and A100 containers provide partial cross-environment validation under a different deployment condition: network-attached storage with \texttt{io\_uring} blocked by kernel policy. This is useful because it tests fallback behaviour, but it is not the same as repeating the full H100 experiment on multiple local-NVMe hosts.
 
-The cross-environment validation has its own limits. The H200 and A100 environments use a reduced backend set (no \texttt{io\_uring}) and a reduced model ladder (A100 omits SmolLM3-3B and Qwen3-14B). Replication on local NVMe with full \texttt{io\_uring} support on a non-H100 host would provide a cleaner test of crossover stability. Different NVMe generations, RAID configurations, and filesystem mount options remain untested.
+The structural pattern is stronger than the exact crossover point. Small SafeTensors loads favour sync across all three environments. Larger SafeTensors loads favour \texttt{io\_uring} on H100, async on H200, and sync/default at the largest A100 row. The identity of the winner therefore depends on kernel interface availability, storage topology, filesystem behaviour, and host load.
 
-The six-model ladder covers 0.6B to 32B parameters across two formats. It does not exhaust the design space of checkpoint formats (e.g., GGUF), model families, or storage hardware.
+The model ladder covers six public checkpoints from 0.6B to 32B parameters and two layouts. It does not exhaust other formats such as GGUF, quantised checkpoint variants, distributed filesystems, RAID configurations, object stores, or non-Linux operating systems.
 
 \subsection{Construct validity}
 
-Each measurement layer operationalizes ``loading time'' differently. Rust timings approximate pure I/O and deserialization; Python timings add tensor materialization and FFI overhead; vLLM timings include GPU bring-up and memory pool allocation. None is the same construct as user-perceived cold-start latency in production, which adds network RTT, batching delays, and queuing. Section~\ref{sec:experimental_setup} makes these definitions explicit to prevent claim smuggling across constructs.
+Each measurement layer defines ``loading time'' differently. Rust timings approximate backend-attributed checkpoint read and tensor assembly. Python timings add FFI, interpreter overhead, tensor materialisation, and Python object construction. vLLM timings include GPU bring-up, memory pools, runtime configuration, model initialisation, and first-token generation depending on the benchmark kind. None of these exactly equals production user-perceived latency, which may add queuing, batching, network RTT, model routing, and admission control.
 
-\subsection{Internal validity and selector boundedness}
+For this reason, claims do not move freely across layers. A Rust result explains backend mechanics; a vLLM result explains serving-startup impact under that harness.
 
-The adaptive default does not match the best per-row explicit backend across all cells. On SafeTensors, it is 2.8$\times$ behind explicit sync for SmolLM3-3B and 1.7$\times$ for Qwen3-4B---the medium-scale crossover region where the heuristic's feature mapping is imprecise. On ServerlessLLM, it lags explicit async by 1.33$\times$ on SmolLM3-3B. These misses are documented in Section~\ref{sec:oracle-analysis} and inform the operational recommendation: deploy explicit overrides for the medium-scale region rather than tuning the heuristic to chase edge cases.
+\subsection{Selector boundedness}
 
-The full Rust and vLLM matrices report representative cold-cache times. Anchor repetitions (Appendix~\ref{app:anchor-stats}) validate regime stability for selected cells, but per-cell variance is omitted from main tables for readability. Gaps below ~10\% in individual cells should be read cautiously.
+The adaptive default does not match the best per-row explicit backend across all cells. On H100 SafeTensors it trails explicit sync by 2.79$\times$ for SmolLM3-3B and 1.69$\times$ for Qwen3-4B, and trails explicit \texttt{io\_uring} by 1.21$\times$ for Qwen3-8B. On H100 ServerlessLLM it trails explicit async by 1.33$\times$ for SmolLM3-3B. These rows sit near regime boundaries or partition structures that the current feature set does not fully capture.
+
+The right response is not to hide these misses. The operational recommendation is an adaptive default with explicit overrides. The default automates stable regimes; overrides handle known boundary cases.
+
+\subsection{Statistical limits}
+
+The main matrices report representative cold-cache runs. Anchor repetitions in Appendix~\ref{app:anchor-stats} validate selected regimes, but not every cell has repeated statistics. Small gaps below roughly 10\% should be interpreted cautiously unless they appear consistently across rows, layers, or repetitions.
 
 \subsection{Scope of claims}
 
-The evidence supports the adaptive policy as an \textbf{engineering heuristic justified by measurement}, not a claim of universal optimality. The selector automates stable regime patterns (sync-for-small, io\_uring-for-large SafeTensors; async-or-io\_uring for ServerlessLLM) while acknowledging known misses on medium-scale rows. The falsification conditions from Section~\ref{sec:experimental_setup} apply: the adaptive heuristic would be undermined if sync won at the largest SafeTensors scales or if sync became competitive on ServerlessLLM; neither is observed in this harness.
-
-Future work suggested by these limitations is practical rather than speculative: further cross-hardware replication on local NVMe with full \texttt{io\_uring} support, filesystem and mount-option sweeps, additional formats (GGUF, Direct I/O variants), and learned or calibrated selector tuning would refine boundary stability without contradicting the structural claim that scale and layout change the best policy. The H200 and A100 evidence is a first step toward that replication.
+The evidence supports an engineering heuristic justified by measurement: backend policy should use format, scale, and capability signals. It does not prove optimal thresholds, a learned selector, or universal superiority of \texttt{io\_uring}. Future work should add more local-NVMe hosts, filesystem and mount-option sweeps, additional checkpoint formats, direct-I/O variants, object-store paths, and calibrated or learned selectors.
