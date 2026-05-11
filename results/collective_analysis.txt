@@ -1,0 +1,358 @@
+==========================================================================================
+RUST-LAYER COLD-CACHE PROFILES (ms)
+==========================================================================================
+
+--- SAFETENSORS ---
+  Model                     Backend          H100       H200       A100
+  ----------------------------------------------------------------------
+  Qwen3-0.6B                sync            555.3      604.3      724.3
+  Qwen3-0.6B                async          1416.2      852.2     1094.4
+  Qwen3-0.6B                default         333.6      649.2      966.0
+  Qwen3-0.6B                io-uring       1159.2    blocked    blocked
+
+  SmolLM3-3B                sync           1331.8     2013.7        N/A
+  SmolLM3-3B                async          5802.1     2938.3        N/A
+  SmolLM3-3B                default        3722.3     2130.5        N/A
+  SmolLM3-3B                io-uring       3812.3    blocked    blocked
+
+  Qwen3-4B                  sync           1820.8      909.8     7598.4
+  Qwen3-4B                  async          5039.2     2478.1     3532.1
+  Qwen3-4B                  default        3083.2      941.2     7810.5
+  Qwen3-4B                  io-uring       2967.4    blocked    blocked
+
+  Qwen3-8B                  sync           3880.4     3924.7     8412.4
+  Qwen3-8B                  async          7074.4     2977.6     4235.2
+  Qwen3-8B                  default        3844.3     3213.0    11896.6
+  Qwen3-8B                  io-uring       3172.4    blocked    blocked
+
+  Qwen3-14B                 sync           7030.2    25872.0        N/A
+  Qwen3-14B                 async         13489.0     4767.7        N/A
+  Qwen3-14B                 default        6138.7     4906.1        N/A
+  Qwen3-14B                 io-uring       5977.1    blocked    blocked
+
+  Qwen3-32B                 sync          15454.5    36205.9    46923.4
+  Qwen3-32B                 async         28763.5    10623.8    60807.3
+  Qwen3-32B                 default       12119.5    12356.2    43816.7
+  Qwen3-32B                 io-uring      12089.0    blocked    blocked
+
+
+--- SERVERLESSLLM ---
+  Model                     Backend          H100       H200       A100
+  ----------------------------------------------------------------------
+  Qwen3-0.6B                sync           1645.1     1565.3     2183.3
+  Qwen3-0.6B                async          1471.3     1491.4     2250.9
+  Qwen3-0.6B                default        1432.2     1586.8     1555.0
+  Qwen3-0.6B                io-uring       1387.6    blocked    blocked
+
+  SmolLM3-3B                sync           3941.9     3945.7        N/A
+  SmolLM3-3B                async          2391.2     1947.4        N/A
+  SmolLM3-3B                default        3182.3     1987.1        N/A
+  SmolLM3-3B                io-uring       3091.5    blocked    blocked
+
+  Qwen3-4B                  sync           5137.7     5100.2     7551.8
+  Qwen3-4B                  async          3504.2     2489.3     4486.8
+  Qwen3-4B                  default        3551.8     2809.8     3523.2
+  Qwen3-4B                  io-uring       3727.1    blocked    blocked
+
+  Qwen3-8B                  sync          11048.4    10788.9    14707.0
+  Qwen3-8B                  async          9463.4     6045.5    11528.3
+  Qwen3-8B                  default        7589.5     6098.1    11431.6
+  Qwen3-8B                  io-uring       9043.5    blocked    blocked
+
+  Qwen3-14B                 sync          18661.2    17765.3        N/A
+  Qwen3-14B                 async         16139.1    14450.4        N/A
+  Qwen3-14B                 default       13422.9    15453.5        N/A
+  Qwen3-14B                 io-uring      13257.2    blocked    blocked
+
+  Qwen3-32B                 sync          39822.1    39061.6    56026.0
+  Qwen3-32B                 async         29180.9    27367.7    40472.5
+  Qwen3-32B                 default       27659.8    24259.2    44854.6
+  Qwen3-32B                 io-uring      29779.9    blocked    blocked
+
+
+==========================================================================================
+vLLM BENCHMARKS (Tensora loaders, no native)
+H100: actual init_ms/ttft_ms/decode_avg_ms from vllm_runner
+A100: wall_ms from pytest subprocess (includes overhead)
+==========================================================================================
+
+--- LOAD_ONLY (H100: init_ms, A100: wall_ms) ---
+
+  [WARM]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default              18274.3       128413.9
+  Qwen3-0.6B      ts_safetensors_sync                 18223.3       129430.4
+  Qwen3-0.6B      ts_safetensors_io_uring             18929.9            N/A
+  Qwen3-0.6B      ts_serverlessllm_default            21034.7       142668.2
+  Qwen3-0.6B      ts_serverlessllm_sync               20358.6       131512.9
+  Qwen3-0.6B      ts_serverlessllm_io_uring           19671.0            N/A
+
+  SmolLM3-3B      ts_safetensors_default              24960.5            N/A
+  SmolLM3-3B      ts_safetensors_sync                 24689.8            N/A
+  SmolLM3-3B      ts_safetensors_io_uring             26999.1            N/A
+  SmolLM3-3B      ts_serverlessllm_default            33914.5            N/A
+  SmolLM3-3B      ts_serverlessllm_sync               29259.6            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring           27783.6            N/A
+
+  Qwen3-4B        ts_safetensors_default              25384.9       164959.0
+  Qwen3-4B        ts_safetensors_sync                 25156.3       163397.8
+  Qwen3-4B        ts_safetensors_io_uring             26666.0            N/A
+  Qwen3-4B        ts_serverlessllm_default            37335.6       203964.5
+  Qwen3-4B        ts_serverlessllm_sync               30389.1       164869.2
+  Qwen3-4B        ts_serverlessllm_io_uring           28957.3            N/A
+
+  Qwen3-8B        ts_safetensors_default              32304.6       176688.5
+  Qwen3-8B        ts_safetensors_sync                 30922.8       169759.0
+  Qwen3-8B        ts_safetensors_io_uring             32129.6            N/A
+  Qwen3-8B        ts_serverlessllm_default            57359.9       233358.8
+  Qwen3-8B        ts_serverlessllm_sync               42107.2       173451.1
+  Qwen3-8B        ts_serverlessllm_io_uring           38503.1            N/A
+
+  Qwen3-14B       ts_safetensors_default              42912.4       319174.6
+  Qwen3-14B       ts_safetensors_sync                 41651.2       276678.4
+  Qwen3-14B       ts_safetensors_io_uring             42870.9       306113.5
+  Qwen3-14B       ts_serverlessllm_default            58592.1       458940.5
+  Qwen3-14B       ts_serverlessllm_sync               60536.2       302983.9
+  Qwen3-14B       ts_serverlessllm_io_uring           54620.4       322845.3
+
+  Qwen3-32B       ts_safetensors_default              84905.3       535950.0
+  Qwen3-32B       ts_safetensors_sync                 80687.2       543087.3
+  Qwen3-32B       ts_safetensors_io_uring             84329.7            N/A
+  Qwen3-32B       ts_serverlessllm_default           114858.7      1077398.4
+  Qwen3-32B       ts_serverlessllm_sync              121691.8       609782.8
+  Qwen3-32B       ts_serverlessllm_io_uring          106818.5            N/A
+
+
+  [COLD]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default              20577.9       133771.3
+  Qwen3-0.6B      ts_safetensors_sync                 20417.4       129406.9
+  Qwen3-0.6B      ts_safetensors_io_uring             20867.1            N/A
+  Qwen3-0.6B      ts_serverlessllm_default            21649.2       148491.9
+  Qwen3-0.6B      ts_serverlessllm_sync               21191.1       154179.4
+  Qwen3-0.6B      ts_serverlessllm_io_uring           21262.0            N/A
+
+  SmolLM3-3B      ts_safetensors_default              27334.0            N/A
+  SmolLM3-3B      ts_safetensors_sync                 27767.3            N/A
+  SmolLM3-3B      ts_safetensors_io_uring             29992.7            N/A
+  SmolLM3-3B      ts_serverlessllm_default            29364.7            N/A
+  SmolLM3-3B      ts_serverlessllm_sync               30870.2            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring           30287.2            N/A
+
+  Qwen3-4B        ts_safetensors_default              28475.3       159820.9
+  Qwen3-4B        ts_safetensors_sync                 28478.8       175147.4
+  Qwen3-4B        ts_safetensors_io_uring             29727.2            N/A
+  Qwen3-4B        ts_serverlessllm_default            32043.1       164263.8
+  Qwen3-4B        ts_serverlessllm_sync               32327.8       180785.4
+  Qwen3-4B        ts_serverlessllm_io_uring           31792.3            N/A
+
+  Qwen3-8B        ts_safetensors_default              35555.8       154859.7
+  Qwen3-8B        ts_safetensors_sync                 36524.1       152678.4
+  Qwen3-8B        ts_safetensors_io_uring             35889.7            N/A
+  Qwen3-8B        ts_serverlessllm_default            42549.6       159945.1
+  Qwen3-8B        ts_serverlessllm_sync               44371.0       174681.1
+  Qwen3-8B        ts_serverlessllm_io_uring           42343.1            N/A
+
+  Qwen3-14B       ts_safetensors_default              47792.0       324407.9
+  Qwen3-14B       ts_safetensors_sync                 49435.1       311686.2
+  Qwen3-14B       ts_safetensors_io_uring             47751.4       309120.4
+  Qwen3-14B       ts_serverlessllm_default            60670.0       330519.7
+  Qwen3-14B       ts_serverlessllm_sync               63150.9       333181.5
+  Qwen3-14B       ts_serverlessllm_io_uring           61848.8       367809.0
+
+  Qwen3-32B       ts_safetensors_default              88200.0       490353.2
+  Qwen3-32B       ts_safetensors_sync                 92421.4       515547.0
+  Qwen3-32B       ts_safetensors_io_uring             88164.0            N/A
+  Qwen3-32B       ts_serverlessllm_default           112359.5       492580.8
+  Qwen3-32B       ts_serverlessllm_sync              124049.3       492254.1
+  Qwen3-32B       ts_serverlessllm_io_uring          111717.8            N/A
+
+
+--- TTFT (H100: ttft_ms, A100: wall_ms) ---
+
+  [WARM]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default              18171.5       131806.9
+  Qwen3-0.6B      ts_safetensors_sync                 18229.0       150891.1
+  Qwen3-0.6B      ts_safetensors_io_uring             18984.4            N/A
+  Qwen3-0.6B      ts_serverlessllm_default            19329.5       256955.2
+  Qwen3-0.6B      ts_serverlessllm_sync               20707.6       151373.6
+  Qwen3-0.6B      ts_serverlessllm_io_uring           19396.3            N/A
+
+  SmolLM3-3B      ts_safetensors_default              24800.2            N/A
+  SmolLM3-3B      ts_safetensors_sync                 24959.0            N/A
+  SmolLM3-3B      ts_safetensors_io_uring             26819.5            N/A
+  SmolLM3-3B      ts_serverlessllm_default            26917.4            N/A
+  SmolLM3-3B      ts_serverlessllm_sync               29127.7            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring           27778.2            N/A
+
+  Qwen3-4B        ts_safetensors_default              25205.8       168629.1
+  Qwen3-4B        ts_safetensors_sync                 25367.5       143305.1
+  Qwen3-4B        ts_safetensors_io_uring             27005.3            N/A
+  Qwen3-4B        ts_serverlessllm_default            28326.3       146148.3
+  Qwen3-4B        ts_serverlessllm_sync               30340.2       174599.8
+  Qwen3-4B        ts_serverlessllm_io_uring           28944.4            N/A
+
+  Qwen3-8B        ts_safetensors_default              32223.1       160928.1
+  Qwen3-8B        ts_safetensors_sync                 30923.1       154983.0
+  Qwen3-8B        ts_safetensors_io_uring             32186.6            N/A
+  Qwen3-8B        ts_serverlessllm_default            38974.8       152253.1
+  Qwen3-8B        ts_serverlessllm_sync               41561.4       162743.7
+  Qwen3-8B        ts_serverlessllm_io_uring           38193.8            N/A
+
+  Qwen3-14B       ts_safetensors_default              43188.7       342354.4
+  Qwen3-14B       ts_safetensors_sync                 41767.8       315328.0
+  Qwen3-14B       ts_safetensors_io_uring             42935.0       328895.2
+  Qwen3-14B       ts_serverlessllm_default            57301.4       365420.8
+  Qwen3-14B       ts_serverlessllm_sync               60217.6       339493.3
+  Qwen3-14B       ts_serverlessllm_io_uring           55151.4       323776.2
+
+  Qwen3-32B       ts_safetensors_default              82990.6       725161.8
+  Qwen3-32B       ts_safetensors_sync                 79226.0       631732.4
+  Qwen3-32B       ts_safetensors_io_uring             83972.2            N/A
+  Qwen3-32B       ts_serverlessllm_default           106667.7       626855.8
+  Qwen3-32B       ts_serverlessllm_sync              121723.5       451836.3
+  Qwen3-32B       ts_serverlessllm_io_uring          105436.8            N/A
+
+
+  [COLD]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default              20315.7       155589.6
+  Qwen3-0.6B      ts_safetensors_sync                 20272.6       164830.1
+  Qwen3-0.6B      ts_safetensors_io_uring             21115.6            N/A
+  Qwen3-0.6B      ts_serverlessllm_default            21173.2       159555.2
+  Qwen3-0.6B      ts_serverlessllm_sync               21570.1       155414.7
+  Qwen3-0.6B      ts_serverlessllm_io_uring           21434.1            N/A
+
+  SmolLM3-3B      ts_safetensors_default              27802.3            N/A
+  SmolLM3-3B      ts_safetensors_sync                 27463.4            N/A
+  SmolLM3-3B      ts_safetensors_io_uring             29886.5            N/A
+  SmolLM3-3B      ts_serverlessllm_default            29714.9            N/A
+  SmolLM3-3B      ts_serverlessllm_sync               30871.8            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring           30147.5            N/A
+
+  Qwen3-4B        ts_safetensors_default              28529.8       158579.1
+  Qwen3-4B        ts_safetensors_sync                 28605.2       160821.6
+  Qwen3-4B        ts_safetensors_io_uring             30030.0            N/A
+  Qwen3-4B        ts_serverlessllm_default            32257.8       156397.9
+  Qwen3-4B        ts_serverlessllm_sync               32427.0       168901.3
+  Qwen3-4B        ts_serverlessllm_io_uring           31820.3            N/A
+
+  Qwen3-8B        ts_safetensors_default              35099.8       157603.1
+  Qwen3-8B        ts_safetensors_sync                 35639.2       171001.5
+  Qwen3-8B        ts_safetensors_io_uring             35381.8            N/A
+  Qwen3-8B        ts_serverlessllm_default            42175.4       166548.5
+  Qwen3-8B        ts_serverlessllm_sync               43629.9       156695.5
+  Qwen3-8B        ts_serverlessllm_io_uring           42129.6            N/A
+
+  Qwen3-14B       ts_safetensors_default              48201.5       279002.2
+  Qwen3-14B       ts_safetensors_sync                 49695.5       250524.3
+  Qwen3-14B       ts_safetensors_io_uring             48981.6       233575.0
+  Qwen3-14B       ts_serverlessllm_default            60525.7       239114.3
+  Qwen3-14B       ts_serverlessllm_sync               63060.1       253142.8
+  Qwen3-14B       ts_serverlessllm_io_uring           60511.5       279028.9
+
+  Qwen3-32B       ts_safetensors_default              88550.8       371707.7
+  Qwen3-32B       ts_safetensors_sync                 94070.8       442043.4
+  Qwen3-32B       ts_safetensors_io_uring             89293.5            N/A
+  Qwen3-32B       ts_serverlessllm_default           113057.5       425371.2
+  Qwen3-32B       ts_serverlessllm_sync              121131.1       411375.4
+  Qwen3-32B       ts_serverlessllm_io_uring          112336.1            N/A
+
+
+--- STEADY_STATE_DECODE (H100: decode_avg_ms, A100: wall_ms) ---
+
+  [WARM]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default                 17.4       126108.4
+  Qwen3-0.6B      ts_safetensors_sync                    17.5       131529.3
+  Qwen3-0.6B      ts_safetensors_io_uring                17.5            N/A
+  Qwen3-0.6B      ts_serverlessllm_default               17.4       130561.2
+  Qwen3-0.6B      ts_serverlessllm_sync                  17.4       133348.4
+  Qwen3-0.6B      ts_serverlessllm_io_uring              17.3            N/A
+
+  SmolLM3-3B      ts_safetensors_default                 36.0            N/A
+  SmolLM3-3B      ts_safetensors_sync                    35.9            N/A
+  SmolLM3-3B      ts_safetensors_io_uring                36.5            N/A
+  SmolLM3-3B      ts_serverlessllm_default               36.2            N/A
+  SmolLM3-3B      ts_serverlessllm_sync                  36.1            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring              36.0            N/A
+
+  Qwen3-4B        ts_safetensors_default                 39.4       172638.6
+  Qwen3-4B        ts_safetensors_sync                    39.1       194385.8
+  Qwen3-4B        ts_safetensors_io_uring                39.1            N/A
+  Qwen3-4B        ts_serverlessllm_default               39.3       179048.6
+  Qwen3-4B        ts_serverlessllm_sync                  39.1       180991.3
+  Qwen3-4B        ts_serverlessllm_io_uring              39.2            N/A
+
+  Qwen3-8B        ts_safetensors_default                 58.1       147523.2
+  Qwen3-8B        ts_safetensors_sync                    58.2       149707.6
+  Qwen3-8B        ts_safetensors_io_uring                58.1            N/A
+  Qwen3-8B        ts_serverlessllm_default               58.1       157265.3
+  Qwen3-8B        ts_serverlessllm_sync                  58.4       164767.2
+  Qwen3-8B        ts_serverlessllm_io_uring              58.3            N/A
+
+  Qwen3-14B       ts_safetensors_default                 94.4       295998.9
+  Qwen3-14B       ts_safetensors_sync                    94.8       265674.4
+  Qwen3-14B       ts_safetensors_io_uring                94.7       282692.6
+  Qwen3-14B       ts_serverlessllm_default               94.6       310540.8
+  Qwen3-14B       ts_serverlessllm_sync                  94.5       317923.5
+  Qwen3-14B       ts_serverlessllm_io_uring              94.4       300324.6
+
+  Qwen3-32B       ts_safetensors_default                194.4       446280.1
+  Qwen3-32B       ts_safetensors_sync                   194.6       488338.9
+  Qwen3-32B       ts_safetensors_io_uring               194.4            N/A
+  Qwen3-32B       ts_serverlessllm_default              194.6       568960.3
+  Qwen3-32B       ts_serverlessllm_sync                 194.4       636218.4
+  Qwen3-32B       ts_serverlessllm_io_uring             194.4            N/A
+
+
+  [COLD]
+  Model           Loader                            H100 (ms)      A100 (ms)
+  ---------------------------------------------------------------------------
+  Qwen3-0.6B      ts_safetensors_default                 17.4       149162.5
+  Qwen3-0.6B      ts_safetensors_sync                    17.5       153150.7
+  Qwen3-0.6B      ts_safetensors_io_uring                17.8            N/A
+  Qwen3-0.6B      ts_serverlessllm_default               17.4       164796.2
+  Qwen3-0.6B      ts_serverlessllm_sync                  17.3       180144.3
+  Qwen3-0.6B      ts_serverlessllm_io_uring              17.3            N/A
+
+  SmolLM3-3B      ts_safetensors_default                 36.3            N/A
+  SmolLM3-3B      ts_safetensors_sync                    36.1            N/A
+  SmolLM3-3B      ts_safetensors_io_uring                36.1            N/A
+  SmolLM3-3B      ts_serverlessllm_default               35.9            N/A
+  SmolLM3-3B      ts_serverlessllm_sync                  36.3            N/A
+  SmolLM3-3B      ts_serverlessllm_io_uring              36.1            N/A
+
+  Qwen3-4B        ts_safetensors_default                 39.2       161705.6
+  Qwen3-4B        ts_safetensors_sync                    39.0       163223.1
+  Qwen3-4B        ts_safetensors_io_uring                39.0            N/A
+  Qwen3-4B        ts_serverlessllm_default               39.2       168112.5
+  Qwen3-4B        ts_serverlessllm_sync                  39.2       171534.5
+  Qwen3-4B        ts_serverlessllm_io_uring              39.2            N/A
+
+  Qwen3-8B        ts_safetensors_default                 58.3       151684.2
+  Qwen3-8B        ts_safetensors_sync                    58.2       144913.6
+  Qwen3-8B        ts_safetensors_io_uring                58.4            N/A
+  Qwen3-8B        ts_serverlessllm_default               58.1       191772.2
+  Qwen3-8B        ts_serverlessllm_sync                  58.1       157479.0
+  Qwen3-8B        ts_serverlessllm_io_uring              58.1            N/A
+
+  Qwen3-14B       ts_safetensors_default                 94.2       236956.0
+  Qwen3-14B       ts_safetensors_sync                    94.5       255420.3
+  Qwen3-14B       ts_safetensors_io_uring                94.5       264551.0
+  Qwen3-14B       ts_serverlessllm_default               94.7       281284.3
+  Qwen3-14B       ts_serverlessllm_sync                  94.4       264982.1
+  Qwen3-14B       ts_serverlessllm_io_uring              94.5       268772.5
+
+  Qwen3-32B       ts_safetensors_default                194.3       338465.2
+  Qwen3-32B       ts_safetensors_sync                   194.3       554176.4
+  Qwen3-32B       ts_safetensors_io_uring               194.4            N/A
+  Qwen3-32B       ts_serverlessllm_default              194.2       394548.0
+  Qwen3-32B       ts_serverlessllm_sync                 194.3       456993.1
+  Qwen3-32B       ts_serverlessllm_io_uring             194.3            N/A
