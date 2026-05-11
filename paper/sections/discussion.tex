@@ -1,48 +1,32 @@
 \section{Discussion}
 \label{sec:discussion}
 
-This section interprets the findings in Section~\ref{sec:results} with the experimental setup in Section~\ref{sec:experimental_setup}. Experimental definitions, cold-cache procedure, and layer-specific metrics are fixed in Section~\ref{sec:experimental_setup}; where the adaptive \texttt{default} trails explicit backends on medium SafeTensors rows, Section~\ref{sec:limitations} states those limits explicitly. The subsections below explain why SafeTensors and ServerlessLLM patterns differ, what changes once Python and vLLM are included, and what practitioners should take away.
+The main result is not that one backend wins. The main result is that a checkpoint loader must treat layout and scale as policy inputs.
 
-No single backend wins across the full ladder and both layouts. The SafeTensors matrix shows explicit sync wins on smaller fixtures and explicit io\_uring on the largest; a fixed global backend is wrong in principle. ServerlessLLM partitioning breaks any sync-first rule. Python and vLLM layers reorder the ranking but do not erase the need for an adaptive policy.
+\subsection{Mechanism: why layout changes the answer}
 
-\subsection{Format-specific mechanics}
+SafeTensors and ServerlessLLM-style partitioning create different I/O problems. SafeTensors exposes large contiguous reads after metadata parsing. For small checkpoints, a practical sync backend has low overhead and enough parallelism; additional scheduling machinery does not amortize. As size and shard count grow, the H100 workload has enough in-flight work for \texttt{io\_uring} to pay off.
 
-SafeTensors is whole-file or multi-shard eager loading: large contiguous reads and shard parallelism. Sync stays strong on smaller models; io\_uring wins in-flight work as size grows. ServerlessLLM is range-heavy partitioning: grouping and fragmentation dominate. Sync is rarely ideal; async is strong on some mid-sized cases; larger partitions favour io\_uring and \texttt{default}. Backend choice cannot be separated from layout.
+ServerlessLLM-style partitioning changes the request geometry. The loader reconstructs tensors from indexed partition files, so grouping, coalescing, and range batching dominate. The SafeTensors rule ``sync can be good for small loads'' does not transfer: sync never wins in the H100 ServerlessLLM matrix. The format, not the API name, explains the reversal.
 
-\textbf{Implementation matters, not only API names.} For \texttt{io\_uring}, ring topology and worker ownership determine whether submission keeps CPU and storage busy at scale in the evaluated backend (Section~\ref{sec:design}).
+\subsection{Integration: why rankings move across layers}
 
-Python adds orchestration, tensor conversion, and object materialisation that can erase part of the Rust gain. Shared Tokio setup and less redundant Torch work helped Qwen3-8B. Profile bindings separately from the Rust core.
+Rust, Python, and vLLM answer different questions. Rust isolates backend mechanics. Python measures a public library boundary with FFI, tensor conversion, and object construction. vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation setup. These costs can dilute a pure I/O advantage or reorder two close backends.
 
-\textbf{vLLM.} Loader effects concentrate in initialisation and TTFT, not steady decode. Reported end-to-end times depend on engine memory budget and \texttt{max\_model\_len} as well as on the loader path; interpret integration results in that full-stack context.
+This is not a flaw in the methodology; it is the deployment reality. A systems paper about loading should show both mechanism and propagation. Tensora's gains matter because they remain visible in vLLM cold initialization even after fixed engine costs are included.
 
-\subsection{Policy claims that survive scrutiny}
+\subsection{Policy: what \texttt{default} should promise}
 
-The narrow defensible core: on SafeTensors, explicit sync wins on smaller fixtures and explicit io\_uring on the largest; a fixed global backend is wrong in principle. ServerlessLLM partitioning breaks the sync-first rule. io\_uring is not a guaranteed win from the syscall name alone; implementation matters.
+An adaptive default should promise three bounded properties. First, it should avoid clearly wrong global choices: sync for all partitioned loads, or \texttt{io\_uring} for every tiny contiguous load. Second, it should degrade gracefully when a backend is unavailable, as in containers that block \texttt{io\_uring}. Third, it should expose explicit overrides for known boundary cases.
 
-Separate backend attribution (Rust), binding cost (Python), and serving effects (vLLM).
+It should not promise oracle optimality. Table~\ref{tab:oracle} shows misses where the current feature set is too coarse. Those misses are useful because they identify where the next policy should add signals: finer shard geometry, storage topology, or learned per-environment calibration. The correct engineering response is transparency plus overrides, not hiding the selector behind a single API name.
 
-\subsection{What would change the conclusion}
+\subsection{What transfers}
 
-SafeTensors claims would weaken if explicit io\_uring lost to explicit sync at the largest scales on similar hardware, or if explicit sync lost everywhere small without caveat. ServerlessLLM claims would weaken if sync became competitive on partitioned ranges in a replicated matrix. Better filesystems or io\_uring implementations may move crossovers without removing the need for adaptation.
+Absolute milliseconds are machine-specific. Ordering regimes transfer more plausibly. In this study, small SafeTensors loads favor sync across H100, H200, and A100. The large-scale winner does not transfer by name: H100 favors \texttt{io\_uring}, H200 favors async when \texttt{io\_uring} is blocked, and A100 shows a non-monotonic recovery at the largest SafeTensors row. A replication should therefore ask whether workload-shape changes persist, not whether every number matches.
 
-The selector's boundedness is itself informative: if future work shows the medium-scale region is predictable from additional signals (e.g., shard count, fragmentation ratio), the selector can be refined. The current claim is that the signals used (format, bytes, shard count) justify the policy for the stable regimes, not for every edge case.
+\subsection{Implications}
 
-\subsection{External validity and replication}
+For practitioners, log the features that determine loader choice: format, bytes, shard or partition count, backend availability, cache condition, and integration layer. Expose a default, but also expose explicit backend labels and override hooks.
 
-Ordering of backends generalises more reliably than absolute milliseconds. The H200 and A100 results (Section~\ref{sec:cross-env}) provide direct evidence: the regime structure---small models favour sync, and mid-to-large models typically favour a different backend---persists on two of three sites (H100 and H200), while A100 shows a non-monotonic pattern where async dominates mid-range but sync recovers at the largest scale. The structural claim that policy must track layout and scale is more portable than any single crossover latency.
-
-The selector story is bounded to the tested ladder and harness. Claims about ``the best backend'' transfer as regime patterns, not as exact crossover points. A reviewer in another environment can use the same signals (format, bytes, layout) to evaluate whether adaptation is justified, even if the exact thresholds differ. The capability-gated fallback (Section~\ref{sec:design}) ensures that unavailable backends do not produce errors---they are simply excluded from the selector's candidate set.
-
-\subsection{Uncertainty, variance, and decision-making}
-
-The matrices look definitive because each cell is a single number. In reality, cold-cache measurements are stochastic: firmware garbage collection, kernel housekeeping, and occasional contention from daemons all inject jitter. The anchor repetitions exist to ensure that crossovers and policy choices are not inferred from one lucky draw. When two backends sit close in a cell, treat the ranking as \emph{fragile} unless repeated runs or anchor bands support it; when the gap spans tens of percent across the ladder, treat the regime pattern as \emph{stable} even if milliseconds move.
-
-This matters for operations. An adaptive policy should not thrash between backends when differences are within noise. Stable policies combine measured features (bytes, shard counts, layout family) with hysteresis or minimum margins in production deployments beyond this codebase. The contribution is not a lookup table of millisecond winners; it is evidence that \textbf{margins exist} and align with workload structure enough to automate.
-
-Rust, Python, and vLLM differ in \textbf{variance sources}: storage and submission (Rust), interpreter and framework jitter (Python), GPU initialisation (vLLM). Noise in one layer does not invalidate another. Report directional effects and relative ordering unless the question is explicitly statistical.
-
-When reporting externally, prefer \textbf{bands} from anchors for contested mid-scale rows and \textbf{explicit cache-state labels}. Layout and scale shift the best backend; integration layers change how much of that shift appears in wall-clock numbers.
-
-Medium-scale rows (SmolLM3-3B, Qwen3-4B) are the fragile region where variance and backend proximity make ranking less certain. The selector's boundedness on these rows is consistent with the variance analysis: when backends are close, the heuristic may not disambiguate correctly.
-
-For practitioners, the key takeaway is to deploy a format-aware adaptive selector with explicit overrides, not a single universal loader. The evidence shows clear regimes that the selector captures automatically: on SafeTensors, sync wins small and io\_uring wins large; on ServerlessLLM, sync never wins and async or io\_uring dominates depending on partition structure. Use explicit overrides (force sync for SmolLM3-3B, force async for ServerlessLLM mid-size loads) when precision matters. Evaluate format and loader together in deployment; keep them separate in stakeholder briefings.
+For researchers, report loading results as layered constructs. A Rust microbenchmark, a Python API benchmark, and a serving-engine startup benchmark are all valuable; none subsumes the others. A paper that reports only one layer risks explaining the wrong phenomenon.

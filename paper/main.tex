@@ -19,6 +19,7 @@
 \usepackage[expansion=false]{microtype}
 \usepackage{graphicx}
 \usepackage{amsmath,amssymb}
+\usepackage[table]{xcolor}
 \usepackage{tikz}
 \usepackage{pgfplots}
 \usetikzlibrary{shapes.geometric,arrows,positioning,calc}
@@ -32,15 +33,23 @@
 }
 
 \def\figdir{figures}
+\definecolor{tensoraSync}{HTML}{D8ECFF}
+\definecolor{tensoraAsync}{HTML}{E5F5E0}
+\definecolor{tensoraUring}{HTML}{FEE8C8}
+\definecolor{tensoraDefault}{HTML}{F2E5FF}
+\newcommand{\syncwin}{\cellcolor{tensoraSync}\texttt{sync}}
+\newcommand{\asyncwin}{\cellcolor{tensoraAsync}\texttt{async}}
+\newcommand{\uringwin}{\cellcolor{tensoraUring}\texttt{io\_uring}}
+\newcommand{\defaultwin}{\cellcolor{tensoraDefault}\texttt{default}}
 
 \hypersetup{%
-  pdftitle={Workload-Shaped Checkpoint Loading for Large Language Model Inference},
+  pdftitle={Load by Design: Workload-Shaped Checkpoint Loading for Large Language Model Inference},
   pdfauthor={Botir Khaltaev},
   pdfkeywords={large language models, checkpoint loading, I/O policy, io\_uring, cold start, vLLM, reproducibility, systems measurement}%
 }
 
 %% Title
-\title{Workload-Shaped Checkpoint Loading for Large Language Model Inference}
+\title{Load by Design: Workload-Shaped Checkpoint Loading for Large Language Model Inference}
 
 %% Authors
 \author{
@@ -53,13 +62,13 @@
 \maketitle
 
 \begin{abstract}
-LLM cold-start latency is dominated by reading checkpoint weights from storage into GPU memory. Peak NVMe bandwidth is only an upper bound: realized throughput depends on the I/O request geometry determined by checkpoint layout, the submission policy of the loading backend, and integration overhead from the serving stack. This paper shows that checkpoint layout determines request geometry, which changes the optimal loading backend across scales and integration layers.
+Cold-start latency in large language model (LLM) serving is often reduced to a hardware question: how quickly can storage stream checkpoint bytes? This paper argues that the better abstraction is \emph{workload shape}. A checkpoint layout determines the file and range requests exposed to the operating system; an I/O backend determines how those requests are submitted and completed; Python bindings and serving engines determine how much of any backend gain reaches the user. Consequently, the best loader is not a universal API choice, but a policy conditioned on format, scale, runtime capability, and integration layer.
 
-Using Tensora, an open checkpoint-loading measurement framework, we evaluate synchronous POSIX I/O, Tokio-based async, io\_uring, and an adaptive default policy across two layouts (SafeTensors contiguous shards and ServerlessLLM-style partitioned files) at three layers: a Rust microbenchmark for pure backend attribution (six public checkpoints from 0.6B to 32B parameters), Python bindings for user-facing overhead, and a custom vLLM integration for end-to-end serving impact. Cross-environment validation on H200 and A100 containers---where kernel security policy blocks \texttt{io\_uring}---tests whether findings transfer.
+We present Tensora, an open checkpoint-loading framework and measurement harness for evaluating that policy space. Tensora runs synchronous POSIX I/O, Tokio-based async I/O, Linux \texttt{io\_uring}, and an adaptive default policy over two layouts: contiguous SafeTensors shards and a partitioned ServerlessLLM-style layout. The evaluation spans three layers---Rust backend attribution, Python bindings, and a custom vLLM integration---six public checkpoints from 0.6B to 32B parameters, and three environments: an H100 host with local NVMe and working \texttt{io\_uring}, plus H200 and A100 container environments where \texttt{io\_uring} is blocked.
 
-Four findings emerge. First, SafeTensors exhibits a clear crossover: synchronous loading is fastest for small models, while io\_uring dominates for multi-shard checkpoints at 8B parameters and above; no fixed backend tracks both regimes. Second, the partitioned ServerlessLLM layout reverses the ranking---synchronous loading never wins, and the relevant trade-off is between async and io\_uring depending on partition structure. Third, Python tensor materialization and vLLM initialization overhead change which backend appears fastest, but adaptive policy consistently outperforms any single fixed choice. In vLLM cold start, Tensora's adaptive SafeTensors path reduces initialization time by 37--48\% compared to the native loader for 8B and 32B models. Fourth, the regime structure (small models favour sync, mid-to-large models typically favour another backend) holds on H100 and H200, while A100 shows a non-monotonic pattern where sync recovers at the largest scale. The identity of the mid-to-large-scale winner depends on kernel interface availability and storage topology---making the adaptive selector more valuable than any fixed policy.
+The results show four regime changes. First, H100 SafeTensors has a scale crossover: sync is fastest at small scales, while \texttt{io\_uring} is fastest for 8B--32B multi-shard checkpoints. Second, the ServerlessLLM-style layout changes the ranking: sync is never fastest in the H100 matrix, and async, \texttt{io\_uring}, and default read planning trade places depending on partition structure. Third, integration layers reorder but preserve loader impact: Python materialization dominates absolute time, while vLLM cold \texttt{load\_only} improves by 37--48\% for 8B and 32B models with Tensora's adaptive SafeTensors path relative to vLLM's native loader. Fourth, ordering regimes are more portable than backend identities: small SafeTensors loads favor sync across all three environments, but the mid-to-large-scale winner changes with storage topology and backend availability.
 
-The operational conclusion is not a single universal loader. It is a format-aware adaptive policy with explicit overrides, grounded in measured workload features---bytes, shard count, partition count, and integration layer---rather than API names alone.
+The operational conclusion is deliberately bounded: use a format-aware adaptive loader with explicit overrides and capability checks. Do not choose sync, async, or \texttt{io\_uring} as a universal default by name alone.
 \end{abstract}
 
 \keywords{large language models \and checkpoint loading \and I/O policy \and io\_uring \and cold start \and vLLM \and reproducibility}
