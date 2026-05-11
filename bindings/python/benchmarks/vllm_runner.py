@@ -65,11 +65,17 @@ def get_llm_kwargs(model_id: str, loader: str = None) -> dict:
 
 
 def _cleanup_engine(llm: object) -> None:
-    """Shut down a vLLM LLM instance and release GPU memory."""
+    """Shut down a vLLM LLM instance and release GPU memory.
+
+    vLLM freezes the GC during engine init (gc.freeze()) to avoid scanning
+    large model weights.  EngineCore.shutdown() calls gc.unfreeze() so
+    those objects become visible to the collector again.
+    """
     import gc
 
     import torch
 
+    llm.llm_engine.engine_core.shutdown()
     del llm
     gc.collect()
     if torch.cuda.is_available():
