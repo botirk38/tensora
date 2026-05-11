@@ -16,6 +16,32 @@ from benchmarks.vllm_runner import BENCHMARK_KINDS, LOADERS
 
 CACHE_MODES = ["warm", "cold"]
 
+_GPU_FREE_TIMEOUT = 30
+
+
+def _wait_for_gpu_idle() -> None:
+    """Poll nvidia-smi until GPU memory is <5% used, up to timeout."""
+    deadline = time.monotonic() + _GPU_FREE_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            r = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode == 0:
+                used, total = (int(x) for x in r.stdout.strip().split(","))
+                if used < total * 0.05:
+                    return
+        except (OSError, ValueError):
+            pass
+        time.sleep(2)
+
 
 def _drop_linux_page_cache() -> None:
     """Best-effort host page-cache drop for cold-cache runs (Linux; usually requires root)."""
@@ -55,11 +81,7 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
             timeout=1200,
         )
 
-        # Allow GPU memory to be fully reclaimed by the driver after
-        # the EngineCore child process exits.  Without this pause, the
-        # very next subprocess may fork before CUDA has finished tearing
-        # down, causing the new EngineCore to see reduced free memory.
-        time.sleep(5)
+        _wait_for_gpu_idle()
 
         if result.returncode != 0:
             raise RuntimeError(f"vLLM subprocess failed: {result.stderr}")
