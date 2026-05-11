@@ -98,6 +98,7 @@ def test_vllm(benchmark, model_id, loader, benchmark_kind, cache_mode):
     # One subprocess load per test: default benchmark(...) repeats many rounds and would
     # relaunch vLLM repeatedly (OOM / spurious failures / huge runtime).
     data = benchmark.pedantic(run_subprocess, rounds=1, iterations=1)
+    benchmark.extra_info.update(data)
 
     if benchmark_kind == "load_only":
         assert "init_ms" in data
