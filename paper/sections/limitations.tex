@@ -1,32 +1,28 @@
 \section{Limitations}
 \label{sec:limitations}
 
-The results support a regime-based policy claim in a controlled harness. They do not establish a universally optimal loader.
+The paper makes a bounded systems claim: backend policy should depend on workload shape. It does not prove a universal selector, universal thresholds, or universal superiority of any I/O API.
 
 \subsection{External validity}
 
-The primary Rust and vLLM matrices come from one H100 host with local NVMe and working \texttt{io\_uring}. H200 and A100 containers provide partial cross-environment validation under a different deployment condition: network-attached storage with \texttt{io\_uring} blocked by kernel policy. This is useful because it tests fallback behaviour, but it is not the same as repeating the full H100 experiment on multiple local-NVMe hosts.
+The primary matrices come from one H100 host with local NVMe and working \texttt{io\_uring}. H200 and A100 provide useful but different validation: network-storage containers where \texttt{io\_uring} is blocked. They test fallback behavior and regime transfer, but they are not three identical replicas of the same hardware/storage stack.
 
-The structural pattern is stronger than the exact crossover point. Small SafeTensors loads favour sync across all three environments. Larger SafeTensors loads favour \texttt{io\_uring} on H100, async on H200, and sync/default at the largest A100 row. The identity of the winner therefore depends on kernel interface availability, storage topology, filesystem behaviour, and host load.
-
-The model ladder covers six public checkpoints from 0.6B to 32B parameters and two layouts. It does not exhaust other formats such as GGUF, quantised checkpoint variants, distributed filesystems, RAID configurations, object stores, or non-Linux operating systems.
+The model ladder covers six public checkpoints from 0.6B to 32B parameters and two layouts. It does not cover GGUF, quantized-only deployments, object stores, distributed filesystems, RAID variants, direct-I/O configurations, Windows/macOS backends, or multi-node distributed loading.
 
 \subsection{Construct validity}
 
-Each measurement layer defines ``loading time'' differently. Rust timings approximate backend-attributed checkpoint read and tensor assembly. Python timings add FFI, interpreter overhead, tensor materialisation, and Python object construction. vLLM timings include GPU bring-up, memory pools, runtime configuration, model initialisation, and first-token generation depending on the benchmark kind. None of these exactly equals production user-perceived latency, which may add queuing, batching, network RTT, model routing, and admission control.
-
-For this reason, claims do not move freely across layers. A Rust result explains backend mechanics; a vLLM result explains serving-startup impact under that harness.
-
-\subsection{Selector boundedness}
-
-The adaptive default does not match the best per-row explicit backend across all cells. On H100 SafeTensors it trails explicit sync by 2.79$\times$ for SmolLM3-3B and 1.69$\times$ for Qwen3-4B, and trails explicit \texttt{io\_uring} by 1.21$\times$ for Qwen3-8B. On H100 ServerlessLLM it trails explicit async by 1.33$\times$ for SmolLM3-3B. These rows sit near regime boundaries or partition structures that the current feature set does not fully capture.
-
-The right response is not to hide these misses. The operational recommendation is an adaptive default with explicit overrides. The default automates stable regimes; overrides handle known boundary cases.
+``Load time'' means different things at different layers. Rust timings approximate backend-attributed disk-to-tensor work. Python timings add interpreter and binding costs. vLLM timings add engine initialization, CUDA setup, memory pools, and generation state. A Rust result should not be quoted as a serving result, and a vLLM result should not be used to rank pure I/O APIs without qualification.
 
 \subsection{Statistical limits}
 
-The main matrices report representative cold-cache runs. Anchor repetitions in Appendix~\ref{app:anchor-stats} validate selected regimes, but not every cell has repeated statistics. Small gaps below roughly 10\% should be interpreted cautiously unless they appear consistently across rows, layers, or repetitions.
+Most full-matrix cells are representative cold-cache runs. Anchor repetitions validate selected small, medium, and large regimes, but not every row has repeated statistics. The paper therefore emphasizes large effect sizes, ordering reversals, and repeated structural patterns rather than treating every small difference as significant. Differences below roughly 10\% should be read cautiously unless supported by anchors or cross-row consistency.
 
-\subsection{Scope of claims}
+\subsection{Selector boundedness}
 
-The evidence supports an engineering heuristic justified by measurement: backend policy should use format, scale, and capability signals. It does not prove optimal thresholds, a learned selector, or universal superiority of \texttt{io\_uring}. Future work should add more local-NVMe hosts, filesystem and mount-option sweeps, additional checkpoint formats, direct-I/O variants, object-store paths, and calibrated or learned selectors.
+The adaptive default is not an oracle. On H100 SafeTensors it trails explicit sync by 2.79$\times$ for SmolLM3-3B and 1.69$\times$ for Qwen3-4B, and trails explicit \texttt{io\_uring} by 1.21$\times$ for Qwen3-8B. On H100 ServerlessLLM it trails explicit async by 1.33$\times$ for SmolLM3-3B. On A100, it misses the mid-range async regime for SafeTensors.
+
+These failures are part of the result. They show that a deployable policy needs explicit overrides and likely per-environment calibration. They do not rescue a fixed global backend: no explicit backend dominates across layout, scale, and environment.
+
+\subsection{Future work}
+
+The next step is not to claim a perfect heuristic. It is to expand calibration: more local-NVMe hosts, filesystem and mount-option sweeps, direct-I/O variants, object-store backends, additional checkpoint formats, and learned or profile-guided selectors. The current evidence justifies the abstraction---workload-shaped loading---and identifies where a stronger selector should improve.

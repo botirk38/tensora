@@ -1,14 +1,14 @@
 \section{Results}
 \label{sec:results}
 
-The evaluation proceeds in three layers: Rust backend attribution (Section~\ref{sec:rust-results}), Python binding overhead (Section~\ref{sec:python-results}), and vLLM integration (Section~\ref{sec:vllm-results}). Tables present core evidence; figures visualise regime crossovers. Section~\ref{sec:oracle-analysis} compares the adaptive default against the best per-row explicit backend to bound the selector's effectiveness.
+The evaluation proceeds in three layers: Rust backend attribution (Section~\ref{sec:rust-results}), Python binding overhead (Section~\ref{sec:python-results}), and vLLM integration (Section~\ref{sec:vllm-results}). Tables present core evidence; figures visualize regime crossovers. Section~\ref{sec:oracle-analysis} compares the adaptive default against the best per-row explicit backend to bound the selector's effectiveness.
 
 \subsection{Reading the Results}
 
-The figures and tables are organised by control flow. First, the Rust layer isolates backend attribution for the same logical read plans. Second, the oracle analysis asks how close the adaptive \texttt{default} comes to the best explicit backend. Third, cross-environment results test capability-gated fallback. Finally, Python and vLLM results show how the same loader choices behave once integration overhead is included.
+The section follows the same control flow as the system. Rust results isolate backend attribution. Oracle analysis bounds the adaptive default against the best explicit backend on each row. Cross-environment results test capability-gated fallback. Python and vLLM results then show how the same choices behave once library and serving overhead are included.
 
 \begin{table}[htbp]
-\caption{Regime map for the strongest backend by layout and environment. Colour encodes the winning explicit or integrated policy in the corresponding matrix. The visual point is the regime shift: no colour dominates every row.}
+\caption{Regime map: strongest observed policy by layout, environment, and scale. Color encodes the winning policy in the corresponding matrix. The key visual fact is non-dominance: every backend color appears, and the pattern changes with layout and environment.}
 \label{tab:regime-map}
 \centering
 \small
@@ -27,24 +27,42 @@ vLLM SafeTensors & \syncwin & \defaultwin & \defaultwin & \uringwin \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:regime-map} is the paper's main visual summary. SafeTensors begins blue (sync) and shifts with scale; ServerlessLLM is not sync-led; restricted environments replace \texttt{io\_uring} with async or default; vLLM preserves the broad small-versus-large pattern while adding engine overhead.
+Table~\ref{tab:regime-map} is the visual thesis of the paper. SafeTensors begins in the sync regime and shifts with scale. ServerlessLLM is not sync-led. Restricted environments replace \texttt{io\_uring} with async or default. vLLM preserves the small-versus-large structure while adding engine overhead. A single fixed backend cannot reproduce this map.
+
+\begin{table}[htbp]
+\caption{Effect-size summary for representative regime claims. Ratios are computed as slower time divided by faster time; larger values indicate stronger evidence for a regime distinction.}
+\label{tab:effect-summary}
+\centering
+\small
+\begin{tabular}{p{0.42\textwidth}p{0.24\textwidth}p{0.22\textwidth}}
+\toprule
+Claim & Evidence row & Effect size \\
+\midrule
+Small SafeTensors favors low-overhead sync/default over \texttt{io\_uring} & H100 Qwen3-0.6B & sync is 2.09$\times$ faster than \texttt{io\_uring}; default is 1.66$\times$ faster than sync \\
+Large SafeTensors needs deeper submission & H100 Qwen3-32B & \texttt{io\_uring} is 1.28$\times$ faster than sync \\
+Partitioning removes sync as winner & H100 ServerlessLLM Qwen3-32B & default is 1.44$\times$ faster than sync \\
+\texttt{io\_uring} availability changes large-scale winner & H200 SafeTensors Qwen3-32B & async is 3.41$\times$ faster than sync when \texttt{io\_uring} is blocked \\
+Serving impact survives integration & vLLM Qwen3-32B cold load\_only & Tensora default is 48.1\% faster than native \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Headline findings}
 
-Three patterns emerge from the Rust matrices. \textbf{First, SafeTensors exhibits a backend crossover.} Synchronous loading is the fastest explicit backend for model sizes up to 4B parameters; io\_uring is the fastest explicit backend from 8B parameters upward. No single fixed backend tracks both regimes.
+Four patterns emerge from the Rust and integration matrices. \textbf{First, SafeTensors exhibits a backend crossover.} Synchronous loading is the fastest explicit backend for model sizes up to 4B parameters; io\_uring is the fastest explicit backend from 8B parameters upward. No single fixed backend tracks both regimes.
 
 \textbf{Second, the partitioned ServerlessLLM layout reverses the ranking.} Synchronous loading is never the fastest explicit backend for any model size in this ladder. The relevant trade-off is between async loading (strong on smaller and mid-sized range loads) and io\_uring (competitive at larger partition counts).
 
-\textbf{Third, the adaptive default is useful but bounded.} It matches or beats the best explicit backend in 5 of 12 H100 Rust cells (Table~\ref{tab:oracle}) and stays near parity in several others; it trails significantly on medium-scale rows where the feature mapping is imprecise. This boundedness is informative: it shows where explicit overrides add value.
+\textbf{Third, the adaptive default is useful but bounded.} It beats the best explicit backend in 3 of 12 H100 Rust cells (Table~\ref{tab:oracle}) and lands within roughly 3\% on several additional rows. The large misses are concentrated in medium-scale boundary regions. That pattern argues for adaptive defaults plus explicit overrides, not for hiding the selector or claiming oracle optimality.
 
-Across Python and vLLM, integration overhead does not erase backend effects---it reorders them. This validates the operational conclusion: deploy a format-aware adaptive default with explicit overrides rather than a fixed single backend.
+\textbf{Fourth, integration overhead reorders but does not erase backend effects.} Python materialization makes absolute times much larger than Rust timings. vLLM adds engine initialization. Yet loader choice still changes cold initialization by tens of seconds at larger scales, which is the deployment-relevant outcome.
 
-\textbf{Fourth, the ordering regime transfers across environments but the winning backend does not.} Cross-environment validation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that the structural pattern---small models favour sync, mid-to-large models typically favour a different backend---holds on H100 and H200, while A100 shows a non-monotonic pattern where async dominates mid-range but sync recovers at the largest scale (Section~\ref{sec:cross-env}). This makes the adaptive selector more valuable, not less: a fixed policy would require manual tuning per deployment site.
+\textbf{Fifth, ordering regimes transfer better than backend names.} Cross-environment validation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that small SafeTensors loads favor sync across all environments. The mid-to-large-scale winner changes with storage topology and kernel capability. This makes capability-gated adaptation more valuable, not less.
 
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
 
-The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialisation costs. Unless stated otherwise, each matrix cell is one representative cold-cache run; Appendix~\ref{app:anchor-stats} reports five-repetition medians and min--max bands for selected anchors.
+The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. Unless stated otherwise, each matrix cell is one representative cold-cache run; Appendix~\ref{app:anchor-stats} reports five-repetition medians and min--max bands for selected anchors.
 
 \subsubsection{SafeTensors Results}
 
@@ -100,7 +118,7 @@ Async is consistently the weakest backend for SafeTensors. Whole-file and multi-
     \label{fig:safetensors-crossover}
 \end{figure}
 
-Figure~\ref{fig:safetensors-crossover} visualises the progression. \texttt{default} adds planning (chunking, coalescing) that helps on Qwen3-0.6B (333~ms, beating all explicit backends) but misses the medium-scale crossover region on SmolLM3-3B and Qwen3-4B.
+Figure~\ref{fig:safetensors-crossover} visualizes the progression. \texttt{default} adds planning (chunking, coalescing) that helps on Qwen3-0.6B (333~ms, beating all explicit backends) but misses the medium-scale crossover region on SmolLM3-3B and Qwen3-4B.
 
 \subsubsection{ServerlessLLM Results}
 
@@ -181,9 +199,9 @@ Qwen3-32B & 1.00 & 0.93 \\
 \end{tabular}
 \end{table}
 
-Default matches or beats the best explicit backend in 5 of 12 cells (ratios $\leq 1.0$). For SafeTensors, default correctly routes the smallest model (Qwen3-0.6B) to a fast path and tracks the large-scale io\_uring regime within 3\% at Qwen3-14B and near parity at Qwen3-32B. The medium-scale misses---SmolLM3-3B (2.79$\times$), Qwen3-4B (1.69$\times$), and Qwen3-8B (1.21$\times$)---are the region where the crossover from sync to io\_uring is most sensitive to per-checkpoint shard structure that the current feature set does not fully resolve.
+Default beats the best explicit backend in 3 of 12 cells and lands within roughly 3\% on four additional cells. For SafeTensors, default correctly routes the smallest model (Qwen3-0.6B) to a fast path and tracks the large-scale io\_uring regime within 3\% at Qwen3-14B and near parity at Qwen3-32B. The medium-scale misses---SmolLM3-3B (2.79$\times$), Qwen3-4B (1.69$\times$), and Qwen3-8B (1.21$\times$)---are the region where the crossover from sync to io\_uring is most sensitive to per-checkpoint shard structure that the current feature set does not fully resolve.
 
-For ServerlessLLM, default matches or beats the best explicit backend in 3 of 6 cells. The single notable miss is SmolLM3-3B (1.33$\times$), where async's grouped range execution fits the partition structure better than default's chosen path. The remaining ratios are near-parity ($\leq 1.03$).
+For ServerlessLLM, default beats the best explicit backend in 2 of 6 cells and is close on most remaining rows. The single notable miss is SmolLM3-3B (1.33$\times$), where async's grouped range execution fits the partition structure better than default's chosen path. The remaining ratios are near-parity ($\leq 1.03$).
 
 \textbf{Interpretation.} The misses are not hidden; they are the point at which the adaptive policy becomes an engineering policy rather than an oracle. They identify where the feature mapping is fragile and where explicit overrides (for example, force sync for SafeTensors SmolLM3-3B; force async for ServerlessLLM SmolLM3-3B) provide clear value. A deployable selector should therefore expose overrides instead of pretending every boundary can be learned from one static threshold.
 
@@ -321,14 +339,14 @@ ServerlessLLM default & 22.45 & 20.50 & 18.45 \\
 
 Table~\ref{tab:python-optimisation} shows the sequence. For SafeTensors on Qwen3-8B, the default path moves from 15.88~s to 11.55~s, a 27.3\% reduction from the baseline. For ServerlessLLM, the same sequence moves default from 22.45~s to 18.45~s, a 17.8\% reduction.
 
-The Python numbers are much larger than the Rust-only numbers (11.55~s vs 3.84~s for SafeTensors default) because eager loading at the binding layer includes substantial tensor materialisation and Python object construction. The key conclusion: Python is not a transparent pass-through layer. Backend improvements matter, but they are filtered through the cost of converting checkpoint contents into Torch tensors and Python dictionaries.
+The Python numbers are much larger than the Rust-only numbers (11.55~s vs 3.84~s for SafeTensors default) because eager loading at the binding layer includes substantial tensor materialization and Python object construction. The key conclusion: Python is not a transparent pass-through layer. Backend improvements matter, but they are filtered through the cost of converting checkpoint contents into Torch tensors and Python dictionaries.
 
 \subsection{vLLM Results}
 \label{sec:vllm-results}
 
 The final vLLM matrix completed successfully across all six models, all benchmark loaders, warm and cold cache conditions, and all three benchmark kinds.
 
-\textbf{Stock vLLM versus Tensora.} The \texttt{native} loader follows vLLM's default weight-loading path; \texttt{ts\_*} loaders use Tensora-backed integrations. On cold \texttt{load\_only}, Tensora's default SafeTensors path reduces initialisation time relative to \texttt{native} across all measured scales (Table~\ref{tab:vllm-baseline}).
+\textbf{Stock vLLM versus Tensora.} The \texttt{native} loader follows vLLM's default weight-loading path; \texttt{ts\_*} loaders use Tensora-backed integrations. On cold \texttt{load\_only}, Tensora's default SafeTensors path reduces initialization time relative to \texttt{native} across all measured scales (Table~\ref{tab:vllm-baseline}).
 
 \begin{table}[htbp]
 \caption{Cold vLLM load\_only: native vs. Tensora (ms). The gap is an end-to-end effect (CUDA context, memory pools, and loader policy), not a pure Rust microbenchmark.}
@@ -367,9 +385,9 @@ Qwen3-32B & 88164 & ts\_safetensors\_io\_uring \\
 \end{tabular}
 \end{table}
 
-The vLLM best-loader pattern mirrors the Rust SafeTensors crossover: smaller models favour sync-style loaders, larger models favour default or io\_uring. The match is not exact---vLLM initialization includes fixed costs that dilute the pure-I/O ranking---but the regime structure survives.
+The vLLM best-loader pattern mirrors the Rust SafeTensors crossover: smaller models favor sync-style loaders, larger models favor default or io\_uring. The match is not exact---vLLM initialization includes fixed costs that dilute the pure-I/O ranking---but the regime structure survives.
 
-For TTFT (Table~\ref{tab:vllm-ttft}), the ranking is broadly similar to load\_only but does not match row-for-row because TTFT includes the first generation step after initialisation.
+For TTFT (Table~\ref{tab:vllm-ttft}), the ranking is broadly similar to load\_only but does not match row-for-row because TTFT includes the first generation step after initialization.
 
 \begin{table}[htbp]
 \caption{Best cold TTFT vLLM loader by model.}
@@ -389,8 +407,8 @@ Qwen3-32B & 88551 & ts\_safetensors\_default \\
 \end{tabular}
 \end{table}
 
-The SafeTensors loader family consistently outperforms the ServerlessLLM family for both metrics. Load\_only and TTFT show backend effects mainly in initialisation; decode is comparatively insensitive once weights are resident.
+The SafeTensors loader family consistently outperforms the ServerlessLLM family for both metrics. Load\_only and TTFT show backend effects mainly in initialization; decode is comparatively insensitive once weights are resident.
 
 \subsection{Layer summary}
 
-Four principles emerge. (1) Backend ranking depends on workload shape: SafeTensors favours sync at small scale and \texttt{io\_uring} at large H100 scale, while ServerlessLLM favours async, \texttt{io\_uring}, or default planning and disfavours sync. (2) The adaptive default is useful but bounded: it wins or ties several stable-regime rows and misses medium-scale rows that need explicit overrides. (3) Integration layers reorder but do not eliminate backend differences: Python adds tensor conversion overhead and vLLM adds initialisation cost, yet loader choice still changes user-visible startup. (4) Cross-environment validation confirms that sync dominates small SafeTensors models everywhere; the mid-to-large-scale winner varies with kernel interface availability and storage topology, and A100 shows a non-monotonic pattern where sync/default recovers at the largest scale. The selector's capability-gated fallback adapts to these constraints better than a hard-coded \texttt{io\_uring}-first policy would.
+Four principles emerge. (1) Backend ranking depends on workload shape: SafeTensors favors sync at small scale and \texttt{io\_uring} at large H100 scale, while ServerlessLLM favors async, \texttt{io\_uring}, or default planning and disfavors sync. (2) The adaptive default is useful but bounded: it wins or ties several stable-regime rows and misses medium-scale rows that need explicit overrides. (3) Integration layers reorder but do not eliminate backend differences: Python adds tensor conversion overhead and vLLM adds initialization cost, yet loader choice still changes user-visible startup. (4) Cross-environment validation confirms that sync dominates small SafeTensors models everywhere; the mid-to-large-scale winner varies with kernel interface availability and storage topology, and A100 shows a non-monotonic pattern where sync/default recovers at the largest scale. The selector's capability-gated fallback adapts to these constraints better than a hard-coded \texttt{io\_uring}-first policy would.
