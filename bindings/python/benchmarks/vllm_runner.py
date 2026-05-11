@@ -84,7 +84,6 @@ def run_benchmark(
 
     os.environ["VLLM_LOGGING_LEVEL"] = "CRITICAL"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    os.environ["HF_HUB_OFFLINE"] = "1"
 
     config = LOADER_CONFIG.get(loader)
 
