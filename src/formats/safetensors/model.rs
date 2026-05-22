@@ -98,32 +98,7 @@ struct LoadStats {
     total_bytes: u64,
 }
 
-impl LoadStats {
-    #[cfg(target_os = "linux")]
-    fn avg_shard_bytes(self) -> u64 {
-        self.total_bytes.div_ceil(self.shard_count.max(1) as u64)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn log2_bytes(self) -> f64 {
-        if self.total_bytes == 0 {
-            0.0
-        } else {
-            (self.total_bytes as f64).log2()
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn shard_fanout_score(self) -> f64 {
-        match self.shard_count {
-            0..=1 => 0.0,
-            2..=3 => 1.0,
-            4..=7 => 2.0,
-            8..=15 => 3.0,
-            _ => 4.0,
-        }
-    }
-}
+impl LoadStats {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoadBackend {
@@ -133,20 +108,19 @@ enum LoadBackend {
     IoUring,
 }
 
-/// Score-based backend selection for SafeTensors.
+const MULTI_SHARD_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
+const IOURING_SHARD_THRESHOLD: usize = 4;
+const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Backend selection for SafeTensors.
 ///
-/// Uses a simple scoring function to estimate whether io_uring or sync will perform better.
-/// This adapts across hosts by considering:
-/// - Total bytes (log scale)
-/// - Shard count (fanout bucket)
-/// - Average shard size
-///
-/// The score is: score = log2(total_bytes) + 2*fanout_bucket + avg_shard_gb
-/// If score exceeds the threshold, use io_uring when available. Large multi-shard
-/// loads fall back to Tokio async when io_uring is blocked by the host.
-///
-/// Threshold tuned for H100 environments - sync generally better below ~20GB
+/// Single-shard models always use sync (avoids 18% spawn_blocking overhead).
+/// Multi-shard loads use sync for small workloads, io_uring or async for large.
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
+    if stats.shard_count <= 1 {
+        return LoadBackend::Sync;
+    }
+
     #[cfg(target_os = "linux")]
     {
         let capabilities = backends::backend_capabilities();
@@ -154,8 +128,7 @@ fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = stats.shard_count;
-        if stats.total_bytes >= 8 * 1024 * 1024 * 1024 {
+        if stats.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
             return LoadBackend::TokioAsync;
         }
         LoadBackend::Sync
@@ -167,20 +140,16 @@ fn choose_load_backend_with_capabilities(
     stats: &LoadStats,
     capabilities: &backends::BackendCapabilities,
 ) -> LoadBackend {
-    let log2_bytes = stats.log2_bytes();
-    let fanout = stats.shard_fanout_score();
-    let avg_shard_gb = stats.avg_shard_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
-
-    let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
-
-    if score >= 48.0 && capabilities.is_available(backends::Backend::IoUring) {
+    if stats.shard_count >= IOURING_SHARD_THRESHOLD
+        && stats.total_bytes >= IOURING_BYTE_THRESHOLD
+        && capabilities.is_available(backends::Backend::IoUring)
+    {
         return LoadBackend::IoUring;
     }
 
-    let large_candidate = score >= 40.0
-        || stats.total_bytes >= 8 * 1024 * 1024 * 1024
-        || (stats.shard_count >= 4 && stats.total_bytes >= 4 * 1024 * 1024 * 1024);
-    if large_candidate && capabilities.is_available(backends::Backend::Async) {
+    if stats.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
+        && capabilities.is_available(backends::Backend::Async)
+    {
         return LoadBackend::TokioAsync;
     }
 
@@ -869,13 +838,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-
-        match choose_load_backend(&stats) {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
-            #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => {}
-        }
+        assert_eq!(choose_load_backend(&stats), LoadBackend::Sync);
     }
 
     #[test]
@@ -899,12 +862,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
-            #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => {}
-        }
+        assert_eq!(choose_load_backend(&stats), LoadBackend::Sync);
     }
 
     #[test]
