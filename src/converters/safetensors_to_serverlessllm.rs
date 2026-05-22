@@ -16,6 +16,8 @@
 use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
+use futures::future::try_join_all;
+use rayon::prelude::*;
 use safetensors::SafeTensors;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -156,93 +158,24 @@ enum ConversionBackend {
     IoUring,
 }
 
+const LARGE_CONVERSION_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Backend selection for conversion.
+///
+/// Sync with parallel partition writes is the default.
+/// Only use async for very large conversions where concurrent I/O helps.
 fn choose_conversion_backend(stats: &ConversionStats) -> ConversionBackend {
-    #[cfg(target_os = "linux")]
-    {
-        if stats.partition_count <= 1 && stats.shard_count <= 2 {
-            return ConversionBackend::Sync;
+    if stats.total_bytes >= LARGE_CONVERSION_THRESHOLD && stats.partition_count >= 4 {
+        #[cfg(target_os = "linux")]
+        {
+            let capabilities = backends::backend_capabilities();
+            if capabilities.is_available(backends::Backend::IoUring) {
+                return ConversionBackend::IoUring;
+            }
         }
-
-        let sync_score = score_sync(stats);
-        let async_score = score_async(stats);
-        let io_uring_score = score_io_uring(stats);
-
-        if io_uring_score < sync_score && io_uring_score < async_score {
-            ConversionBackend::IoUring
-        } else if async_score < sync_score {
-            ConversionBackend::TokioAsync
-        } else {
-            ConversionBackend::Sync
-        }
+        return ConversionBackend::TokioAsync;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if stats.partition_count <= 1 {
-            return ConversionBackend::Sync;
-        }
-        let sync_score = score_sync(stats);
-        let async_score = score_async(stats);
-        if async_score < sync_score {
-            ConversionBackend::TokioAsync
-        } else {
-            ConversionBackend::Sync
-        }
-    }
-}
-
-fn score_sync(stats: &ConversionStats) -> f64 {
-    const BASE: f64 = 1_000_000.0;
-    const PER_BYTE: f64 = 1.0 / 2_000_000_000.0;
-    const PER_SHARD: f64 = 50_000_000.0;
-    const PER_PARTITION: f64 = 50_000_000.0;
-    const FANOUT_PENALTY: f64 = 200_000_000.0;
-
-    BASE + stats.total_bytes as f64 * PER_BYTE
-        + stats.shard_count as f64 * PER_SHARD
-        + stats.partition_count as f64 * PER_PARTITION
-        + stats.max_shards_per_partition as f64 * FANOUT_PENALTY
-}
-
-fn score_async(stats: &ConversionStats) -> f64 {
-    const BASE: f64 = 2_000_000.0;
-    const PARALLELISM: f64 = 4.0;
-    const PER_BYTE: f64 = 1.0 / 2_500_000_000.0;
-    const PER_PARTITION: f64 = 30_000_000.0;
-    const PER_COPY_OP: f64 = 500_000.0;
-    const SMALL_COPY_PENALTY: f64 = 100_000_000.0;
-
-    let small_copy_penalty = if stats.mean_copy_size < 1_048_576.0 {
-        SMALL_COPY_PENALTY
-    } else {
-        0.0
-    };
-
-    BASE + stats.total_bytes as f64 * PER_BYTE / PARALLELISM
-        + stats.partition_count as f64 * PER_PARTITION
-        + stats.copy_op_count as f64 * PER_COPY_OP
-        + small_copy_penalty
-}
-
-#[cfg(target_os = "linux")]
-fn score_io_uring(stats: &ConversionStats) -> f64 {
-    const BASE: f64 = 3_000_000.0;
-    const PER_BYTE: f64 = 1.0 / 3_000_000_000.0;
-    const PER_PARTITION: f64 = 20_000_000.0;
-    const PER_CHUNK: f64 = 2_000_000.0;
-    const FRAGMENTATION_PENALTY: f64 = 150_000_000.0;
-
-    let fragmentation = if stats.mean_copy_size < 524_288.0 {
-        FRAGMENTATION_PENALTY
-    } else {
-        0.0
-    };
-
-    let chunk_count = stats.total_bytes.div_ceil(128 * 1024 * 1024) as usize;
-
-    BASE + stats.total_bytes as f64 * PER_BYTE
-        + stats.partition_count as f64 * PER_PARTITION
-        + chunk_count as f64 * PER_CHUNK
-        + fragmentation
+    ConversionBackend::Sync
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +186,7 @@ async fn build_plan(input_dir: &str, partition_count: usize) -> WriterResult<Con
     let input_dir = Path::new(input_dir);
     let shard_paths = discover_safetensors_shards(input_dir)?;
     validate_index_manifest(input_dir, &shard_paths)?;
-    let tensors = scan_shards_async(&shard_paths).await?;
+    let tensors = scan_shards_mmap(&shard_paths)?;
     build_plan_from_tensors(tensors, partition_count)
 }
 
@@ -261,7 +194,7 @@ fn build_plan_sync(input_dir: &str, partition_count: usize) -> WriterResult<Conv
     let input_dir = Path::new(input_dir);
     let shard_paths = discover_safetensors_shards(input_dir)?;
     validate_index_manifest(input_dir, &shard_paths)?;
-    let tensors = scan_shards_sync(&shard_paths)?;
+    let tensors = scan_shards_mmap(&shard_paths)?;
     build_plan_from_tensors(tensors, partition_count)
 }
 
@@ -390,14 +323,6 @@ fn build_plan_from_tensors(
 // Scan — metadata-only SafeTensors header parsing via mmap
 // ---------------------------------------------------------------------------
 
-async fn scan_shards_async(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
-    scan_shards_mmap(shard_paths)
-}
-
-fn scan_shards_sync(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
-    scan_shards_mmap(shard_paths)
-}
-
 fn scan_shards_mmap(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
     use memmap2::Mmap;
     use std::fs::File;
@@ -453,10 +378,10 @@ async fn materialize(
     tokio::fs::create_dir_all(output_dir).await?;
 
     match backend {
-        ConversionBackend::Sync => materialize_sync_inner(output_dir, plan).await?,
+        ConversionBackend::Sync => materialize_sync_parallel(output_dir, plan)?,
         ConversionBackend::TokioAsync => materialize_async_inner(output_dir, plan).await?,
         #[cfg(target_os = "linux")]
-        ConversionBackend::IoUring => materialize_io_uring_inner(output_dir, plan)?,
+        ConversionBackend::IoUring => materialize_sync_parallel(output_dir, plan)?,
     }
 
     let index_path = output_dir.join("tensor_index.json");
@@ -477,7 +402,7 @@ async fn materialize_async(output_dir: &str, plan: &ConversionPlan) -> WriterRes
 fn materialize_sync(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()> {
     let output_dir = Path::new(output_dir);
     std::fs::create_dir_all(output_dir)?;
-    materialize_sync_inner_sync(output_dir, plan)?;
+    materialize_sync_parallel(output_dir, plan)?;
     let index_path = output_dir.join("tensor_index.json");
     write_index_sync(&index_path, &plan.index)?;
     Ok(())
@@ -487,65 +412,40 @@ fn materialize_sync(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()>
 fn materialize_io_uring(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()> {
     let output_dir = Path::new(output_dir);
     std::fs::create_dir_all(output_dir)?;
-    materialize_io_uring_inner(output_dir, plan)?;
+    materialize_sync_parallel(output_dir, plan)?;
     let index_path = output_dir.join("tensor_index.json");
     write_index_sync(&index_path, &plan.index)?;
     Ok(())
 }
 
 async fn materialize_async_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
-    // Group copy ops by destination partition
-    let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
-    for op in &plan.copy_ops {
-        by_partition.entry(op.dest_partition).or_default().push(op);
-    }
-
-    // Write each partition sequentially to bound memory
-    for (&partition_id, ops) in &by_partition {
-        write_partition_async(output_dir, partition_id, ops).await?;
-    }
-
+    let partitions = group_by_partition(plan);
+    let futs: Vec<_> = partitions
+        .into_iter()
+        .map(|(partition_id, ops)| {
+            let dir = output_dir.to_path_buf();
+            async move { write_partition_async(&dir, partition_id, &ops).await }
+        })
+        .collect();
+    try_join_all(futs).await?;
     Ok(())
 }
 
-async fn materialize_sync_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
+fn group_by_partition(plan: &ConversionPlan) -> Vec<(usize, Vec<&CopyOp>)> {
     let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
     for op in &plan.copy_ops {
         by_partition.entry(op.dest_partition).or_default().push(op);
     }
-
-    for (&partition_id, ops) in &by_partition {
-        write_partition_sync_single(output_dir, partition_id, ops)?;
-    }
-
-    Ok(())
+    by_partition.into_iter().collect()
 }
 
-fn materialize_sync_inner_sync(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
-    let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
-    for op in &plan.copy_ops {
-        by_partition.entry(op.dest_partition).or_default().push(op);
-    }
-
-    for (&partition_id, ops) in &by_partition {
-        write_partition_sync_single(output_dir, partition_id, ops)?;
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn materialize_io_uring_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
-    let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
-    for op in &plan.copy_ops {
-        by_partition.entry(op.dest_partition).or_default().push(op);
-    }
-
-    for (&partition_id, ops) in &by_partition {
-        write_partition_sync_single(output_dir, partition_id, ops)?;
-    }
-
-    Ok(())
+fn materialize_sync_parallel(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
+    let partitions = group_by_partition(plan);
+    partitions
+        .into_par_iter()
+        .try_for_each(|(partition_id, ops)| {
+            write_partition_sync_single(output_dir, partition_id, &ops)
+        })
 }
 
 async fn write_partition_async(
@@ -1111,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn score_functions_produce_finite() {
+    fn choose_sync_for_small_conversion() {
         let stats = ConversionStats {
             total_bytes: 1024 * 1024,
             shard_count: 2,
@@ -1127,10 +1027,7 @@ mod tests {
             mean_copy_size: 100_000.0,
             max_copy_size: 200_000,
         };
-        assert!(score_sync(&stats).is_finite());
-        assert!(score_async(&stats).is_finite());
-        #[cfg(target_os = "linux")]
-        assert!(score_io_uring(&stats).is_finite());
+        assert_eq!(choose_conversion_backend(&stats), ConversionBackend::Sync);
     }
 
     #[test]
