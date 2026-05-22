@@ -1,41 +1,27 @@
-# Tensora examples (`tensora_py`)
+# Examples
+
+Runnable inference scripts demonstrating `tensora_py` usage.
 
 ## Setup
 
 ```bash
 cd bindings/python
-uv sync --group dev --group torch       # PyTorch
-uv sync --group dev --group vllm       # vLLM
+uv sync --group dev --group torch
 uv run maturin develop --release
 ```
 
-## PyTorch Example
+## PyTorch
 
 ```bash
 uv run python examples/pytorch.py gpt2 --prompt "Hello, world!"
 ```
 
-Options:
-- `model`: HuggingFace model ID
-- `--prompt`: Text prompt
-- `--backend`: default, sync, io-uring
-- `--format`: safetensors (default) or serverlessllm
-- `--device`: cuda or cpu
+Options: `--backend` (default/sync/io-uring), `--format` (safetensors/serverlessllm), `--device` (cuda/cpu)
 
-## vLLM Example
+## vLLM
 
 ```bash
 uv run python examples/vllm_infer.py --model gpt2 --prompt "Hello, world!"
 ```
 
-Options:
-- `--model`: HuggingFace model ID
-- `--prompt`: Text prompt
-- `--backend`: default, sync, io-uring
-- `--gpu-memory-utilization`: 0.7 (default)
-- `--max-model-len`: auto-detected from model config
-
-## Formats
-
-- SafeTensors: default for PyTorch
-- ServerlessLLM: default for vLLM, optional for PyTorch with `--format serverlessllm`
+Options: `--backend`, `--gpu-memory-utilization`, `--max-model-len`
