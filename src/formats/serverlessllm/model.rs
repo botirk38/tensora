@@ -18,16 +18,18 @@ use super::tensor::{Tensor, TensorMmap};
 // ============================================================================
 
 #[derive(Debug)]
-struct LoadPlan {
-    partitions: Vec<PartitionRead>,
-    index: Arc<Index>,
-}
-
-#[derive(Debug)]
 struct PartitionRead {
     partition_id: usize,
     path: PathBuf,
     size: u64,
+}
+
+type Tensors = HashMap<Arc<str>, Tensor>;
+
+#[derive(Debug)]
+struct LoadPlan {
+    partitions: Vec<PartitionRead>,
+    index: Arc<Index>,
 }
 
 impl LoadPlan {
@@ -48,25 +50,144 @@ impl LoadPlan {
             index: Arc::new(index.clone()),
         }
     }
+
+    fn validate(&self) -> ReaderResult<()> {
+        for read in &self.partitions {
+            let metadata =
+                std::fs::metadata(&read.path).map_err(|_| ReaderError::PartitionNotFound {
+                    partition_id: read.partition_id,
+                    path: read.path.to_string_lossy().to_string(),
+                })?;
+            if metadata.len() < read.size {
+                return Err(ReaderError::PartitionTooSmall {
+                    path: read.path.to_string_lossy().to_string(),
+                    actual: metadata.len(),
+                    required: read.size,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn requests(&self) -> Vec<(PathBuf, u64, usize)> {
+        self.partitions
+            .iter()
+            .map(|p| (p.path.clone(), 0, p.size as usize))
+            .collect()
+    }
+
+    fn assemble_single(&self, data: backends::byte::OwnedBytes) -> Tensors {
+        let backing: Arc<[u8]> = data.into_shared();
+        let mut tensors = HashMap::with_capacity(self.index.len());
+        for name in self.index.tensor_names().iter() {
+            let desc = self.index.get(name.as_ref()).unwrap();
+            tensors.insert(
+                name.clone(),
+                Tensor::from_shared(Arc::clone(&backing), Arc::clone(desc)),
+            );
+        }
+        tensors
+    }
+
+    fn assemble(
+        &self,
+        results: Vec<(Arc<[u8]>, usize, usize)>,
+    ) -> ReaderResult<Tensors> {
+        let max_partition_id = self
+            .partitions
+            .iter()
+            .map(|r| r.partition_id)
+            .max()
+            .unwrap_or(0);
+        let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
+        for (read, (buf, _, _)) in self.partitions.iter().zip(results) {
+            if buf.len() < read.size as usize {
+                return Err(ReaderError::PartitionTooSmall {
+                    path: read.path.to_string_lossy().to_string(),
+                    actual: buf.len() as u64,
+                    required: read.size,
+                });
+            }
+            partition_buffers[read.partition_id] = Some(buf);
+        }
+        let mut tensors = HashMap::with_capacity(self.index.len());
+        for name in self.index.tensor_names().iter() {
+            let desc = self.index.get(name.as_ref()).unwrap();
+            let backing = partition_buffers[desc.partition_id].as_ref().unwrap();
+            tensors.insert(
+                name.clone(),
+                Tensor::from_shared(Arc::clone(backing), Arc::clone(desc)),
+            );
+        }
+        Ok(tensors)
+    }
+
+    fn execute_sync(&self) -> ReaderResult<Tensors> {
+        if self.partitions.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.validate()?;
+
+        if self.partitions.len() == 1 {
+            let read = &self.partitions[0];
+            let mut reader = backends::SyncReader::new();
+            let data = reader.load(&read.path).map_err(ReaderError::from)?;
+            return Ok(self.assemble_single(data));
+        }
+
+        let mut reader = backends::SyncReader::new();
+        let results = reader
+            .load_range_batch(&self.requests())
+            .map_err(ReaderError::from)?;
+        self.assemble(results)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn execute_io_uring(&self) -> ReaderResult<Tensors> {
+        if self.partitions.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.validate()?;
+        let mut reader = backends::io_uring::Reader::new();
+
+        if self.partitions.len() == 1 {
+            let read = &self.partitions[0];
+            let data = reader.load(&read.path).map_err(ReaderError::from)?;
+            return Ok(self.assemble_single(data));
+        }
+
+        let results = reader
+            .load_range_batch(&self.requests())
+            .map_err(ReaderError::from)?;
+        self.assemble(results)
+    }
+
+    async fn execute_async(&self) -> ReaderResult<Tensors> {
+        if self.partitions.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.validate()?;
+
+        if self.partitions.len() == 1 {
+            let read = &self.partitions[0];
+            let mut reader = backends::AsyncReader::new();
+            let data = reader.load(&read.path).await.map_err(ReaderError::from)?;
+            return Ok(self.assemble_single(data));
+        }
+
+        let mut reader = backends::AsyncReader::new();
+        let results = reader
+            .load_range_batch(&self.requests())
+            .await
+            .map_err(ReaderError::from)?;
+        self.assemble(results)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct LoadStats {
     partition_count: usize,
     total_bytes: u64,
-}
-
-impl LoadStats {}
-
-fn load_stats(index: &Index) -> LoadStats {
-    let mut total_bytes = 0u64;
-    for plan in index.partitions().values() {
-        total_bytes = total_bytes.saturating_add(plan.max_required_size);
-    }
-    LoadStats {
-        partition_count: index.partition_ids().len(),
-        total_bytes,
-    }
 }
 
 enum LoadBackend {
@@ -80,178 +201,49 @@ const MULTI_PARTITION_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
 const IOURING_PARTITION_THRESHOLD: usize = 4;
 const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
-/// Backend selection for ServerlessLLM.
-///
-/// Single-partition and small workloads use sync (avoids async overhead).
-/// Large multi-partition loads use io_uring or async.
-fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
-    if stats.partition_count <= 1 {
-        return LoadBackend::Sync;
+impl LoadStats {
+    fn from_index(index: &Index) -> Self {
+        let mut total_bytes = 0u64;
+        for plan in index.partitions().values() {
+            total_bytes = total_bytes.saturating_add(plan.max_required_size);
+        }
+        LoadStats {
+            partition_count: index.partition_ids().len(),
+            total_bytes,
+        }
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        let capabilities = backends::backend_capabilities();
-        if stats.partition_count >= IOURING_PARTITION_THRESHOLD
-            && stats.total_bytes >= IOURING_BYTE_THRESHOLD
-            && capabilities.is_available(backends::Backend::IoUring)
+    fn choose_backend(&self) -> LoadBackend {
+        if self.partition_count <= 1 {
+            return LoadBackend::Sync;
+        }
+
+        #[cfg(target_os = "linux")]
         {
-            return LoadBackend::IoUring;
-        }
+            let capabilities = backends::backend_capabilities();
+            if self.partition_count >= IOURING_PARTITION_THRESHOLD
+                && self.total_bytes >= IOURING_BYTE_THRESHOLD
+                && capabilities.is_available(backends::Backend::IoUring)
+            {
+                return LoadBackend::IoUring;
+            }
 
-        if stats.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
-            && capabilities.is_available(backends::Backend::Async)
+            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
+                && capabilities.is_available(backends::Backend::Async)
+            {
+                return LoadBackend::TokioAsync;
+            }
+
+            LoadBackend::Sync
+        }
+        #[cfg(not(target_os = "linux"))]
         {
-            return LoadBackend::TokioAsync;
-        }
-
-        LoadBackend::Sync
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if stats.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD {
-            return LoadBackend::TokioAsync;
-        }
-        LoadBackend::Sync
-    }
-}
-
-type Tensors = HashMap<Arc<str>, Tensor>;
-
-fn validate_partitions(plan: &LoadPlan) -> ReaderResult<()> {
-    for read in &plan.partitions {
-        let metadata =
-            std::fs::metadata(&read.path).map_err(|_| ReaderError::PartitionNotFound {
-                partition_id: read.partition_id,
-                path: read.path.to_string_lossy().to_string(),
-            })?;
-        if metadata.len() < read.size {
-            return Err(ReaderError::PartitionTooSmall {
-                path: read.path.to_string_lossy().to_string(),
-                actual: metadata.len(),
-                required: read.size,
-            });
+            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD {
+                return LoadBackend::TokioAsync;
+            }
+            LoadBackend::Sync
         }
     }
-    Ok(())
-}
-
-fn assemble_tensors(
-    index: &Index,
-    plan: &LoadPlan,
-    results: Vec<(Arc<[u8]>, usize, usize)>,
-) -> ReaderResult<Tensors> {
-    let max_partition_id = plan
-        .partitions
-        .iter()
-        .map(|r| r.partition_id)
-        .max()
-        .unwrap_or(0);
-    let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
-    for (read, (buf, _, _)) in plan.partitions.iter().zip(results) {
-        if buf.len() < read.size as usize {
-            return Err(ReaderError::PartitionTooSmall {
-                path: read.path.to_string_lossy().to_string(),
-                actual: buf.len() as u64,
-                required: read.size,
-            });
-        }
-        partition_buffers[read.partition_id] = Some(buf);
-    }
-    let mut tensors = HashMap::with_capacity(index.len());
-    for name in index.tensor_names().iter() {
-        let desc = index.get(name.as_ref()).unwrap();
-        let backing = partition_buffers[desc.partition_id].as_ref().unwrap();
-        tensors.insert(
-            name.clone(),
-            Tensor::from_shared(Arc::clone(backing), Arc::clone(desc)),
-        );
-    }
-    Ok(tensors)
-}
-
-fn assemble_single_partition(index: &Index, data: backends::byte::OwnedBytes) -> Tensors {
-    let backing: Arc<[u8]> = data.into_shared();
-    let mut tensors = HashMap::with_capacity(index.len());
-    for name in index.tensor_names().iter() {
-        let desc = index.get(name.as_ref()).unwrap();
-        tensors.insert(
-            name.clone(),
-            Tensor::from_shared(Arc::clone(&backing), Arc::clone(desc)),
-        );
-    }
-    tensors
-}
-
-fn load_requests(plan: &LoadPlan) -> Vec<(PathBuf, u64, usize)> {
-    plan.partitions
-        .iter()
-        .map(|p| (p.path.clone(), 0, p.size as usize))
-        .collect()
-}
-
-fn execute_load_plan_sync(plan: &LoadPlan) -> ReaderResult<Tensors> {
-    if plan.partitions.is_empty() {
-        return Ok(HashMap::new());
-    }
-    validate_partitions(plan)?;
-    let index = &plan.index;
-
-    if plan.partitions.len() == 1 {
-        let read = &plan.partitions[0];
-        let mut reader = backends::SyncReader::new();
-        let data = reader.load(&read.path).map_err(ReaderError::from)?;
-        return Ok(assemble_single_partition(index, data));
-    }
-
-    let mut reader = backends::SyncReader::new();
-    let results = reader
-        .load_range_batch(&load_requests(plan))
-        .map_err(ReaderError::from)?;
-    assemble_tensors(index, plan, results)
-}
-
-#[cfg(target_os = "linux")]
-fn execute_load_plan_io_uring(plan: &LoadPlan) -> ReaderResult<Tensors> {
-    if plan.partitions.is_empty() {
-        return Ok(HashMap::new());
-    }
-    validate_partitions(plan)?;
-    let index = &plan.index;
-    let mut reader = backends::io_uring::Reader::new();
-
-    if plan.partitions.len() == 1 {
-        let read = &plan.partitions[0];
-        let data = reader.load(&read.path).map_err(ReaderError::from)?;
-        return Ok(assemble_single_partition(index, data));
-    }
-
-    let results = reader
-        .load_range_batch(&load_requests(plan))
-        .map_err(ReaderError::from)?;
-    assemble_tensors(index, plan, results)
-}
-
-async fn execute_load_plan_async(plan: &LoadPlan) -> ReaderResult<Tensors> {
-    if plan.partitions.is_empty() {
-        return Ok(HashMap::new());
-    }
-    validate_partitions(plan)?;
-    let index = &plan.index;
-
-    if plan.partitions.len() == 1 {
-        let read = &plan.partitions[0];
-        let mut reader = backends::AsyncReader::new();
-        let data = reader.load(&read.path).await.map_err(ReaderError::from)?;
-        return Ok(assemble_single_partition(index, data));
-    }
-
-    let mut reader = backends::AsyncReader::new();
-    let results = reader
-        .load_range_batch(&load_requests(plan))
-        .await
-        .map_err(ReaderError::from)?;
-    assemble_tensors(index, plan, results)
 }
 
 /// ServerlessLLM model with all tensors loaded into memory (eager loading).
@@ -271,11 +263,11 @@ impl Model {
 
     pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = match choose_load_backend(&load_stats(&index)) {
+        let tensors = match LoadStats::from_index(&index).choose_backend() {
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => execute_load_plan_io_uring(&plan)?,
-            LoadBackend::TokioAsync => execute_load_plan_async(&plan).await?,
-            LoadBackend::Sync => execute_load_plan_sync(&plan)?,
+            LoadBackend::IoUring => plan.execute_io_uring()?,
+            LoadBackend::TokioAsync => plan.execute_async().await?,
+            LoadBackend::Sync => plan.execute_sync()?,
         };
         Ok(Self {
             tensors,
@@ -286,7 +278,7 @@ impl Model {
     #[cfg(target_os = "linux")]
     pub fn load_io_uring(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = execute_load_plan_io_uring(&plan)?;
+        let tensors = plan.execute_io_uring()?;
         Ok(Self {
             tensors,
             tensor_names: index.tensor_names().to_vec().into(),
@@ -297,7 +289,7 @@ impl Model {
         let dir_path = directory.as_ref();
         let index = Index::load(dir_path.join("tensor_index.json")).await?;
         let plan = LoadPlan::compile(&index, &dir_path.join("tensor.data"));
-        let tensors = execute_load_plan_async(&plan).await?;
+        let tensors = plan.execute_async().await?;
         Ok(Self {
             tensors,
             tensor_names: index.tensor_names().to_vec().into(),
@@ -306,7 +298,7 @@ impl Model {
 
     pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = execute_load_plan_sync(&plan)?;
+        let tensors = plan.execute_sync()?;
         Ok(Self {
             tensors,
             tensor_names: index.tensor_names().to_vec().into(),
@@ -498,8 +490,7 @@ mod tests {
             partition_count: 3,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
-        match b {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -513,8 +504,7 @@ mod tests {
             partition_count: 16,
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
-        match b {
+        match stats.choose_backend() {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {}
@@ -528,8 +518,7 @@ mod tests {
             partition_count: 12,
             total_bytes: 524 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
-        match b {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -543,7 +532,7 @@ mod tests {
             partition_count: 1,
             total_bytes: 512 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             other => panic!("expected Sync for single partition, got {:?}", match other {
                 LoadBackend::TokioAsync => "TokioAsync",
@@ -597,7 +586,7 @@ mod tests {
             "b": [0, 8, [4], [1], "f32", 1]
         }"#;
         let index = Index::from_bytes(data).unwrap();
-        let stats = load_stats(&index);
+        let stats = LoadStats::from_index(&index);
         assert_eq!(stats.partition_count, 2);
         assert!(stats.total_bytes > 0);
     }
