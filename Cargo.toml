@@ -21,6 +21,14 @@ harness = false
 name = "serverlessllm"
 harness = false
 
+[[bench]]
+name = "conversion"
+harness = false
+
+[[bench]]
+name = "backends"
+harness = false
+
 [[bin]]
 name = "profile"
 path = "src/bin/profile/main.rs"
