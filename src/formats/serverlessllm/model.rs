@@ -223,17 +223,14 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = backends::backend_capabilities();
             if self.partition_count >= IOURING_PARTITION_THRESHOLD
                 && self.total_bytes >= IOURING_BYTE_THRESHOLD
-                && capabilities.is_available(backends::Backend::IoUring)
+                && crate::backends::io_uring::availability().is_available()
             {
                 return LoadBackend::IoUring;
             }
 
-            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
-                && capabilities.is_available(backends::Backend::Async)
-            {
+            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD {
                 return LoadBackend::TokioAsync;
             }
 

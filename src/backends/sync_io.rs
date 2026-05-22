@@ -5,14 +5,9 @@
 //! - Other platforms: Simple buffered file reads
 
 use super::{BatchRequest, IoResult};
-use crate::backends::availability::BackendAvailability;
 use std::path::Path;
 
 type IndexedLoadResult = (usize, std::sync::Arc<[u8]>, usize, usize);
-
-pub(crate) const fn availability() -> BackendAvailability {
-    BackendAvailability::Available
-}
 
 // ---------------------------------------------------------------------------
 // Linux implementation with O_DIRECT support

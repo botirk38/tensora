@@ -149,8 +149,7 @@ enum LoadBackend {
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        let capabilities = backends::backend_capabilities();
-        choose_load_backend_with_capabilities(stats, &capabilities)
+        choose_load_backend_on_linux(stats, crate::backends::io_uring::availability().is_available())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -163,9 +162,9 @@ fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
 }
 
 #[cfg(target_os = "linux")]
-fn choose_load_backend_with_capabilities(
+fn choose_load_backend_on_linux(
     stats: &LoadStats,
-    capabilities: &backends::BackendCapabilities,
+    io_uring_available: bool,
 ) -> LoadBackend {
     let log2_bytes = stats.log2_bytes();
     let fanout = stats.shard_fanout_score();
@@ -173,14 +172,14 @@ fn choose_load_backend_with_capabilities(
 
     let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
 
-    if score >= 48.0 && capabilities.is_available(backends::Backend::IoUring) {
+    if score >= 48.0 && io_uring_available {
         return LoadBackend::IoUring;
     }
 
     let large_candidate = score >= 40.0
         || stats.total_bytes >= 8 * 1024 * 1024 * 1024
         || (stats.shard_count >= 4 && stats.total_bytes >= 4 * 1024 * 1024 * 1024);
-    if large_candidate && capabilities.is_available(backends::Backend::Async) {
+    if large_candidate {
         return LoadBackend::TokioAsync;
     }
 
@@ -789,7 +788,7 @@ impl TryFrom<Vec<u8>> for Model {
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
-    use crate::backends::{BackendAvailability, BackendCapabilities, BackendUnavailableReason};
+    use crate::backends::{BackendAvailability, BackendUnavailableReason};
     use crate::formats::traits::TensorView;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
@@ -936,29 +935,15 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn capabilities_with_io_uring(io_uring: BackendAvailability) -> BackendCapabilities {
-        BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            io_uring,
-        )
-    }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn selector_uses_async_for_large_safetensors_when_io_uring_unavailable() {
         let stats = LoadStats {
             shard_count: 5,
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
 
         assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
+            choose_load_backend_on_linux(&stats, false),
             LoadBackend::TokioAsync
         );
     }
@@ -970,13 +955,9 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
 
         assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
+            choose_load_backend_on_linux(&stats, false),
             LoadBackend::Sync
         );
     }

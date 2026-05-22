@@ -279,33 +279,8 @@ static BUFFER_POOL: std::sync::OnceLock<BufferPool> = std::sync::OnceLock::new()
 
 pub type BatchRequest = (PathBuf, u64, usize);
 
-pub use availability::{
-    Backend, BackendAvailability, BackendCapabilities, BackendUnavailableReason,
-};
+pub use availability::{BackendAvailability, BackendUnavailableReason};
 pub use std::io::Result as IoResult;
-
-#[must_use]
-pub fn backend_capabilities() -> BackendCapabilities {
-    BackendCapabilities::new(
-        sync_io::availability(),
-        async_io::availability(),
-        mmap::availability(),
-        io_uring_availability(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn io_uring_availability() -> BackendAvailability {
-    io_uring::availability()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn io_uring_availability() -> BackendAvailability {
-    BackendAvailability::unavailable(
-        BackendUnavailableReason::UnsupportedPlatform,
-        "io_uring is only available on Linux",
-    )
-}
 
 pub fn get_buffer_pool() -> &'static BufferPool {
     BUFFER_POOL.get_or_init(|| {
@@ -609,14 +584,6 @@ mod tests {
     fn validate_read_count_err_when_short() {
         let err = validate_read_count(99, 100).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
-    }
-
-    #[test]
-    fn backend_capabilities_sync_and_async_available() {
-        let caps = backend_capabilities();
-        assert!(caps.sync.is_available());
-        assert!(caps.async_io.is_available());
-        assert!(caps.mmap.is_available());
     }
 
     #[test]
