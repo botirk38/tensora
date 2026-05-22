@@ -186,8 +186,6 @@ enum LoadBackend {
 }
 
 const MULTI_SHARD_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
-const IOURING_SHARD_THRESHOLD: usize = 4;
-const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
 impl LoadStats {
     fn choose_backend(&self) -> LoadBackend {
