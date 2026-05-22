@@ -1,129 +1,244 @@
-//! SafeTensors benchmarks: tensora modes plus native baselines.
+//! SafeTensors benchmarks: all backends, tensor access patterns, and native baselines.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+mod bench_util;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tensora::formats::safetensors;
+use tensora::formats::traits::TensorView;
 
-fn model_dirs() -> (String, PathBuf) {
-    let id = std::env::var("TENSOR_STORE_MODEL_ID").unwrap_or_else(|_| {
-        eprintln!(
-            "Set TENSOR_STORE_MODEL_ID to a Hugging Face model id (e.g. openai-community/gpt2)."
-        );
-        std::process::exit(1);
-    });
-    let dir = tensora::hf_model::ensure_safetensors_hub_dir(&id).unwrap_or_else(|e| {
-        eprintln!("Could not resolve model {id}: {e}");
-        std::process::exit(1);
-    });
-    (id, dir)
-}
-
-fn collect_shard_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_file() {
-                continue;
-            }
-
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if name.ends_with(".safetensors") {
-                files.push(path);
-            }
-        }
-    }
-    files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-    files
-}
+// ---------------------------------------------------------------------------
+// Full-model load benchmarks (one per backend)
+// ---------------------------------------------------------------------------
 
 fn bench_default(c: &mut Criterion) {
-    let (model_name, dir) = model_dirs();
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
+    let total_bytes = bench_util::safetensors_total_bytes(&dir);
+
     let mut group = c.benchmark_group("safetensors_default");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(total_bytes));
     let rt = tokio::runtime::Runtime::new().unwrap();
-    group.bench_with_input(BenchmarkId::new("load", &model_name), &dir_str, |b, p| {
+    group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let data = safetensors::Model::load(black_box(p)).await.unwrap();
-            black_box((data.len(), data.tensor_names().len()))
+            let model = safetensors::Model::load(black_box(&dir_str)).await.unwrap();
+            black_box(bench_util::touch_all_tensors(&model))
         });
     });
     group.finish();
 }
 
 fn bench_sync(c: &mut Criterion) {
-    let (model_name, dir) = model_dirs();
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
+    let total_bytes = bench_util::safetensors_total_bytes(&dir);
+
     let mut group = c.benchmark_group("safetensors_sync");
-    group.bench_with_input(BenchmarkId::new("load", &model_name), &dir_str, |b, p| {
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(total_bytes));
+    group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let data = safetensors::Model::load_sync(black_box(p)).unwrap();
-            black_box((data.len(), data.tensor_names().len()))
+            let model = safetensors::Model::load_sync(black_box(&dir_str)).unwrap();
+            black_box(bench_util::touch_all_tensors(&model))
         });
     });
     group.finish();
 }
 
 fn bench_async(c: &mut Criterion) {
-    let (model_name, dir) = model_dirs();
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
+    let total_bytes = bench_util::safetensors_total_bytes(&dir);
+
     let mut group = c.benchmark_group("safetensors_async");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(total_bytes));
     let rt = tokio::runtime::Runtime::new().unwrap();
-    group.bench_with_input(BenchmarkId::new("load", &model_name), &dir_str, |b, p| {
+    group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let data = safetensors::Model::load_async(black_box(p)).await.unwrap();
-            black_box((data.len(), data.tensor_names().len()))
+            let model = safetensors::Model::load_async(black_box(&dir_str)).await.unwrap();
+            black_box(bench_util::touch_all_tensors(&model))
+        });
+    });
+    group.finish();
+}
+
+#[cfg(target_os = "linux")]
+fn bench_io_uring(c: &mut Criterion) {
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
+    let dir_str = dir.to_str().unwrap().to_string();
+    let total_bytes = bench_util::safetensors_total_bytes(&dir);
+
+    let mut group = c.benchmark_group("safetensors_io_uring");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(total_bytes));
+    group.bench_function(BenchmarkId::new("load", &slug), |b| {
+        b.iter(|| {
+            let model = safetensors::Model::load_io_uring(black_box(&dir_str)).unwrap();
+            black_box(bench_util::touch_all_tensors(&model))
         });
     });
     group.finish();
 }
 
 fn bench_mmap(c: &mut Criterion) {
-    let (model_name, dir) = model_dirs();
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
+    let total_bytes = bench_util::safetensors_total_bytes(&dir);
+
     let mut group = c.benchmark_group("safetensors_mmap");
-    group.bench_with_input(BenchmarkId::new("load", &model_name), &dir_str, |b, p| {
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    group.throughput(Throughput::Bytes(total_bytes));
+    group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let data = safetensors::MmapModel::open(black_box(p)).unwrap();
-            black_box((data.len(), data.tensor_names().len()))
+            let model = safetensors::MmapModel::open(black_box(&dir_str)).unwrap();
+            black_box(bench_util::touch_all_tensors(&model))
         });
     });
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Tensor access pattern benchmarks (pre-loaded model)
+// ---------------------------------------------------------------------------
+
+fn bench_tensor_sequential(c: &mut Criterion) {
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
+    let dir_str = dir.to_str().unwrap().to_string();
+
+    let model = safetensors::Model::load_sync(&dir_str).unwrap();
+    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    let total_bytes: u64 = names
+        .iter()
+        .filter_map(|n| model.tensor(n).ok())
+        .map(|t| t.data().len() as u64)
+        .sum();
+
+    let mut group = c.benchmark_group("safetensors_tensor_sequential");
+    group.throughput(Throughput::Bytes(total_bytes));
+    group.bench_function(BenchmarkId::new("scan", &slug), |b| {
+        b.iter(|| {
+            let mut bytes = 0usize;
+            for name in &names {
+                let t = model.tensor(name).unwrap();
+                let data = t.data();
+                bytes += data.len();
+                black_box(data[0]);
+            }
+            black_box(bytes)
+        });
+    });
+    group.finish();
+}
+
+fn bench_tensor_random(c: &mut Criterion) {
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
+    let dir_str = dir.to_str().unwrap().to_string();
+
+    let model = safetensors::Model::load_sync(&dir_str).unwrap();
+    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    if names.is_empty() {
+        return;
+    }
+
+    let mut group = c.benchmark_group("safetensors_tensor_random");
+    group.throughput(Throughput::Elements(names.len() as u64));
+    group.bench_function(BenchmarkId::new("lookup", &slug), |b| {
+        b.iter(|| {
+            let mut bytes = 0usize;
+            for name in names.iter().rev() {
+                let t = model.tensor(name).unwrap();
+                let data = t.data();
+                bytes += data.len();
+                black_box(data[0]);
+            }
+            black_box(bytes)
+        });
+    });
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Native safetensors crate baseline (per-shard)
+// ---------------------------------------------------------------------------
+
 fn bench_native(c: &mut Criterion) {
-    let (model_name, dir) = model_dirs();
+    let (model_id, dir) = bench_util::resolve_safetensors_model();
+    let slug = bench_util::model_slug(&model_id);
+    let shards = bench_util::collect_shard_files(&dir);
+
     let mut group = c.benchmark_group("native_safetensors");
-    for file in collect_shard_files(&dir) {
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(3));
+    for file in &shards {
         let file_name = file.file_name().unwrap().to_string_lossy().to_string();
         let path_str = file.to_str().unwrap().to_string();
-        group.bench_with_input(
-            BenchmarkId::new(&model_name, &file_name),
-            &path_str,
-            |b, p| {
-                b.iter(|| {
-                    let bytes = std::fs::read(black_box(p)).unwrap();
-                    let tensors = ::safetensors::SafeTensors::deserialize(&bytes).unwrap();
-                    black_box((tensors.len(), bytes.len()))
-                });
-            },
-        );
+        let file_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+        group.throughput(Throughput::Bytes(file_bytes));
+        group.bench_function(BenchmarkId::new(&slug, &file_name), |b| {
+            b.iter(|| {
+                let bytes = std::fs::read(black_box(&path_str)).unwrap();
+                let tensors = ::safetensors::SafeTensors::deserialize(&bytes).unwrap();
+                let mut total = 0usize;
+                for name in tensors.names() {
+                    let t = tensors.tensor(name).unwrap();
+                    total += t.data().len();
+                    black_box(t.data()[0]);
+                }
+                black_box((tensors.len(), total))
+            });
+        });
     }
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+criterion_group!(
+    benches,
+    bench_default,
+    bench_sync,
+    bench_async,
+    bench_io_uring,
+    bench_mmap,
+    bench_tensor_sequential,
+    bench_tensor_random,
+    bench_native
+);
+
+#[cfg(not(target_os = "linux"))]
 criterion_group!(
     benches,
     bench_default,
     bench_sync,
     bench_async,
     bench_mmap,
+    bench_tensor_sequential,
+    bench_tensor_random,
     bench_native
 );
+
 criterion_main!(benches);

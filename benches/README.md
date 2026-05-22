@@ -4,12 +4,29 @@ Performance benchmark suite for tensora using [Criterion.rs](https://github.com/
 
 ## Overview
 
-The benchmark suite compares different I/O backends and loading strategies for SafeTensors and ServerlessLLM formats:
+The benchmark suite measures I/O backends, format loading, conversion pipelines, and tensor access patterns across all tensora modules:
 
-- **SafeTensors benchmarks** (`benches/safetensors.rs`)
-- **ServerlessLLM benchmarks** (`benches/serverlessllm.rs`)
+| Target | File | What it measures |
+|--------|------|-----------------|
+| SafeTensors | `benches/safetensors.rs` | Full-model load (default/sync/async/io_uring/mmap), sequential & random tensor access, native baseline |
+| ServerlessLLM | `benches/serverlessllm.rs` | Full-model load (all backends), tensor access patterns, mmap page-touch |
+| Conversion | `benches/conversion.rs` | SafeTensors → ServerlessLLM pipeline (default/sync/async/io_uring) |
+| Backends | `benches/backends.rs` | Raw I/O micro-benchmarks: single-shard load, batch load, range-batch, mmap open+touch |
+| Shared | `benches/bench_util.rs` | Model resolution, throughput helpers, shard enumeration |
+
+All benchmarks report **throughput (bytes/sec)** alongside wall-clock time, use I/O-tuned measurement windows (10 samples, 15s measurement, 3s warmup), and force data materialization so mmap doesn't appear artificially fast.
 
 ## Running Benchmarks
+
+### Prerequisites
+
+Set **`TENSORA_MODEL_ID`** to a Hugging Face model id:
+
+```bash
+export TENSORA_MODEL_ID=openai-community/gpt2
+```
+
+The harness calls `tensora::hf_model` to ensure SafeTensors shards exist in the Hub cache and (for ServerlessLLM/conversion benches) a converted layout under the OS cache.
 
 ### Run all benchmarks
 
@@ -17,75 +34,92 @@ The benchmark suite compares different I/O backends and loading strategies for S
 cargo bench
 ```
 
-### Run specific format benchmarks
+### Run specific targets
 
 ```bash
-# SafeTensors only
-cargo bench --bench safetensors
-
-# ServerlessLLM only
-cargo bench --bench serverlessllm
+cargo bench --bench safetensors      # SafeTensors format
+cargo bench --bench serverlessllm    # ServerlessLLM format
+cargo bench --bench conversion       # Conversion pipeline
+cargo bench --bench backends         # Raw I/O backends
 ```
 
-### Run specific backend benchmarks
+### Filter by backend
 
 ```bash
-# Run only sync benchmarks
-cargo bench -- sync
-
-# Run only mmap benchmarks
-cargo bench -- mmap
-
-# Run only async benchmarks (Linux: io_uring, non-Linux: tokio)
-cargo bench -- async
+cargo bench -- sync           # Sync-only benchmarks
+cargo bench -- async          # Async-only
+cargo bench -- io_uring       # io_uring (Linux)
+cargo bench -- mmap           # Mmap
+cargo bench -- tensor_random  # Random tensor access only
 ```
 
-## Benchmark Suite
-
-Each format has benchmarks per backend (`safetensors_*`, `serverlessllm_*`):
+## Benchmark Groups
 
 ### SafeTensors (`benches/safetensors.rs`)
 
 | Group | Benchmark | Platform | Description |
 |-------|-----------|----------|-------------|
+| `safetensors_default` | `load/{model}` | All | Adaptive backend selection |
 | `safetensors_sync` | `load/{model}` | All | Synchronous loading |
-| `safetensors_mmap` | `load/{model}` | All | Memory-mapped loading |
-| `safetensors_async` | `load/{model}` | All | Async loading (io_uring on Linux, tokio elsewhere) |
-| `safetensors_async_parallel` | `load/{model}` | Linux only | Parallel async loading |
+| `safetensors_async` | `load/{model}` | All | Tokio async loading |
+| `safetensors_io_uring` | `load/{model}` | Linux | io_uring loading |
+| `safetensors_mmap` | `load/{model}` | All | Mmap with full page touch |
+| `safetensors_tensor_sequential` | `scan/{model}` | All | Sequential tensor iteration on pre-loaded model |
+| `safetensors_tensor_random` | `lookup/{model}` | All | Reverse-order tensor lookup on pre-loaded model |
+| `native_safetensors` | `{model}/{shard}` | All | Per-shard native `safetensors` crate baseline |
 
 ### ServerlessLLM (`benches/serverlessllm.rs`)
 
 | Group | Benchmark | Platform | Description |
 |-------|-----------|----------|-------------|
+| `serverlessllm_default` | `load/{model}` | All | Adaptive backend selection |
 | `serverlessllm_sync` | `load/{model}` | All | Synchronous loading |
-| `serverlessllm_mmap` | `load/{model}` | All | Memory-mapped loading |
-| `serverlessllm_async` | `load/{model}` | All | Async loading (io_uring on Linux, tokio elsewhere) |
+| `serverlessllm_async` | `load/{model}` | All | Tokio async loading |
+| `serverlessllm_io_uring` | `load/{model}` | Linux | io_uring loading |
+| `serverlessllm_mmap` | `load/{model}` | All | Mmap with full page touch |
+| `serverlessllm_tensor_sequential` | `scan/{model}` | All | Sequential tensor iteration |
+| `serverlessllm_tensor_random` | `lookup/{model}` | All | Reverse-order tensor lookup |
+| `serverlessllm_mmap_tensor_sequential` | `scan/{model}` | All | Sequential access over mmap model |
 
-## Model selection
+### Conversion (`benches/conversion.rs`)
 
-Set **`TENSORA_MODEL_ID`** to a Hugging Face model id before running Criterion (e.g. `export TENSORA_MODEL_ID=openai-community/gpt2`). The harness calls `tensora::hf_model` to ensure SafeTensors shards exist in the Hub cache and (for ServerlessLLM benches) a converted layout under the OS cache.
+| Group | Benchmark | Platform | Description |
+|-------|-----------|----------|-------------|
+| `conversion_default` | `convert/{model}` | All | Adaptive conversion pipeline |
+| `conversion_sync` | `convert/{model}` | All | Synchronous conversion |
+| `conversion_async` | `convert/{model}` | All | Tokio async conversion |
+| `conversion_io_uring` | `convert/{model}` | Linux | io_uring conversion |
 
-```bash
-export TENSORA_MODEL_ID=openai-community/gpt2
-cargo bench --bench safetensors
-```
+### Backends (`benches/backends.rs`)
 
-Pytest benchmarks use `--model-id` / `TENSORA_BENCH_MODELS` in `scripts/run_benchmarks.sh` instead; see the repository root [README.md](../README.md).
+| Group | Benchmark | Platform | Description |
+|-------|-----------|----------|-------------|
+| `backend_sync_load` | `load/{model}` | All | SyncReader single-shard load |
+| `backend_async_load` | `load/{model}` | All | AsyncReader single-shard load |
+| `backend_io_uring_load` | `load/{model}` | Linux | io_uring Reader single-shard load |
+| `backend_sync_batch` | `load_batch/{model}` | All | SyncReader all-shard batch load |
+| `backend_async_batch` | `load_batch/{model}` | All | AsyncReader all-shard batch load |
+| `backend_io_uring_batch` | `load_batch/{model}` | Linux | io_uring all-shard batch load |
+| `backend_sync_range_batch` | `range_batch/{model}` | All | SyncReader per-tensor range reads |
+| `backend_async_range_batch` | `range_batch/{model}` | All | AsyncReader per-tensor range reads |
+| `backend_io_uring_range_batch` | `range_batch/{model}` | Linux | io_uring per-tensor range reads |
+| `backend_mmap_open_touch` | `open_touch/{model}` | All | Mmap open + 4K page-walk |
 
 ## Understanding Results
 
 ### Criterion Output
 
 Criterion provides statistical analysis including:
-- Mean execution time
+- Mean execution time and throughput (bytes/sec)
 - Standard deviation
 - Comparison with previous runs
 - Outlier detection
 
 Example output:
 ```
-safetensors_sync/load/qwen-qwen2-0.5b
+safetensors_sync/load/qwen-qwen3-0.6b
                         time:   [52.341 ms 52.523 ms 52.728 ms]
+                        thrpt:  [9.4619 GiB/s 9.4946 GiB/s 9.5276 GiB/s]
                         change: [-3.2415% -2.5741% -1.9251%] (p = 0.00 < 0.05)
                         Performance has improved.
 ```
@@ -94,106 +128,55 @@ safetensors_sync/load/qwen-qwen2-0.5b
 
 **Cold vs Warm Cache**: First run may be slower due to cold file system cache. Criterion runs multiple iterations with warmup to measure warm cache performance.
 
-**mmap Benchmarks**: The `touch_pages()` function ensures mmap benchmarks trigger page faults for realistic measurement. Without this, mmap would appear artificially fast by only mapping memory without actually reading data.
+**mmap Benchmarks**: All mmap benchmarks touch every page (first and last byte of each tensor, or 4K page-walk for the backend mmap bench) to trigger real I/O. Without this, mmap would appear artificially fast by only mapping memory without reading data.
 
-**Parallel Benchmarks**: Parallel loading with N chunks typically shows benefits for large files (>100MB) on systems with multiple cores and fast storage.
+**Throughput**: Reported as bytes/sec based on total model or shard size, making comparisons meaningful across different model sizes.
+
+## Measurement Configuration
+
+I/O-heavy benchmarks use:
+- `sample_size(10)` — fewer iterations to keep total bench time reasonable for multi-GB models
+- `measurement_time(15s)` — longer per-iteration window for stable I/O measurements
+- `warm_up_time(3s)` — sufficient warmup to populate page cache
+
+Tensor access benchmarks use Criterion defaults (appropriate since the model is pre-loaded into memory).
 
 ## Platform-Specific Benchmarks
 
 ### Linux (io_uring)
 
-On Linux with kernel 5.1+, benchmarks use the io_uring backend:
+On Linux with kernel 5.1+, io_uring benchmarks are included automatically:
 
 ```bash
-# Run io_uring specific benchmarks
 cargo bench -- io_uring
 ```
 
-Features tested:
-- Zero-copy I/O with io_uring
-- Parallel batched operations
-- Fixed buffer pools
+### Non-Linux
 
-### Non-Linux (Tokio)
+On macOS and Windows, io_uring groups are excluded at compile time. All other benchmarks run normally.
 
-On macOS and Windows, benchmarks use Tokio's async I/O:
-
-```bash
-# Run tokio specific benchmarks
-cargo bench -- tokio
-```
-
-## Profiling Benchmarks
+## Profiling
 
 ### Flamegraph Integration
 
-Generate flamegraphs for specific benchmarks:
-
 ```bash
-# Install cargo-flamegraph
 cargo install flamegraph
-
-# Profile SafeTensors sync loading
 cargo flamegraph --bench safetensors -- safetensors_sync
-
-# Profile ServerlessLLM async loading (Linux)
-cargo flamegraph --bench serverlessllm -- serverlessllm_async
-
-# Profile with sudo for perf access (Linux)
-sudo cargo flamegraph --bench safetensors -- safetensors_async
+sudo cargo flamegraph --bench backends -- backend_io_uring_load
 ```
 
 See [profiling/README.md](../profiling/README.md) for detailed profiling guide.
 
 ### Using the `profile` binary
 
-For more control than Criterion, use [`src/bin/profile`](../src/bin/profile/README.md):
-
 ```bash
 cargo run --release --bin profile -- safetensors sync --model-id openai-community/gpt2
 cargo run --release --bin profile -- serverlessllm sync --model-id openai-community/gpt2
 ```
 
-## Benchmark Methodology
-
-### Model resolution
-
-Benchmarks read **`TENSORA_MODEL_ID`** and resolve paths via `tensora::hf_model` (Hub cache for SafeTensors; OS cache for converted ServerlessLLM).
-
-### Measurement Strategy
-
-Each benchmark:
-1. Uses `criterion::black_box()` to prevent compiler optimizations
-2. Measures tensor count and data size
-3. For mmap: touches pages to trigger real I/O
-4. Runs multiple iterations for statistical significance
-
-### Performance Considerations
-
-- **warmup**: Criterion performs warmup runs to populate file system cache
-- **Outliers**: Criterion detects and reports statistical outliers
-- **Noise**: System noise is measured and factored into confidence intervals
-
-## Reference Results
-
-Example results from development machine (Linux 6.17.0, 16 cores):
-
-**SafeTensors (523MB file)**:
-- `safetensors_async_parallel`: ~52ms
-- `safetensors_async`: ~55ms
-- `safetensors_sync`: ~58ms
-- `safetensors_mmap`: ~65ms (with page touches)
-
-**Key findings**:
-- Parallel async: ~5% faster than sync baseline
-- Zero-copy optimizations: 50% faster than naive parallel
-- Buffer pooling: 70% faster than non-pooled
-
 ## Troubleshooting
 
 ### "Set TENSORA_MODEL_ID" / early exit
-
-Export a Hugging Face model id, e.g.:
 
 ```bash
 export TENSORA_MODEL_ID=openai-community/gpt2
@@ -217,10 +200,7 @@ uname -r
 ### Permission errors with flamegraph
 
 ```bash
-# Add perf_event_paranoid setting
 echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid
-
-# Or run with sudo
 sudo -E cargo flamegraph --bench safetensors
 ```
 
@@ -229,13 +209,10 @@ sudo -E cargo flamegraph --bench safetensors
 When reporting performance results:
 1. Include system specs (CPU, RAM, storage type)
 2. Include kernel version (Linux) or OS version
-3. Specify fixture size and model name
+3. Specify model name and size
 4. Run with `--save-baseline` to track over time
 
 ```bash
-# Save baseline for tracking
 cargo bench --save-baseline my-machine
-
-# Compare against baseline
 cargo bench --baseline my-machine
 ```
