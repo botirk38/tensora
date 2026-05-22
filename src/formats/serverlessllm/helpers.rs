@@ -100,4 +100,53 @@ mod tests {
             3
         );
     }
+
+    #[test]
+    fn recommended_partition_count_large() {
+        let total = 32 * 1024 * 1024 * 1024u64;
+        let count = recommended_partition_count(total);
+        assert_eq!(count, 64);
+    }
+
+    #[test]
+    fn validate_partition_size_ok() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("tensor.data_0");
+        std::fs::write(&path, vec![0u8; 1024]).unwrap();
+        let cache = Mutex::new(HashMap::new());
+        let result = validate_partition_size(&path, 0, 512, &cache);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1024);
+    }
+
+    #[test]
+    fn validate_partition_size_too_small() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("tensor.data_0");
+        std::fs::write(&path, vec![0u8; 100]).unwrap();
+        let cache = Mutex::new(HashMap::new());
+        let result = validate_partition_size(&path, 0, 200, &cache);
+        assert!(matches!(result, Err(ReaderError::PartitionTooSmall { .. })));
+    }
+
+    #[test]
+    fn validate_partition_size_not_found() {
+        let path = std::path::Path::new("/nonexistent/tensor.data_99");
+        let cache = Mutex::new(HashMap::new());
+        let result = validate_partition_size(path, 99, 100, &cache);
+        assert!(matches!(result, Err(ReaderError::PartitionNotFound { .. })));
+    }
+
+    #[test]
+    fn validate_partition_size_uses_cache() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("tensor.data_0");
+        std::fs::write(&path, vec![0u8; 1024]).unwrap();
+        let cache = Mutex::new(HashMap::new());
+
+        let r1 = validate_partition_size(&path, 0, 512, &cache).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let r2 = validate_partition_size(&path, 0, 512, &cache).unwrap();
+        assert_eq!(r1, r2);
+    }
 }

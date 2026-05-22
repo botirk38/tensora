@@ -493,4 +493,81 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn sync_reader_load_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.bin");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut reader = SyncReaderEngine::new();
+        let result = reader.load(&path).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn sync_reader_load_single_small_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("small.bin");
+        write_file(&path, 512, 99);
+
+        let expected = std::fs::read(&path).unwrap();
+        let mut reader = SyncReaderEngine::new();
+        let actual = reader.load(&path).unwrap();
+        assert_eq!(actual.as_ref(), &expected[..]);
+    }
+
+    #[test]
+    fn sync_reader_load_range_single() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("range_single.bin");
+        write_file(&path, 2048, 33);
+        let bytes = std::fs::read(&path).unwrap();
+
+        let mut reader = SyncReaderEngine::new();
+        let result = reader.load_range(&path, 100, 200).unwrap();
+        assert_eq!(result.as_ref(), &bytes[100..300]);
+    }
+
+    #[test]
+    fn sync_reader_load_range_batch_empty() {
+        let mut reader = SyncReaderEngine::new();
+        let results = reader.load_range_batch(&[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn sync_reader_load_batch_empty() {
+        let mut reader = SyncReaderEngine::new();
+        let results = reader.load_batch(&[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn sync_writer_create_write_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("writer_test.bin");
+        let data = b"sync writer test data";
+
+        let mut writer = SyncWriterEngine::create(&path).unwrap();
+        writer.write_all(data).unwrap();
+        drop(writer);
+
+        let read_back = std::fs::read(&path).unwrap();
+        assert_eq!(read_back, data);
+    }
+
+    #[test]
+    fn sync_writer_write_at() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("write_at.bin");
+
+        let mut writer = SyncWriterEngine::create(&path).unwrap();
+        writer.write_all(&[0u8; 20]).unwrap();
+        writer.write_at(5, b"hello").unwrap();
+        drop(writer);
+
+        let read_back = std::fs::read(&path).unwrap();
+        assert_eq!(&read_back[5..10], b"hello");
+    }
 }

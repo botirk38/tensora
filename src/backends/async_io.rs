@@ -236,6 +236,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_single_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("single.bin");
+        write_file(&path, 1024, 42);
+
+        let expected = std::fs::read(&path).unwrap();
+        let mut reader = TokioReader::new();
+        let actual = reader.load(&path).await.unwrap();
+        assert_eq!(actual.as_ref(), &expected[..]);
+    }
+
+    #[tokio::test]
+    async fn load_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.bin");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut reader = TokioReader::new();
+        let actual = reader.load(&path).await.unwrap();
+        assert!(actual.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_batch_empty_vec() {
+        let mut reader = TokioReader::new();
+        let actual = reader.load_batch(&[]).await.unwrap();
+        assert!(actual.is_empty());
+    }
+
+    #[tokio::test]
     async fn load_batch_matches_sync_reader() {
         let dir = TempDir::new().unwrap();
         let path_a = dir.path().join("a.bin");
@@ -253,6 +283,36 @@ mod tests {
         for (actual_item, expected_item) in actual.iter().zip(expected.iter()) {
             assert_eq!(actual_item.as_ref(), expected_item.as_ref());
         }
+    }
+
+    #[tokio::test]
+    async fn load_range_single() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("range.bin");
+        write_file(&path, 1024, 7);
+        let all = std::fs::read(&path).unwrap();
+
+        let mut reader = TokioReader::new();
+        let actual = reader.load_range(&path, 100, 200).await.unwrap();
+        assert_eq!(actual.as_ref(), &all[100..300]);
+    }
+
+    #[tokio::test]
+    async fn load_range_zero_len() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("range_zero.bin");
+        write_file(&path, 1024, 7);
+
+        let mut reader = TokioReader::new();
+        let actual = reader.load_range(&path, 0, 0).await.unwrap();
+        assert!(actual.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_range_batch_empty() {
+        let mut reader = TokioReader::new();
+        let actual = reader.load_range_batch(&[]).await.unwrap();
+        assert!(actual.is_empty());
     }
 
     #[tokio::test]
@@ -279,5 +339,33 @@ mod tests {
             assert_eq!(actual_item.2, expected_item.2);
             assert_eq!(actual_item.0.as_ref(), expected_item.0.as_ref());
         }
+    }
+
+    #[tokio::test]
+    async fn writer_create_write_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("writer_test.bin");
+        let data = b"async writer test data";
+
+        let mut writer = TokioWriter::create(&path).await.unwrap();
+        writer.write_all(data).await.unwrap();
+        writer.sync_all().await.unwrap();
+
+        let read_back = std::fs::read(&path).unwrap();
+        assert_eq!(read_back, data);
+    }
+
+    #[tokio::test]
+    async fn writer_write_at() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("write_at.bin");
+
+        let mut writer = TokioWriter::create(&path).await.unwrap();
+        writer.write_all(&[0u8; 20]).await.unwrap();
+        writer.write_at(5, b"hello").await.unwrap();
+        writer.sync_all().await.unwrap();
+
+        let read_back = std::fs::read(&path).unwrap();
+        assert_eq!(&read_back[5..10], b"hello");
     }
 }

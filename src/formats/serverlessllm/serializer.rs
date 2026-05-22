@@ -260,4 +260,43 @@ mod tests {
         assert_eq!(json["w"][5], 1);
         assert_eq!(std::fs::read(part_path).unwrap(), b"xyz");
     }
+
+    #[test]
+    fn serialize_index_roundtrip() {
+        let entries = sample_entries();
+        let bytes = serialize_index(&entries).unwrap();
+        let parsed: HashMap<String, Value> = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.contains_key("w"));
+        let arr = parsed["w"].as_array().unwrap();
+        assert_eq!(arr.len(), 6);
+    }
+
+    #[test]
+    fn serialize_index_multiple_entries() {
+        let mut entries = sample_entries();
+        entries.insert(
+            "b".to_owned(),
+            TensorWriteEntry {
+                offset: 100,
+                size: 16,
+                shape: vec![4, 4],
+                stride: vec![4, 1],
+                dtype: "i8".to_owned(),
+                partition_id: 0,
+            },
+        );
+        let bytes = serialize_index(&entries).unwrap();
+        let parsed: HashMap<String, Value> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains_key("w"));
+        assert!(parsed.contains_key("b"));
+    }
+
+    #[test]
+    fn write_partition_sync_creates_parent_dirs() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("deep").join("tensor.data_0");
+        write_partition_sync(&path, b"test").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"test");
+    }
 }

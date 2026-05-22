@@ -175,4 +175,124 @@ mod tests {
             "unavailable: permission denied (io_uring_setup returned EPERM)"
         );
     }
+
+    #[test]
+    fn backend_as_str_all_variants() {
+        assert_eq!(Backend::Sync.as_str(), "sync");
+        assert_eq!(Backend::Async.as_str(), "async");
+        assert_eq!(Backend::Mmap.as_str(), "mmap");
+        assert_eq!(Backend::IoUring.as_str(), "io-uring");
+    }
+
+    #[test]
+    fn backend_display_matches_as_str() {
+        for backend in [Backend::Sync, Backend::Async, Backend::Mmap, Backend::IoUring] {
+            assert_eq!(format!("{backend}"), backend.as_str());
+        }
+    }
+
+    #[test]
+    fn unavailable_reason_code_all_variants() {
+        assert_eq!(
+            BackendUnavailableReason::UnsupportedPlatform.code(),
+            "unsupported-platform"
+        );
+        assert_eq!(
+            BackendUnavailableReason::PermissionDenied.code(),
+            "permission-denied"
+        );
+        assert_eq!(
+            BackendUnavailableReason::MissingKernelFeature.code(),
+            "missing-kernel-feature"
+        );
+        assert_eq!(
+            BackendUnavailableReason::InvalidKernelConfiguration.code(),
+            "invalid-kernel-configuration"
+        );
+        assert_eq!(
+            BackendUnavailableReason::MissingDependency.code(),
+            "missing-dependency"
+        );
+        assert_eq!(
+            BackendUnavailableReason::FilesystemUnsupported.code(),
+            "filesystem-unsupported"
+        );
+        assert_eq!(
+            BackendUnavailableReason::Other("test".into()).code(),
+            "other"
+        );
+    }
+
+    #[test]
+    fn availability_is_available() {
+        assert!(BackendAvailability::Available.is_available());
+        assert!(!BackendAvailability::unavailable(
+            BackendUnavailableReason::PermissionDenied,
+            "test"
+        )
+        .is_available());
+    }
+
+    #[test]
+    fn display_available() {
+        assert_eq!(BackendAvailability::Available.to_string(), "available");
+    }
+
+    #[test]
+    fn display_unavailable_empty_details() {
+        let status = BackendAvailability::unavailable(
+            BackendUnavailableReason::UnsupportedPlatform,
+            "",
+        );
+        assert_eq!(status.to_string(), "unavailable: unsupported platform");
+    }
+
+    #[test]
+    fn display_all_unavailable_reasons() {
+        let reasons = [
+            (BackendUnavailableReason::UnsupportedPlatform, "unsupported platform"),
+            (BackendUnavailableReason::PermissionDenied, "permission denied"),
+            (BackendUnavailableReason::MissingKernelFeature, "missing kernel feature"),
+            (BackendUnavailableReason::InvalidKernelConfiguration, "invalid kernel configuration"),
+            (BackendUnavailableReason::MissingDependency, "missing dependency"),
+            (BackendUnavailableReason::FilesystemUnsupported, "filesystem unsupported"),
+            (BackendUnavailableReason::Other("custom msg".into()), "custom msg"),
+        ];
+        for (reason, expected_str) in reasons {
+            assert_eq!(format!("{reason}"), expected_str);
+        }
+    }
+
+    #[test]
+    fn capabilities_availability_lookup() {
+        let caps = BackendCapabilities::new(
+            BackendAvailability::Available,
+            BackendAvailability::Available,
+            BackendAvailability::unavailable(
+                BackendUnavailableReason::UnsupportedPlatform,
+                "test",
+            ),
+            BackendAvailability::Available,
+        );
+        assert!(caps.is_available(Backend::Sync));
+        assert!(caps.is_available(Backend::Async));
+        assert!(!caps.is_available(Backend::Mmap));
+        assert!(caps.is_available(Backend::IoUring));
+    }
+
+    #[test]
+    fn capabilities_iter_returns_four_entries() {
+        let caps = BackendCapabilities::new(
+            BackendAvailability::Available,
+            BackendAvailability::Available,
+            BackendAvailability::Available,
+            BackendAvailability::Available,
+        );
+        let entries = caps.iter();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].0, Backend::Sync);
+        assert_eq!(entries[1].0, Backend::Async);
+        assert_eq!(entries[2].0, Backend::Mmap);
+        assert_eq!(entries[3].0, Backend::IoUring);
+    }
 }

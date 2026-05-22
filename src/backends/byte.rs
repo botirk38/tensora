@@ -144,3 +144,217 @@ impl std::fmt::Debug for OwnedBytes {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_mmap() -> Mmap {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"mmap_data").unwrap();
+        tmp.flush().unwrap();
+        super::super::mmap::map(tmp.path()).unwrap()
+    }
+
+    // --- construction ---
+
+    #[test]
+    fn from_vec_roundtrips() {
+        let data = vec![10u8, 20, 30];
+        let ob = OwnedBytes::from_vec(data.clone());
+        assert_eq!(ob.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn from_pooled_roundtrips() {
+        let pool = super::super::get_buffer_pool();
+        let mut buf = pool.get(8);
+        buf[..4].copy_from_slice(&[1, 2, 3, 4]);
+        let ob = OwnedBytes::from_pooled(buf);
+        assert_eq!(&ob.as_ref()[..4], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn shared_variant_from_arc() {
+        let data: Arc<[u8]> = Arc::from(vec![5u8, 6, 7]);
+        let ob = OwnedBytes::Shared(data.clone());
+        assert_eq!(ob.as_ref(), data.as_ref());
+    }
+
+    #[test]
+    fn mmap_variant_accessible() {
+        let ob = OwnedBytes::Mmap(make_mmap());
+        assert_eq!(ob.as_ref(), b"mmap_data");
+    }
+
+    // --- accessors ---
+
+    #[test]
+    fn len_and_is_empty_vec() {
+        let ob = OwnedBytes::from_vec(vec![1, 2]);
+        assert_eq!(ob.len(), 2);
+        assert!(!ob.is_empty());
+
+        let empty = OwnedBytes::from_vec(vec![]);
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn len_and_is_empty_shared() {
+        let ob = OwnedBytes::Shared(Arc::new([]));
+        assert!(ob.is_empty());
+        assert_eq!(ob.len(), 0);
+    }
+
+    #[test]
+    fn as_ref_and_deref_match() {
+        let data = vec![42u8; 16];
+        let ob = OwnedBytes::from_vec(data.clone());
+        let via_as_ref: &[u8] = ob.as_ref();
+        let via_deref: &[u8] = &ob;
+        assert_eq!(via_as_ref, via_deref);
+        assert_eq!(via_as_ref, &data[..]);
+    }
+
+    #[test]
+    fn debug_shows_len() {
+        let ob = OwnedBytes::from_vec(vec![0; 42]);
+        let dbg = format!("{:?}", ob);
+        assert!(dbg.contains("42"), "debug output should include length: {dbg}");
+    }
+
+    // --- mutability ---
+
+    #[test]
+    fn as_mut_slice_some_for_vec() {
+        let mut ob = OwnedBytes::from_vec(vec![0; 4]);
+        let slice = ob.as_mut_slice().expect("Vec should be mutable");
+        slice[0] = 99;
+        assert_eq!(ob.as_ref()[0], 99);
+    }
+
+    #[test]
+    fn as_mut_slice_none_for_shared() {
+        let mut ob = OwnedBytes::Shared(Arc::from(vec![1u8, 2]));
+        assert!(ob.as_mut_slice().is_none());
+    }
+
+    #[test]
+    fn as_mut_slice_none_for_mmap() {
+        let mut ob = OwnedBytes::Mmap(make_mmap());
+        assert!(ob.as_mut_slice().is_none());
+    }
+
+    #[test]
+    fn as_mut_ptr_works_for_vec() {
+        let mut ob = OwnedBytes::from_vec(vec![0; 4]);
+        let ptr = ob.as_mut_ptr();
+        assert!(!ptr.is_null());
+    }
+
+    #[test]
+    #[should_panic(expected = "Shared is not mutable")]
+    fn as_mut_ptr_panics_on_shared() {
+        let mut ob = OwnedBytes::Shared(Arc::from(vec![1u8]));
+        let _ = ob.as_mut_ptr();
+    }
+
+    #[test]
+    #[should_panic(expected = "Mmap is not mutable")]
+    fn as_mut_ptr_panics_on_mmap() {
+        let mut ob = OwnedBytes::Mmap(make_mmap());
+        let _ = ob.as_mut_ptr();
+    }
+
+    // --- conversions ---
+
+    #[test]
+    fn into_vec_preserves_bytes_vec() {
+        let data = vec![1u8, 2, 3];
+        let ob = OwnedBytes::from_vec(data.clone());
+        assert_eq!(ob.into_vec(), data);
+    }
+
+    #[test]
+    fn into_vec_preserves_bytes_shared() {
+        let data: Arc<[u8]> = Arc::from(vec![4u8, 5, 6]);
+        let ob = OwnedBytes::Shared(data.clone());
+        assert_eq!(ob.into_vec(), data.to_vec());
+    }
+
+    #[test]
+    fn into_vec_preserves_bytes_mmap() {
+        let ob = OwnedBytes::Mmap(make_mmap());
+        assert_eq!(ob.into_vec(), b"mmap_data");
+    }
+
+    #[test]
+    fn into_shared_preserves_bytes_vec() {
+        let data = vec![7u8, 8, 9];
+        let ob = OwnedBytes::from_vec(data.clone());
+        assert_eq!(ob.into_shared().as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn into_shared_preserves_bytes_shared() {
+        let data: Arc<[u8]> = Arc::from(vec![10u8, 11]);
+        let ob = OwnedBytes::Shared(data.clone());
+        let shared = ob.into_shared();
+        assert_eq!(shared.as_ref(), data.as_ref());
+    }
+
+    #[test]
+    fn into_shared_preserves_bytes_pooled() {
+        let pool = super::super::get_buffer_pool();
+        let mut buf = pool.get(4);
+        buf[..4].copy_from_slice(&[1, 2, 3, 4]);
+        let ob = OwnedBytes::from_pooled(buf);
+        let shared = ob.into_shared();
+        assert_eq!(&shared[..4], &[1, 2, 3, 4]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn aligned_buffer_roundtrips() {
+        let mut aligned = super::super::odirect::AlignedBuffer::new(4096).unwrap();
+        aligned.set_len(4);
+        aligned.as_mut_slice()[..4].copy_from_slice(&[1, 2, 3, 4]);
+        let ob = OwnedBytes::from_aligned(aligned);
+        assert_eq!(ob.len(), 4);
+        assert_eq!(&ob.as_ref()[..4], &[1, 2, 3, 4]);
+        assert_eq!(ob.into_vec(), vec![1, 2, 3, 4]);
+    }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn vec_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                prop_assert_eq!(ob.len(), data.len());
+                prop_assert_eq!(ob.as_ref(), &data[..]);
+                let v = ob.into_vec();
+                prop_assert_eq!(v, data);
+            }
+
+            #[test]
+            fn shared_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                let shared = ob.into_shared();
+                prop_assert_eq!(&shared[..], &data[..]);
+            }
+
+            #[test]
+            fn is_empty_matches_len(data in proptest::collection::vec(any::<u8>(), 0..128)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                prop_assert_eq!(ob.is_empty(), data.is_empty());
+                prop_assert_eq!(ob.len(), data.len());
+            }
+        }
+    }
+}

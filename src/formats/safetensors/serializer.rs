@@ -320,4 +320,46 @@ mod tests {
         let tensors = SafeTensors::deserialize(&data).unwrap();
         assert_eq!(tensors.tensor("a").unwrap().shape(), &[3]);
     }
+
+    #[test]
+    fn write_multiple_tensors() {
+        let v1 = TensorView::new(Dtype::U8, vec![2], &[1u8, 2]).unwrap();
+        let v2 = TensorView::new(Dtype::F32, vec![1], &[0u8; 4]).unwrap();
+        let writer = Writer::new();
+        let bytes = writer
+            .write_to_buffer([("a", v1), ("b", v2)], None)
+            .unwrap();
+        let parsed = SafeTensors::deserialize(&bytes).unwrap();
+        let mut names = parsed.names();
+        names.sort();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dtype_mapping_all_known() {
+        let known = [
+            "BOOL", "U8", "I8", "I16", "I32", "I64", "U32", "U64",
+            "F16", "F32", "F64", "BF16",
+        ];
+        for k in &known {
+            assert!(dtype_from_str(k).is_ok(), "failed for {k}");
+        }
+    }
+
+    #[test]
+    fn dtype_mapping_unknown() {
+        let result = dtype_from_str("COMPLEX128");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_to_buffer_with_metadata() {
+        let writer = Writer::new();
+        let meta = Some(HashMap::from([("key".to_string(), "val".to_string())]));
+        let bytes = writer
+            .write_to_buffer([("t", sample_view())], meta)
+            .unwrap();
+        let parsed = SafeTensors::deserialize(&bytes).unwrap();
+        assert!(parsed.names().contains(&"t"));
+    }
 }

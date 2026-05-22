@@ -115,3 +115,80 @@ pub fn open_direct_read(path: &Path) -> IoResult<std::fs::File> {
         .custom_flags(libc::O_DIRECT)
         .open(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_block_aligned_true() {
+        assert!(is_block_aligned(0, BLOCK_SIZE));
+        assert!(is_block_aligned(BLOCK_SIZE_U64, BLOCK_SIZE * 2));
+    }
+
+    #[test]
+    fn is_block_aligned_false_offset() {
+        assert!(!is_block_aligned(1, BLOCK_SIZE));
+        assert!(!is_block_aligned(BLOCK_SIZE_U64 - 1, BLOCK_SIZE));
+    }
+
+    #[test]
+    fn is_block_aligned_false_len() {
+        assert!(!is_block_aligned(0, BLOCK_SIZE - 1));
+        assert!(!is_block_aligned(0, 1));
+    }
+
+    #[test]
+    fn can_use_direct_read_zero_file() {
+        assert!(!can_use_direct_read(0, BLOCK_SIZE));
+    }
+
+    #[test]
+    fn can_use_direct_read_aligned() {
+        assert!(can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE));
+        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE));
+        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE * 2));
+    }
+
+    #[test]
+    fn can_use_direct_read_unaligned() {
+        assert!(!can_use_direct_read(BLOCK_SIZE + 1, BLOCK_SIZE));
+        assert!(!can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE + 1));
+    }
+
+    #[test]
+    fn aligned_buffer_set_len_and_slice() {
+        let mut buf = AlignedBuffer::new(BLOCK_SIZE).unwrap();
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.capacity(), BLOCK_SIZE);
+
+        buf.set_len(16);
+        assert_eq!(buf.len(), 16);
+
+        let slice = buf.as_mut_slice();
+        slice[0] = 42;
+        assert_eq!(buf.as_slice()[0], 42);
+    }
+
+    #[test]
+    #[should_panic]
+    fn aligned_buffer_set_len_exceeds_capacity() {
+        let mut buf = AlignedBuffer::new(BLOCK_SIZE).unwrap();
+        buf.set_len(BLOCK_SIZE + 1);
+    }
+
+    #[test]
+    fn aligned_buffer_debug() {
+        let buf = AlignedBuffer::new(BLOCK_SIZE).unwrap();
+        let dbg = format!("{:?}", buf);
+        assert!(dbg.contains("AlignedBuffer"));
+        assert!(dbg.contains("len"));
+    }
+
+    #[test]
+    fn alloc_aligned_works() {
+        let buf = alloc_aligned(BLOCK_SIZE).unwrap();
+        assert_eq!(buf.capacity(), BLOCK_SIZE);
+        assert_eq!(buf.len(), 0);
+    }
+}

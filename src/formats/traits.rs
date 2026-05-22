@@ -176,4 +176,41 @@ mod tests {
         assert!(model.tensor("c").is_none());
         assert_eq!(model.tensor("a").unwrap().shape(), &[2]);
     }
+
+    #[test]
+    fn model_is_empty_when_empty() {
+        let model = DummyModel {
+            names: vec![],
+            tensors: vec![],
+        };
+        assert!(model.is_empty());
+        assert_eq!(model.len(), 0);
+    }
+
+    #[test]
+    fn model_tensor_returns_none_for_missing() {
+        let model = DummyModel {
+            names: vec!["x".into()],
+            tensors: vec![DummyTensor {
+                shape: vec![1],
+                dtype: "f32",
+                data: vec![0; 4],
+            }],
+        };
+        assert!(model.tensor("nonexistent").is_none());
+        assert!(!model.contains("nonexistent"));
+    }
+
+    #[test]
+    fn tensor_view_data_access() {
+        let t = DummyTensor {
+            shape: vec![2, 3],
+            dtype: "f16",
+            data: vec![1, 2, 3, 4, 5, 6],
+        };
+        let view: &dyn TensorView = &t;
+        assert_eq!(view.shape(), &[2, 3]);
+        assert_eq!(view.dtype(), "f16");
+        assert_eq!(view.data(), &[1, 2, 3, 4, 5, 6]);
+    }
 }

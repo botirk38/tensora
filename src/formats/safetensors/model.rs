@@ -994,4 +994,92 @@ mod tests {
             LoadBackend::IoUring => panic!("expected Sync below threshold"),
         }
     }
+
+    #[test]
+    fn load_async_one_shard() {
+        use crate::test_utils::run_async;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        std::fs::write(&path, sample_bytes()).unwrap();
+
+        let model = run_async(Model::load(dir.path())).expect("load async");
+        assert_eq!(model.len(), 1);
+        assert!(model.contains("tensor"));
+    }
+
+    #[test]
+    fn load_async_multi_shard() {
+        use crate::test_utils::run_async;
+        let dir = TempDir::new().unwrap();
+        let s1 = dir.path().join("model-00001-of-00002.safetensors");
+        let s2 = dir.path().join("model-00002-of-00002.safetensors");
+        let v1 = StTensorView::new(Dtype::U8, vec![2], &[1u8, 2]).unwrap();
+        let v2 = StTensorView::new(Dtype::U8, vec![3], &[3u8, 4, 5]).unwrap();
+        write_shard(&s1, vec![("a", v1)]);
+        write_shard(&s2, vec![("b", v2)]);
+
+        let model = run_async(Model::load(dir.path())).expect("load async multi");
+        assert_eq!(model.len(), 2);
+        assert!(model.contains("a"));
+        assert!(model.contains("b"));
+    }
+
+    #[test]
+    fn load_sync_rejects_empty_directory() {
+        let dir = TempDir::new().unwrap();
+        let err = Model::load_sync(dir.path()).unwrap_err();
+        assert!(matches!(err, ReaderError::InvalidMetadata(_)));
+    }
+
+    #[test]
+    fn from_bytes_corrupted_data() {
+        let result = Model::from_bytes(vec![0xFF; 64]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tensor_returns_none_for_missing() {
+        let model = Model::from_bytes(sample_bytes()).unwrap();
+        assert!(model.tensor("nonexistent").is_err());
+    }
+
+    #[test]
+    fn mmap_model_multi_shard() {
+        let dir = TempDir::new().unwrap();
+        let s1 = dir.path().join("model-00001-of-00002.safetensors");
+        let s2 = dir.path().join("model-00002-of-00002.safetensors");
+        let v1 = StTensorView::new(Dtype::U8, vec![2], &[1u8, 2]).unwrap();
+        let v2 = StTensorView::new(Dtype::U8, vec![3], &[3u8, 4, 5]).unwrap();
+        write_shard(&s1, vec![("a", v1)]);
+        write_shard(&s2, vec![("b", v2)]);
+
+        let mmap = MmapModel::open(dir.path()).unwrap();
+        assert_eq!(mmap.len(), 2);
+        assert!(mmap.contains("a"));
+        assert!(mmap.contains("b"));
+    }
+
+    #[test]
+    fn mmap_model_tensor_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        std::fs::write(&path, sample_bytes()).unwrap();
+
+        let mmap = MmapModel::open(dir.path()).unwrap();
+        assert!(mmap.tensor("nonexistent").is_err());
+    }
+
+    #[test]
+    fn model_tensor_data_matches() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        let data = vec![10u8, 20, 30, 40];
+        let view = StTensorView::new(Dtype::U8, vec![4], &data).unwrap();
+        let bytes = serialize([("w", view)], None).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+
+        let model = Model::load_sync(dir.path()).unwrap();
+        let t = model.tensor("w").unwrap();
+        assert_eq!(t.data(), &[10, 20, 30, 40]);
+    }
 }

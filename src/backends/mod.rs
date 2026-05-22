@@ -512,4 +512,163 @@ mod tests {
         assert!(uring_plan.target_inflight >= sync_plan.target_inflight);
         assert!(uring_plan.wait_for <= uring_plan.target_inflight);
     }
+
+    #[test]
+    fn calculate_chunks_zero_file() {
+        assert_eq!(calculate_chunks(0), 1);
+    }
+
+    #[test]
+    fn calculate_chunks_small_file() {
+        assert_eq!(calculate_chunks(1024), 1);
+    }
+
+    #[test]
+    fn calculate_chunks_large_file() {
+        let chunks = calculate_chunks(2 * 1024 * 1024 * 1024);
+        assert!(chunks > 1);
+    }
+
+    #[test]
+    fn file_chunk_plan_zero_for_all_backends() {
+        for backend in [BackendKind::Sync, BackendKind::Async, BackendKind::IoUring] {
+            let plan = file_chunk_plan(0, backend);
+            assert_eq!(plan.chunk_count, 1);
+            assert!(plan.target_inflight >= 1);
+            assert!(plan.wait_for >= 1);
+        }
+    }
+
+    #[test]
+    fn file_chunk_plan_chunk_size_within_bounds() {
+        let sizes = [1, MIN_CHUNK_SIZE, 100 * 1024 * 1024, 4 * 1024 * 1024 * 1024];
+        for size in sizes {
+            let sync_plan = file_chunk_plan(size, BackendKind::Sync);
+            assert!(sync_plan.chunk_size >= MIN_CHUNK_SIZE);
+            assert!(sync_plan.chunk_size <= MAX_CHUNK_SIZE);
+
+            let async_plan = file_chunk_plan(size, BackendKind::Async);
+            assert!(async_plan.chunk_size >= MIN_CHUNK_SIZE);
+            assert!(async_plan.chunk_size <= MAX_CHUNK_SIZE);
+
+            let uring_plan = file_chunk_plan(size, BackendKind::IoUring);
+            assert!(uring_plan.chunk_size >= MIN_CHUNK_SIZE);
+            assert!(uring_plan.chunk_size <= MAX_IO_URING_CHUNK_SIZE);
+        }
+    }
+
+    #[test]
+    fn range_batch_plan_zero_requests() {
+        let plan = range_batch_plan(0, 0, BackendKind::Sync);
+        assert_eq!(plan.target_inflight, 1);
+        assert_eq!(plan.wait_for, 1);
+        assert_eq!(plan.coalesce_window_bytes, 0);
+    }
+
+    #[test]
+    fn range_batch_plan_invariants_hold_for_all_backends() {
+        for backend in [BackendKind::Sync, BackendKind::Async, BackendKind::IoUring] {
+            let plan = range_batch_plan(50, 50 * 1024 * 1024, backend);
+            assert!(plan.target_inflight >= 1);
+            assert!(plan.wait_for >= 1);
+            assert!(plan.wait_for <= plan.target_inflight);
+        }
+    }
+
+    #[test]
+    fn build_chunk_plan_covers_entire_file() {
+        let file_size = 200 * 1024 * 1024;
+        let plan = build_chunk_plan(file_size);
+        assert!(!plan.is_empty());
+        let total: usize = plan.iter().map(|c| c.len).sum();
+        assert_eq!(total, file_size);
+
+        for i in 1..plan.len() {
+            assert_eq!(plan[i].offset, plan[i - 1].offset + plan[i - 1].len as u64);
+        }
+    }
+
+    #[test]
+    fn build_chunk_plan_zero_file() {
+        let plan = build_chunk_plan(0);
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn validate_read_count_ok_when_equal() {
+        assert!(validate_read_count(100, 100).is_ok());
+    }
+
+    #[test]
+    fn validate_read_count_ok_when_more() {
+        assert!(validate_read_count(200, 100).is_ok());
+    }
+
+    #[test]
+    fn validate_read_count_err_when_short() {
+        let err = validate_read_count(99, 100).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn backend_capabilities_sync_and_async_available() {
+        let caps = backend_capabilities();
+        assert!(caps.sync.is_available());
+        assert!(caps.async_io.is_available());
+        assert!(caps.mmap.is_available());
+    }
+
+    #[test]
+    fn buffer_pool_is_singleton() {
+        let p1 = get_buffer_pool() as *const _;
+        let p2 = get_buffer_pool() as *const _;
+        assert_eq!(p1, p2);
+    }
+
+    #[test]
+    fn chunk_budget_at_least_one() {
+        assert!(chunk_budget() >= 1);
+    }
+
+    #[test]
+    fn sync_writer_construction() {
+        let _ = SyncWriter::create(std::path::Path::new("/dev/null"));
+    }
+
+    #[test]
+    fn default_impls() {
+        let _ar = AsyncReader::default();
+        let _sr = SyncReader::default();
+    }
+
+    mod prop {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn chunk_plan_covers_file(file_size in 0usize..512 * 1024 * 1024) {
+                let plan = build_chunk_plan(file_size);
+                let total: usize = plan.iter().map(|c| c.len).sum();
+                prop_assert_eq!(total, file_size);
+                for i in 1..plan.len() {
+                    prop_assert_eq!(plan[i].offset, plan[i - 1].offset + plan[i - 1].len as u64);
+                }
+            }
+
+            #[test]
+            fn chunk_size_within_bounds(file_size in 1usize..4 * 1024 * 1024 * 1024) {
+                for kind in [BackendKind::Sync, BackendKind::Async, BackendKind::IoUring] {
+                    let plan = file_chunk_plan(file_size, kind);
+                    prop_assert!(plan.chunk_size >= MIN_CHUNK_SIZE);
+                    prop_assert!(plan.chunk_size <= MAX_CHUNK_SIZE);
+                }
+            }
+
+            #[test]
+            fn calculate_chunks_at_least_one(file_size in 0usize..usize::MAX / 2) {
+                prop_assert!(calculate_chunks(file_size) >= 1);
+            }
+        }
+    }
 }

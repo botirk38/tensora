@@ -173,3 +173,85 @@ impl TensorView for TensorMmap {
         self.data()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_desc(offset: u64, size: usize, partition_id: usize) -> Arc<TensorDescriptor> {
+        Arc::new(TensorDescriptor {
+            offset,
+            size,
+            shape: vec![2, 4].into(),
+            stride: vec![4, 1].into(),
+            dtype: "torch.float32".into(),
+            partition_id,
+        })
+    }
+
+    #[test]
+    fn tensor_from_shared_data_access() {
+        let backing: Arc<[u8]> = Arc::from(vec![10u8, 20, 30, 40, 50, 60, 70, 80]);
+        let desc = make_desc(2, 4, 0);
+        let t = Tensor::from_shared(backing, desc);
+        assert_eq!(t.data(), &[30, 40, 50, 60]);
+    }
+
+    #[test]
+    fn tensor_shape_dtype_stride_size() {
+        let backing: Arc<[u8]> = Arc::from(vec![0u8; 32]);
+        let desc = make_desc(0, 32, 1);
+        let t = Tensor::from_shared(backing, desc);
+        assert_eq!(t.shape(), &[2, 4]);
+        assert_eq!(t.dtype(), "torch.float32");
+        assert_eq!(t.stride(), &[4, 1]);
+        assert_eq!(t.size(), 32);
+    }
+
+    #[test]
+    fn tensor_partition_id() {
+        let backing: Arc<[u8]> = Arc::from(vec![0u8; 8]);
+        let desc = make_desc(0, 8, 42);
+        let t = Tensor::from_shared(backing, desc);
+        assert_eq!(t.partition_id(), 42);
+    }
+
+    #[test]
+    fn tensor_view_impl() {
+        let backing: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4]);
+        let desc = make_desc(0, 4, 0);
+        let t = Tensor::from_shared(backing, desc);
+        let tv: &dyn TensorView = &t;
+        assert_eq!(tv.shape(), &[2, 4]);
+        assert_eq!(tv.dtype(), "torch.float32");
+        assert_eq!(tv.data(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn tensor_ref_view_impl() {
+        let backing: Arc<[u8]> = Arc::from(vec![5u8, 6, 7, 8]);
+        let desc = make_desc(0, 4, 0);
+        let t = Tensor::from_shared(backing, desc);
+        let r = &t;
+        let tv: &dyn TensorView = &r;
+        assert_eq!(tv.data(), &[5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn tensor_data_boundary() {
+        let backing: Arc<[u8]> = Arc::from(vec![0u8, 0, 0, 0, 1, 2, 3, 4, 0, 0]);
+        let desc = make_desc(4, 4, 0);
+        let t = Tensor::from_shared(backing, desc);
+        assert_eq!(t.data(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn tensor_clone() {
+        let backing: Arc<[u8]> = Arc::from(vec![1u8; 4]);
+        let desc = make_desc(0, 4, 0);
+        let t = Tensor::from_shared(backing, desc);
+        let t2 = t.clone();
+        assert_eq!(t.data(), t2.data());
+    }
+}
