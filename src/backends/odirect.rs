@@ -13,17 +13,21 @@ use std::ptr::NonNull;
 pub const BLOCK_SIZE: usize = 4096;
 pub const BLOCK_SIZE_U64: u64 = 4096;
 
+#[cfg(test)]
 #[inline]
 pub const fn is_block_aligned(offset: u64, len: usize) -> bool {
     (offset & (BLOCK_SIZE_U64 - 1)) == 0 && len.is_multiple_of(BLOCK_SIZE)
 }
 
 #[inline]
-pub const fn can_use_direct_read(file_size: usize, chunk_size: usize) -> bool {
-    file_size > 0
-        && is_block_aligned(0, file_size)
-        && chunk_size.is_multiple_of(BLOCK_SIZE)
-        && file_size.is_multiple_of(chunk_size)
+pub const fn round_up_to_block(n: usize) -> usize {
+    (n + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
+}
+
+#[allow(dead_code)]
+#[inline]
+pub const fn round_up_to_block_u64(n: u64) -> u64 {
+    (n + BLOCK_SIZE_U64 - 1) & !(BLOCK_SIZE_U64 - 1)
 }
 
 pub struct AlignedBuffer {
@@ -116,6 +120,19 @@ pub fn open_direct_read(path: &Path) -> IoResult<std::fs::File> {
         .open(path)
 }
 
+/// Try O_DIRECT, fall back to regular open if the filesystem doesn't support it.
+#[inline]
+pub fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
+    match open_direct_read(path) {
+        Ok(f) => Ok((f, true)),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+            let f = std::fs::File::open(path)?;
+            Ok((f, false))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,21 +156,20 @@ mod tests {
     }
 
     #[test]
-    fn can_use_direct_read_zero_file() {
-        assert!(!can_use_direct_read(0, BLOCK_SIZE));
+    fn round_up_to_block_aligned() {
+        assert_eq!(round_up_to_block(BLOCK_SIZE), BLOCK_SIZE);
+        assert_eq!(round_up_to_block(BLOCK_SIZE * 4), BLOCK_SIZE * 4);
     }
 
     #[test]
-    fn can_use_direct_read_aligned() {
-        assert!(can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE));
-        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE));
-        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE * 2));
+    fn round_up_to_block_unaligned() {
+        assert_eq!(round_up_to_block(1), BLOCK_SIZE);
+        assert_eq!(round_up_to_block(BLOCK_SIZE + 1), BLOCK_SIZE * 2);
     }
 
     #[test]
-    fn can_use_direct_read_unaligned() {
-        assert!(!can_use_direct_read(BLOCK_SIZE + 1, BLOCK_SIZE));
-        assert!(!can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE + 1));
+    fn round_up_to_block_zero() {
+        assert_eq!(round_up_to_block(0), 0);
     }
 
     #[test]

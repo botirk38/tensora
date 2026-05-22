@@ -1,4 +1,6 @@
-//! Portable async I/O backend using Tokio (non-Linux platforms).
+//! Async I/O backend using Tokio.
+//!
+//! On Linux, reads use O_DIRECT via `spawn_blocking` to bypass the page cache.
 
 use super::{
     BackendKind, BatchRequest, IoResult,
@@ -6,8 +8,10 @@ use super::{
         BatchResult, FlattenedResult, coalesce_requests, flatten_results, group_requests_by_file,
     },
     byte::OwnedBytes,
-    file_chunk_plan, get_buffer_pool, range_batch_plan,
+    file_chunk_plan, range_batch_plan,
 };
+#[cfg(not(target_os = "linux"))]
+use super::get_buffer_pool;
 use crate::backends::availability::BackendAvailability;
 use std::path::Path;
 use std::sync::Arc;
@@ -25,21 +29,9 @@ impl TokioReader {
 
     pub(crate) async fn load(&mut self, path: impl AsRef<Path> + Send) -> IoResult<OwnedBytes> {
         let path_buf = path.as_ref().to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            use std::fs::File;
-            use std::io::Read;
-            let mut file = File::open(&path_buf)?;
-            let len = usize::try_from(file.metadata()?.len())
-                .map_err(|_| std::io::Error::other("file too large"))?;
-            if len == 0 {
-                return Ok(OwnedBytes::Shared(Arc::new([])));
-            }
-            let mut buf = get_buffer_pool().get(len);
-            file.read_exact(&mut buf[..])?;
-            Ok(OwnedBytes::Pooled(buf))
-        })
-        .await
-        .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
+        tokio::task::spawn_blocking(move || load_direct(&path_buf))
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
     pub(crate) async fn load_batch(
@@ -66,20 +58,7 @@ impl TokioReader {
                 Vec::with_capacity(chunk.len());
             for path in chunk {
                 let path = path.clone();
-                let handle = tokio::task::spawn_blocking(move || {
-                    use std::fs::File;
-                    use std::io::Read;
-
-                    let mut file = File::open(&path)?;
-                    let len = usize::try_from(file.metadata()?.len())
-                        .map_err(|_| std::io::Error::other("file too large"))?;
-                    if len == 0 {
-                        return Ok(OwnedBytes::Shared(Arc::new([])));
-                    }
-                    let mut buf = get_buffer_pool().get(len);
-                    file.read_exact(&mut buf[..])?;
-                    Ok(OwnedBytes::from_pooled(buf))
-                });
+                let handle = tokio::task::spawn_blocking(move || load_direct(&path));
                 handles.push(handle);
             }
 
@@ -104,17 +83,9 @@ impl TokioReader {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
         let path_buf = path.as_ref().to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            use std::fs::File;
-            use std::io::{Read, Seek, SeekFrom};
-            let mut file = File::open(&path_buf)?;
-            file.seek(SeekFrom::Start(offset))?;
-            let mut buf = get_buffer_pool().get(len);
-            file.read_exact(&mut buf[..])?;
-            Ok(OwnedBytes::Pooled(buf))
-        })
-        .await
-        .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
+        tokio::task::spawn_blocking(move || load_range_direct(&path_buf, offset, len))
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
     pub(crate) async fn load_range_batch(
@@ -141,12 +112,8 @@ impl TokioReader {
                 let members = group.members.clone();
                 let handle = tokio::task::spawn_blocking(
                     move || -> std::io::Result<Vec<BatchResult>> {
-                        use std::io::{Read, Seek};
-                        let mut file = std::fs::File::open(&path_buf)?;
-                        file.seek(std::io::SeekFrom::Start(offset))?;
-                        let mut buf = get_buffer_pool().get(len);
-                        Read::read_exact(&mut file, &mut buf[..])?;
-                        let backing: Arc<[u8]> = buf.into_inner().into();
+                        let data = load_range_direct(&path_buf, offset, len)?;
+                        let backing: Arc<[u8]> = data.into_shared();
                         let mut results = Vec::with_capacity(members.len());
                         for member in members {
                             let start = member.relative_offset;
@@ -181,6 +148,95 @@ impl TokioReader {
 
         Ok(flatten_results(grouped_results))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Platform-specific direct I/O helpers for spawn_blocking
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+fn load_direct(path: &Path) -> IoResult<OwnedBytes> {
+    use super::odirect::{alloc_aligned, open_prefer_direct, round_up_to_block};
+    use std::io::Read;
+
+    let (mut file, direct) = open_prefer_direct(path)?;
+    let len = usize::try_from(file.metadata()?.len())
+        .map_err(|_| std::io::Error::other("file too large"))?;
+    if len == 0 {
+        return Ok(OwnedBytes::Shared(Arc::new([])));
+    }
+    if direct {
+        let aligned_len = round_up_to_block(len);
+        let mut buf = alloc_aligned(aligned_len)?;
+        buf.set_len(aligned_len);
+        file.read_exact(buf.as_mut_slice())?;
+        buf.set_len(len);
+        Ok(OwnedBytes::Aligned(buf))
+    } else {
+        let mut buf = super::get_buffer_pool().get(len);
+        file.read_exact(&mut buf[..])?;
+        Ok(OwnedBytes::Pooled(buf))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn load_direct(path: &Path) -> IoResult<OwnedBytes> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let len = usize::try_from(file.metadata()?.len())
+        .map_err(|_| std::io::Error::other("file too large"))?;
+    if len == 0 {
+        return Ok(OwnedBytes::Shared(Arc::new([])));
+    }
+    let mut buf = get_buffer_pool().get(len);
+    file.read_exact(&mut buf[..])?;
+    Ok(OwnedBytes::Pooled(buf))
+}
+
+#[cfg(target_os = "linux")]
+fn load_range_direct(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
+    use super::odirect::{BLOCK_SIZE_U64, alloc_aligned, open_prefer_direct, round_up_to_block};
+    use std::io::{Read, Seek, SeekFrom};
+
+    if len == 0 {
+        return Ok(OwnedBytes::Shared(Arc::new([])));
+    }
+    let (mut file, direct) = open_prefer_direct(path)?;
+    if direct {
+        let aligned_offset = offset & !(BLOCK_SIZE_U64 - 1);
+        let head_skip = (offset - aligned_offset) as usize;
+        let aligned_len = round_up_to_block(head_skip + len);
+
+        file.seek(SeekFrom::Start(aligned_offset))?;
+        let mut buf = alloc_aligned(aligned_len)?;
+        buf.set_len(aligned_len);
+        file.read_exact(buf.as_mut_slice())?;
+
+        if head_skip == 0 {
+            buf.set_len(len);
+            return Ok(OwnedBytes::Aligned(buf));
+        }
+        let slice = &buf.as_slice()[head_skip..head_skip + len];
+        Ok(OwnedBytes::Shared(Arc::from(slice)))
+    } else {
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = super::get_buffer_pool().get(len);
+        file.read_exact(&mut buf[..])?;
+        Ok(OwnedBytes::Pooled(buf))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn load_range_direct(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
+    use std::io::{Read, Seek, SeekFrom};
+    if len == 0 {
+        return Ok(OwnedBytes::Shared(Arc::new([])));
+    }
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut buf = get_buffer_pool().get(len);
+    file.read_exact(&mut buf[..])?;
+    Ok(OwnedBytes::Pooled(buf))
 }
 
 pub(crate) struct TokioWriter {

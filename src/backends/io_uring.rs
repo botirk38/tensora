@@ -12,10 +12,10 @@ use super::batch::{
     BatchResult, CoalescedRequestGroup, FlattenedResult, coalesce_requests, flatten_results,
 };
 use super::byte::OwnedBytes;
-use super::odirect::{alloc_aligned, can_use_direct_read, is_block_aligned, open_direct_read};
+use super::odirect::{alloc_aligned, open_prefer_direct, round_up_to_block};
 use super::{
     BackendKind, BatchRequest, IoResult, batch::group_requests_by_file, chunk_budget,
-    file_chunk_plan, get_buffer_pool, range_batch_plan,
+    file_chunk_plan, range_batch_plan,
 };
 use io_uring::cqueue::CompletionQueue;
 use io_uring::{IoUring, opcode, types};
@@ -97,6 +97,7 @@ struct PreparedLoad {
     file: File,
     buffer: OwnedBytes,
     base_ptr: usize,
+    actual_len: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -145,8 +146,7 @@ impl Reader {
             return Err(err);
         }
         let path_ref = path.as_ref();
-        let file = File::open(path_ref)?;
-        let file_size = usize::try_from(file.metadata()?.len())
+        let file_size = usize::try_from(std::fs::metadata(path_ref)?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
 
         if file_size == 0 {
@@ -155,12 +155,7 @@ impl Reader {
 
         self.ensure_ring_for_file_load(file_size, 1, file_size)?;
 
-        if can_use_direct_read(file_size, file_size) {
-            drop(file);
-            self.load_direct(path_ref, file_size)
-        } else {
-            self.load_buffered(file, file_size)
-        }
+        self.load_direct(path_ref, file_size)
     }
 
     pub fn load_batch(&mut self, paths: &[PathBuf]) -> IoResult<Vec<OwnedBytes>> {
@@ -257,8 +252,7 @@ impl Reader {
         let mut ops = Vec::new();
 
         for (slot_idx, (request_idx, path)) in paths.iter().enumerate() {
-            let file = File::open(path)?;
-            let file_size = usize::try_from(file.metadata()?.len())
+            let file_size = usize::try_from(std::fs::metadata(path)?.len())
                 .map_err(|_| std::io::Error::other("file too large"))?;
 
             if file_size == 0 {
@@ -266,22 +260,26 @@ impl Reader {
                 continue;
             }
 
-            let (file, mut buffer) = if can_use_direct_read(file_size, file_size) {
-                drop(file);
-                let mut aligned = alloc_aligned(file_size)?;
-                aligned.set_len(file_size);
-                (open_direct_read(path)?, OwnedBytes::from_aligned(aligned))
+            let (file, direct) = open_prefer_direct(path)?;
+            let (mut buffer, read_size) = if direct {
+                let aligned_size = round_up_to_block(file_size);
+                let mut aligned = alloc_aligned(aligned_size)?;
+                aligned.set_len(aligned_size);
+                (OwnedBytes::from_aligned(aligned), aligned_size)
             } else {
-                let pooled = get_buffer_pool().get(file_size);
-                (file, OwnedBytes::from_pooled(pooled))
+                (OwnedBytes::from_vec(vec![0u8; file_size]), file_size)
             };
 
             let plan_idx = plans.len();
             let base_ptr = buffer.as_mut_ptr() as usize;
-            let chunk_size = file_chunk_plan(file_size, BackendKind::IoUring).chunk_size;
+            let chunk_size = if direct {
+                round_up_to_block(file_chunk_plan(file_size, BackendKind::IoUring).chunk_size)
+            } else {
+                file_chunk_plan(file_size, BackendKind::IoUring).chunk_size
+            };
 
-            for chunk_start in (0..file_size).step_by(chunk_size) {
-                let len = chunk_size.min(file_size - chunk_start);
+            for chunk_start in (0..read_size).step_by(chunk_size) {
+                let len = chunk_size.min(read_size - chunk_start);
                 ops.push(ChunkReadOp {
                     plan_idx,
                     offset: chunk_start as u64,
@@ -295,6 +293,7 @@ impl Reader {
                 file,
                 buffer,
                 base_ptr,
+                actual_len: file_size,
             });
         }
 
@@ -361,8 +360,11 @@ impl Reader {
             }
         }
 
-        for plan in plans {
+        for mut plan in plans {
             let request_idx = paths[plan.request_idx].0;
+            if let OwnedBytes::Aligned(ref mut buf) = plan.buffer {
+                buf.set_len(plan.actual_len);
+            }
             results[plan.request_idx] = Some((request_idx, plan.buffer));
         }
 
@@ -389,15 +391,8 @@ impl Reader {
         self.ensure_ring_for_range_load(len, 1, len)?;
 
         let path_ref = path.as_ref();
-
-        if is_block_aligned(offset, len)
-            && let Ok(file) = open_direct_read(path_ref)
-        {
-            return self.load_range_buffered(file, offset, len);
-        }
-
-        let file = File::open(path_ref)?;
-        self.load_range_buffered(file, offset, len)
+        let (file, direct) = open_prefer_direct(path_ref)?;
+        self.load_range_io(file, offset, len, direct)
     }
 
     /// Load multiple ranges from potentially multiple files in one batch.
@@ -416,11 +411,10 @@ impl Reader {
         // Group requests by file
         let grouped = group_requests_by_file(requests);
 
-        // Open all needed files first
         self.files.clear();
         for path in grouped.keys() {
             if !self.files.contains_key(path) {
-                let file = File::open(path)?;
+                let (file, _direct) = open_prefer_direct(path)?;
                 self.files.insert(path.clone(), file);
             }
         }
@@ -473,10 +467,12 @@ impl Reader {
         }
 
         self.files.clear();
+        let mut file_direct: HashMap<PathBuf, bool> = HashMap::new();
         for group in groups {
             if !self.files.contains_key(&group.path) {
-                let file = File::open(&group.path)?;
+                let (file, direct) = open_prefer_direct(&group.path)?;
                 self.files.insert(group.path.clone(), file);
+                file_direct.insert(group.path.clone(), direct);
             }
         }
 
@@ -493,16 +489,28 @@ impl Reader {
 
         let mut planned: Vec<(RawFd, usize, u64, usize)> = Vec::with_capacity(groups.len());
         let mut buffers: Vec<OwnedBytes> = Vec::with_capacity(groups.len());
-        let mut members = Vec::with_capacity(groups.len());
+        let mut members: Vec<(Vec<super::batch::CoalescedRequestMember>, usize)> = Vec::with_capacity(groups.len());
         for group in groups {
             let fd = self
                 .files
                 .get(&group.path)
                 .ok_or_else(|| std::io::Error::other(format!("file not found: {:?}", group.path)))?
                 .as_raw_fd();
-            planned.push((fd, members.len(), group.offset, group.len));
-            buffers.push(OwnedBytes::from_vec(vec![0u8; group.len]));
-            members.push(group.members.clone());
+            let direct = file_direct.get(&group.path).copied().unwrap_or(false);
+            if direct {
+                let aligned_offset = group.offset & !(super::odirect::BLOCK_SIZE_U64 - 1);
+                let head_skip = (group.offset - aligned_offset) as usize;
+                let aligned_len = round_up_to_block(head_skip + group.len);
+                let mut aligned = alloc_aligned(aligned_len)?;
+                aligned.set_len(aligned_len);
+                planned.push((fd, members.len(), aligned_offset, aligned_len));
+                buffers.push(OwnedBytes::from_aligned(aligned));
+                members.push((group.members.clone(), head_skip));
+            } else {
+                planned.push((fd, members.len(), group.offset, group.len));
+                buffers.push(OwnedBytes::from_vec(vec![0u8; group.len]));
+                members.push((group.members.clone(), 0));
+            }
         }
 
         let mut pending = planned.len();
@@ -565,8 +573,9 @@ impl Reader {
                     ));
                 }
                 let backing: Arc<[u8]> = buffers[idx].as_ref().into();
-                for member in &members[idx] {
-                    let start = member.relative_offset;
+                let (ref group_members, head_skip) = members[idx];
+                for member in group_members {
+                    let start = head_skip + member.relative_offset;
                     let end = start.saturating_add(member.len);
                     let slice = backing.get(start..end).ok_or_else(|| {
                         std::io::Error::new(
@@ -590,28 +599,27 @@ impl Reader {
         Ok(results)
     }
 
-    fn load_buffered(&mut self, file: File, file_size: usize) -> IoResult<OwnedBytes> {
-        let mut buffer = OwnedBytes::from_vec(vec![0u8; file_size]);
-        let base_ptr = buffer.as_mut_ptr();
-        let fd = file.as_raw_fd();
-
-        self.read_chunks(fd, base_ptr, file_size)?;
-
-        drop(file);
-        Ok(buffer)
-    }
-
     fn load_direct(&mut self, path: &Path, file_size: usize) -> IoResult<OwnedBytes> {
-        let file = open_direct_read(path)?;
-        let mut aligned = alloc_aligned(file_size)?;
-        aligned.set_len(file_size);
-        let mut buffer = OwnedBytes::from_aligned(aligned);
-        let base_ptr = buffer.as_mut_ptr();
-        let fd = file.as_raw_fd();
-
-        self.read_chunks(fd, base_ptr, file_size)?;
-
-        Ok(buffer)
+        let (file, direct) = open_prefer_direct(path)?;
+        if direct {
+            let aligned_size = round_up_to_block(file_size);
+            let mut aligned = alloc_aligned(aligned_size)?;
+            aligned.set_len(aligned_size);
+            let mut buffer = OwnedBytes::from_aligned(aligned);
+            let base_ptr = buffer.as_mut_ptr();
+            let fd = file.as_raw_fd();
+            self.read_chunks(fd, base_ptr, aligned_size)?;
+            if let OwnedBytes::Aligned(ref mut buf) = buffer {
+                buf.set_len(file_size);
+            }
+            Ok(buffer)
+        } else {
+            let mut buffer = OwnedBytes::from_vec(vec![0u8; file_size]);
+            let base_ptr = buffer.as_mut_ptr();
+            let fd = file.as_raw_fd();
+            self.read_chunks(fd, base_ptr, file_size)?;
+            Ok(buffer)
+        }
     }
 
     fn read_chunks(&mut self, fd: RawFd, base_ptr: *mut u8, file_size: usize) -> IoResult<()> {
@@ -679,16 +687,25 @@ impl Reader {
         Ok(())
     }
 
-    fn load_range_buffered(&mut self, file: File, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-        let mut aligned = alloc_aligned(len)?;
-        aligned.set_len(len);
-        let mut buffer = OwnedBytes::from_aligned(aligned);
+    fn load_range_io(&mut self, file: File, offset: u64, len: usize, direct: bool) -> IoResult<OwnedBytes> {
+        let (read_offset, read_len, head_skip, mut buffer) = if direct {
+            use super::odirect::BLOCK_SIZE_U64;
+            let aligned_offset = offset & !(BLOCK_SIZE_U64 - 1);
+            let head_skip = (offset - aligned_offset) as usize;
+            let aligned_len = round_up_to_block(head_skip + len);
+            let mut aligned = alloc_aligned(aligned_len)?;
+            aligned.set_len(aligned_len);
+            (aligned_offset, aligned_len, head_skip, OwnedBytes::from_aligned(aligned))
+        } else {
+            (offset, len, 0, OwnedBytes::from_vec(vec![0u8; len]))
+        };
+
         let ptr = buffer.as_mut_ptr();
         let fd = file.as_raw_fd();
         let ring = self.ring_mut()?;
 
-        let sqe = opcode::Read::new(types::Fd(fd), ptr, len as u32)
-            .offset(offset)
+        let sqe = opcode::Read::new(types::Fd(fd), ptr, read_len as u32)
+            .offset(read_offset)
             .build()
             .user_data(0);
 
@@ -712,15 +729,22 @@ impl Reader {
         }
 
         let bytes_read = cqe.result() as usize;
-        if bytes_read < len {
+        if bytes_read < head_skip + len {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                format!("short read: expected {} bytes, got {}", len, bytes_read),
+                format!("short read: expected {} bytes, got {}", head_skip + len, bytes_read),
             ));
         }
 
         drop(file);
-        Ok(buffer)
+        if head_skip == 0 {
+            if let OwnedBytes::Aligned(ref mut buf) = buffer {
+                buf.set_len(len);
+            }
+            return Ok(buffer);
+        }
+        let slice = &buffer.as_ref()[head_skip..head_skip + len];
+        Ok(OwnedBytes::Shared(Arc::from(slice)))
     }
 
     fn ring_mut(&mut self) -> IoResult<&mut IoUring> {
