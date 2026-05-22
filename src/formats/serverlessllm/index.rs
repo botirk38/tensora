@@ -296,6 +296,7 @@ mod tests {
         assert_eq!(p0.max_required_size, 30);
     }
 
+
     #[test]
     fn empty_index_accessors() {
         let index = Index::new();
