@@ -12,7 +12,7 @@ use super::batch::{
     BatchResult, CoalescedRequestGroup, FlattenedResult, coalesce_requests, flatten_results,
 };
 use super::byte::OwnedBytes;
-use super::odirect::{alloc_aligned, open_prefer_direct, round_up_to_block};
+use super::odirect::{AlignedBuffer, open_prefer_direct, round_up_to_block};
 use super::{
     BackendKind, BatchRequest, IoResult, batch::group_requests_by_file, chunk_budget,
     file_chunk_plan, range_batch_plan,
@@ -263,7 +263,7 @@ impl Reader {
             let (file, direct) = open_prefer_direct(path)?;
             let (mut buffer, read_size) = if direct {
                 let aligned_size = round_up_to_block(file_size);
-                let mut aligned = alloc_aligned(aligned_size)?;
+                let mut aligned = AlignedBuffer::new(aligned_size)?;
                 aligned.set_len(aligned_size);
                 (OwnedBytes::from_aligned(aligned), aligned_size)
             } else {
@@ -501,7 +501,7 @@ impl Reader {
                 let aligned_offset = group.offset & !(super::odirect::BLOCK_SIZE_U64 - 1);
                 let head_skip = (group.offset - aligned_offset) as usize;
                 let aligned_len = round_up_to_block(head_skip + group.len);
-                let mut aligned = alloc_aligned(aligned_len)?;
+                let mut aligned = AlignedBuffer::new(aligned_len)?;
                 aligned.set_len(aligned_len);
                 planned.push((fd, members.len(), aligned_offset, aligned_len));
                 buffers.push(OwnedBytes::from_aligned(aligned));
@@ -603,7 +603,7 @@ impl Reader {
         let (file, direct) = open_prefer_direct(path)?;
         if direct {
             let aligned_size = round_up_to_block(file_size);
-            let mut aligned = alloc_aligned(aligned_size)?;
+            let mut aligned = AlignedBuffer::new(aligned_size)?;
             aligned.set_len(aligned_size);
             let mut buffer = OwnedBytes::from_aligned(aligned);
             let base_ptr = buffer.as_mut_ptr();
@@ -693,7 +693,7 @@ impl Reader {
             let aligned_offset = offset & !(BLOCK_SIZE_U64 - 1);
             let head_skip = (offset - aligned_offset) as usize;
             let aligned_len = round_up_to_block(head_skip + len);
-            let mut aligned = alloc_aligned(aligned_len)?;
+            let mut aligned = AlignedBuffer::new(aligned_len)?;
             aligned.set_len(aligned_len);
             (aligned_offset, aligned_len, head_skip, OwnedBytes::from_aligned(aligned))
         } else {

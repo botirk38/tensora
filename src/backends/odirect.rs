@@ -107,23 +107,14 @@ impl std::fmt::Debug for AlignedBuffer {
 
 unsafe impl Send for AlignedBuffer {}
 
-#[inline]
-pub fn alloc_aligned(capacity: usize) -> IoResult<AlignedBuffer> {
-    AlignedBuffer::new(capacity)
-}
-
-#[inline]
-pub fn open_direct_read(path: &Path) -> IoResult<std::fs::File> {
-    StdOpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECT)
-        .open(path)
-}
-
 /// Try O_DIRECT, fall back to regular open if the filesystem doesn't support it.
 #[inline]
 pub fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
-    match open_direct_read(path) {
+    match StdOpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECT)
+        .open(path)
+    {
         Ok(f) => Ok((f, true)),
         Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
             let f = std::fs::File::open(path)?;
@@ -223,8 +214,8 @@ mod tests {
     }
 
     #[test]
-    fn alloc_aligned_works() {
-        let buf = alloc_aligned(BLOCK_SIZE).unwrap();
+    fn aligned_buffer_new_works() {
+        let buf = AlignedBuffer::new(BLOCK_SIZE).unwrap();
         assert_eq!(buf.capacity(), BLOCK_SIZE);
         assert_eq!(buf.len(), 0);
     }

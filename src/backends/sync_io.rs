@@ -27,7 +27,7 @@ mod linux {
         byte::OwnedBytes,
         file_chunk_plan, range_batch_plan,
     };
-    use super::super::odirect::{alloc_aligned, open_prefer_direct, read_direct, round_up_to_block};
+    use super::super::odirect::{AlignedBuffer, open_prefer_direct, read_direct, round_up_to_block};
     use super::super::get_buffer_pool;
     use super::IndexedLoadResult;
     use std::io::{Read, Seek, SeekFrom};
@@ -52,7 +52,7 @@ mod linux {
 
         if direct {
             let aligned_len = round_up_to_block(len);
-            let mut buf = alloc_aligned(aligned_len)?;
+            let mut buf = AlignedBuffer::new(aligned_len)?;
             buf.set_len(aligned_len);
             read_direct(&mut file, buf.as_mut_slice(), len)?;
             buf.set_len(len);
@@ -80,7 +80,7 @@ mod linux {
 
         if direct {
             let aligned_total = round_up_to_block(file_size);
-            let mut final_buf = alloc_aligned(aligned_total)?;
+            let mut final_buf = AlignedBuffer::new(aligned_total)?;
             final_buf.set_len(aligned_total);
 
             let handles: Vec<_> = (0..chunks)
@@ -156,7 +156,7 @@ mod linux {
             let aligned_len = round_up_to_block(head_skip + len);
 
             file.seek(SeekFrom::Start(aligned_offset))?;
-            let mut buf = alloc_aligned(aligned_len)?;
+            let mut buf = AlignedBuffer::new(aligned_len)?;
             buf.set_len(aligned_len);
             read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
 
