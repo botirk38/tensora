@@ -156,7 +156,7 @@ impl TokioReader {
 
 #[cfg(target_os = "linux")]
 fn load_direct(path: &Path) -> IoResult<OwnedBytes> {
-    use super::odirect::{alloc_aligned, open_prefer_direct, round_up_to_block};
+    use super::odirect::{alloc_aligned, open_prefer_direct, read_direct, round_up_to_block};
     use std::io::Read;
 
     let (mut file, direct) = open_prefer_direct(path)?;
@@ -169,7 +169,7 @@ fn load_direct(path: &Path) -> IoResult<OwnedBytes> {
         let aligned_len = round_up_to_block(len);
         let mut buf = alloc_aligned(aligned_len)?;
         buf.set_len(aligned_len);
-        file.read_exact(buf.as_mut_slice())?;
+        read_direct(&mut file, buf.as_mut_slice(), len)?;
         buf.set_len(len);
         Ok(OwnedBytes::Aligned(buf))
     } else {
@@ -195,7 +195,9 @@ fn load_direct(path: &Path) -> IoResult<OwnedBytes> {
 
 #[cfg(target_os = "linux")]
 fn load_range_direct(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-    use super::odirect::{BLOCK_SIZE_U64, alloc_aligned, open_prefer_direct, round_up_to_block};
+    use super::odirect::{
+        BLOCK_SIZE_U64, alloc_aligned, open_prefer_direct, read_direct, round_up_to_block,
+    };
     use std::io::{Read, Seek, SeekFrom};
 
     if len == 0 {
@@ -210,7 +212,7 @@ fn load_range_direct(path: &Path, offset: u64, len: usize) -> IoResult<OwnedByte
         file.seek(SeekFrom::Start(aligned_offset))?;
         let mut buf = alloc_aligned(aligned_len)?;
         buf.set_len(aligned_len);
-        file.read_exact(buf.as_mut_slice())?;
+        read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
 
         if head_skip == 0 {
             buf.set_len(len);

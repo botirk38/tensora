@@ -133,6 +133,27 @@ pub fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
     }
 }
 
+/// Read exactly `actual_len` bytes into an aligned buffer of `aligned_len`.
+///
+/// O_DIRECT reads at EOF may return short (kernel reads aligned blocks, but
+/// the file may be shorter than `aligned_len`). This loops until `actual_len`
+/// bytes are read, which is all we actually need.
+pub fn read_direct(file: &mut std::fs::File, buf: &mut [u8], actual_len: usize) -> IoResult<()> {
+    use std::io::Read;
+    let mut pos = 0;
+    while pos < actual_len {
+        let n = file.read(&mut buf[pos..])?;
+        if n == 0 {
+            return Err(IoError::new(
+                ErrorKind::UnexpectedEof,
+                format!("O_DIRECT short read: got {pos} of {actual_len} bytes"),
+            ));
+        }
+        pos += n;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

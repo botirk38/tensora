@@ -27,7 +27,7 @@ mod linux {
         byte::OwnedBytes,
         file_chunk_plan, range_batch_plan,
     };
-    use super::super::odirect::{alloc_aligned, open_prefer_direct, round_up_to_block};
+    use super::super::odirect::{alloc_aligned, open_prefer_direct, read_direct, round_up_to_block};
     use super::super::get_buffer_pool;
     use super::IndexedLoadResult;
     use std::io::{Read, Seek, SeekFrom};
@@ -54,7 +54,7 @@ mod linux {
             let aligned_len = round_up_to_block(len);
             let mut buf = alloc_aligned(aligned_len)?;
             buf.set_len(aligned_len);
-            file.read_exact(buf.as_mut_slice())?;
+            read_direct(&mut file, buf.as_mut_slice(), len)?;
             buf.set_len(len);
             Ok(OwnedBytes::Aligned(buf))
         } else {
@@ -74,7 +74,8 @@ mod linux {
             .map_err(|_| std::io::Error::other("file too large"))?;
         let plan = file_chunk_plan(file_size, BackendKind::Sync);
         let chunks = chunks.min(plan.chunk_count).max(1);
-        let chunk_size = plan.chunk_size.min(file_size.div_ceil(chunks).max(1));
+        let raw_chunk = plan.chunk_size.min(file_size.div_ceil(chunks).max(1));
+        let chunk_size = if direct { round_up_to_block(raw_chunk) } else { raw_chunk };
         drop(file);
 
         if direct {
@@ -94,11 +95,12 @@ mod linux {
                     let chunk_slice = final_buf.as_mut_slice().get_mut(start..buf_end)?;
                     let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
                     let path_clone = path.to_path_buf();
+                    let actual_len = end - start;
                     Some(thread::spawn(move || {
                         let (mut f, _) = open_prefer_direct(path_clone.as_path())?;
                         f.seek(SeekFrom::Start(start as u64))?;
                         let s = unsafe { buffer_slice.as_mut_slice() };
-                        f.read_exact(s)?;
+                        read_direct(&mut f, s, actual_len)?;
                         IoResult::Ok(())
                     }))
                 })
@@ -156,7 +158,7 @@ mod linux {
             file.seek(SeekFrom::Start(aligned_offset))?;
             let mut buf = alloc_aligned(aligned_len)?;
             buf.set_len(aligned_len);
-            file.read_exact(buf.as_mut_slice())?;
+            read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
 
             if head_skip == 0 {
                 buf.set_len(len);
