@@ -168,4 +168,60 @@ mod tests {
             safetensors::SafeTensorError::TensorNotFound("missing".into()).into();
         assert!(st_error.source().is_some());
     }
+
+    #[test]
+    fn display_all_reader_variants() {
+        let variants: Vec<ReaderError> = vec![
+            ReaderError::Io(io::Error::other("io_err")),
+            ReaderError::SafeTensors(safetensors::SafeTensorError::TensorNotFound("t".into())),
+            ReaderError::TensorNotFound { name: "t".into() },
+            ReaderError::PartitionNotFound { partition_id: 0, path: "/p".into() },
+            ReaderError::PartitionTooSmall { path: "/p".into(), actual: 10, required: 20 },
+            ReaderError::InvalidIndexFormat("bad".into()),
+            ReaderError::JsonParseError("parse".into()),
+            ReaderError::OffsetOverflow { name: "t".into() },
+            ReaderError::SizeTooLarge { name: "t".into(), size: 999 },
+            ReaderError::MutexPoisoned,
+            ReaderError::ServerlessLlm("sllm".into()),
+            ReaderError::TensorStore("ts".into()),
+            ReaderError::InvalidMetadata("meta".into()),
+        ];
+        for v in &variants {
+            let s = format!("{v}");
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn display_all_writer_variants() {
+        use super::WriterError;
+        let variants: Vec<WriterError> = vec![
+            WriterError::Io(io::Error::other("io")),
+            WriterError::SafeTensors(safetensors::SafeTensorError::TensorNotFound("t".into())),
+            WriterError::ServerlessLlm("sllm".into()),
+            WriterError::TensorStore("ts".into()),
+            WriterError::InvalidInput("inp".into()),
+            WriterError::Serialization("ser".into()),
+            WriterError::Path("path".into()),
+        ];
+        for v in &variants {
+            let s = format!("{v}");
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn writer_from_serde_json_error() {
+        use super::WriterError;
+        let json_err: serde_json::Error = serde_json::from_str::<i32>("not_json").unwrap_err();
+        let w: WriterError = json_err.into();
+        assert!(matches!(w, WriterError::Serialization(_)));
+    }
+
+    #[test]
+    fn writer_from_io_error() {
+        use super::WriterError;
+        let w: WriterError = io::Error::other("test").into();
+        assert!(matches!(w, WriterError::Io(_)));
+    }
 }

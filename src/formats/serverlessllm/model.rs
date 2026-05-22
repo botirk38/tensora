@@ -723,4 +723,71 @@ mod tests {
         };
         assert!(model.is_empty());
     }
+
+    #[test]
+    fn load_plan_compile_single_partition() {
+        let data = br#"{"w": [0, 32, [4, 4], [4, 1], "f32", 0]}"#;
+        let index = Index::from_bytes(data).unwrap();
+        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
+        assert_eq!(plan.partitions.len(), 1);
+        assert_eq!(plan.partitions[0].partition_id, 0);
+    }
+
+    #[test]
+    fn load_plan_compile_multi_partition() {
+        let data = br#"{
+            "a": [0, 4, [2], [1], "f32", 0],
+            "b": [0, 8, [4], [1], "f32", 1]
+        }"#;
+        let index = Index::from_bytes(data).unwrap();
+        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
+        assert_eq!(plan.partitions.len(), 2);
+    }
+
+    #[test]
+    fn load_plan_compile_empty_index() {
+        let index = Index::new();
+        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
+        assert!(plan.partitions.is_empty());
+    }
+
+    #[test]
+    fn load_stats_from_index() {
+        let data = br#"{
+            "a": [0, 4, [2], [1], "f32", 0],
+            "b": [0, 8, [4], [1], "f32", 1]
+        }"#;
+        let index = Index::from_bytes(data).unwrap();
+        let stats = load_stats(&index);
+        assert_eq!(stats.partition_count, 2);
+        assert!(stats.total_bytes > 0);
+    }
+
+    #[test]
+    fn model_tensor_lookup() {
+        use std::sync::Arc;
+        let data = vec![0u8; 16];
+        let backing: Arc<[u8]> = data.into();
+        let desc = Arc::new(super::super::index::TensorDescriptor {
+            offset: 0,
+            size: 16,
+            shape: vec![4, 4].into(),
+            stride: vec![4, 1].into(),
+            dtype: "f32".into(),
+            partition_id: 0,
+        });
+        let tensor = Tensor::from_shared(backing, desc);
+        let mut tensors = HashMap::new();
+        let name: Arc<str> = "w".into();
+        tensors.insert(name.clone(), tensor);
+        let model = Model {
+            tensors,
+            tensor_names: vec![name].into(),
+        };
+        assert_eq!(model.len(), 1);
+        assert!(model.contains("w"));
+        assert!(!model.contains("v"));
+        assert!(model.tensor("w").is_some());
+        assert!(model.tensor("v").is_none());
+    }
 }

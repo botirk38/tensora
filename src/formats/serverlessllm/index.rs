@@ -295,4 +295,87 @@ mod tests {
         let p0 = index.partition(0).expect("partition 0");
         assert_eq!(p0.max_required_size, 30);
     }
+
+    #[test]
+    fn empty_index_accessors() {
+        let index = Index::new();
+        assert_eq!(index.len(), 0);
+        assert!(index.is_empty());
+        assert!(index.partition_ids().is_empty());
+        assert!(index.tensor_names().is_empty());
+        assert!(index.get("anything").is_none());
+        assert!(!index.contains("anything"));
+        assert_eq!(index.iter().count(), 0);
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let index = Index::default();
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn from_bytes_malformed_json() {
+        let result = Index::from_bytes(b"not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_bytes_wrong_array_length() {
+        let data = br#"{"tensor": [0, 4, [2], [1], "f32"]}"#;
+        let result = Index::from_bytes(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_bytes_non_numeric_offset() {
+        let data = br#"{"tensor": ["abc", 4, [2], [1], "f32", 0]}"#;
+        let result = Index::from_bytes(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tensor_names_sorted() {
+        let data = br#"{
+            "z_tensor": [0, 4, [2, 2], [2, 1], "f32", 0],
+            "a_tensor": [4, 4, [2, 2], [2, 1], "f32", 0],
+            "m_tensor": [8, 4, [2, 2], [2, 1], "f32", 1]
+        }"#;
+        let index = Index::from_bytes(data).expect("parse");
+        let names: Vec<&str> = index.tensor_names().iter().map(|n| &**n).collect();
+        assert_eq!(names, vec!["a_tensor", "m_tensor", "z_tensor"]);
+    }
+
+    #[test]
+    fn contains_and_get() {
+        let data = br#"{"weight": [0, 8, [2, 4], [4, 1], "f32", 0]}"#;
+        let index = Index::from_bytes(data).expect("parse");
+        assert!(index.contains("weight"));
+        assert!(!index.contains("bias"));
+        assert!(index.get("weight").is_some());
+        assert!(index.get("bias").is_none());
+    }
+
+    #[test]
+    fn iter_yields_all_tensors() {
+        let data = br#"{
+            "a": [0, 4, [2], [1], "f32", 0],
+            "b": [4, 4, [2], [1], "f32", 0]
+        }"#;
+        let index = Index::from_bytes(data).expect("parse");
+        assert_eq!(index.iter().count(), index.len());
+        assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    fn tensors_in_same_partition() {
+        let data = br#"{
+            "a": [0, 4, [2], [1], "f32", 0],
+            "b": [4, 8, [4], [1], "f32", 0]
+        }"#;
+        let index = Index::from_bytes(data).expect("parse");
+        assert_eq!(index.partition_ids(), &[0]);
+        let p = index.partition(0).unwrap();
+        assert_eq!(p.tensor_names.len(), 2);
+    }
 }
