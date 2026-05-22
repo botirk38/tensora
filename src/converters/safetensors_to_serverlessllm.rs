@@ -976,4 +976,236 @@ mod tests {
             "torch.uint8"
         );
     }
+
+    #[test]
+    fn dtype_mapping_exhaustive() {
+        let dtypes = [
+            (safetensors::Dtype::F32, "torch.float32"),
+            (safetensors::Dtype::F16, "torch.float16"),
+            (safetensors::Dtype::BF16, "torch.bfloat16"),
+            (safetensors::Dtype::F64, "torch.float64"),
+            (safetensors::Dtype::I32, "torch.int32"),
+            (safetensors::Dtype::I16, "torch.int16"),
+            (safetensors::Dtype::I8, "torch.int8"),
+            (safetensors::Dtype::I64, "torch.int64"),
+            (safetensors::Dtype::U32, "torch.uint32"),
+            (safetensors::Dtype::U16, "torch.uint16"),
+            (safetensors::Dtype::U8, "torch.uint8"),
+            (safetensors::Dtype::U64, "torch.uint64"),
+            (safetensors::Dtype::BOOL, "torch.bool"),
+        ];
+        for (dt, expected) in &dtypes {
+            assert_eq!(dtype_str_to_serverlessllm(*dt).unwrap(), *expected);
+        }
+    }
+
+    #[test]
+    fn calculate_contiguous_stride_scalar() {
+        assert_eq!(calculate_contiguous_stride(&[1]), vec![1]);
+    }
+
+    #[test]
+    fn calculate_contiguous_stride_4d() {
+        assert_eq!(
+            calculate_contiguous_stride(&[2, 3, 4, 5]),
+            vec![60, 20, 5, 1]
+        );
+    }
+
+    #[test]
+    fn convert_async_single_shard_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let src = make_small_model_dir(&tmp);
+        let out = tmp.path().join("out_async");
+
+        crate::test_utils::run_async(async {
+            convert_safetensors_to_serverlessllm_async(
+                src.to_str().unwrap(),
+                out.to_str().unwrap(),
+                1,
+            )
+            .await
+            .expect("convert async");
+        });
+
+        assert!(out.join("tensor_index.json").exists());
+    }
+
+    #[test]
+    fn convert_async_rejects_zero_partitions() {
+        let tmp = TempDir::new().unwrap();
+        let out = tmp.path().join("out_async_zero");
+
+        crate::test_utils::run_async(async {
+            let err = convert_safetensors_to_serverlessllm_async(
+                tmp.path().to_str().unwrap(),
+                out.to_str().unwrap(),
+                0,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, WriterError::InvalidInput(_)));
+        });
+    }
+
+    #[test]
+    fn convert_default_backend_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let src = make_small_model_dir(&tmp);
+        let out = tmp.path().join("out_default");
+
+        crate::test_utils::run_async(async {
+            convert_safetensors_to_serverlessllm(
+                src.to_str().unwrap(),
+                out.to_str().unwrap(),
+                2,
+            )
+            .await
+            .expect("convert default");
+        });
+
+        assert!(out.join("tensor_index.json").exists());
+    }
+
+    #[test]
+    fn backend_selection_small_single_partition() {
+        let stats = ConversionStats {
+            total_bytes: 1024,
+            shard_count: 1,
+            partition_count: 1,
+            tensor_count: 1,
+            max_shard_bytes: 1024,
+            mean_shard_bytes: 1024,
+            max_partition_bytes: 1024,
+            mean_partition_bytes: 1024,
+            mean_shards_per_partition: 1.0,
+            max_shards_per_partition: 1,
+            copy_op_count: 1,
+            mean_copy_size: 1024.0,
+            max_copy_size: 1024,
+        };
+        let b = choose_conversion_backend(&stats);
+        assert_eq!(b, ConversionBackend::Sync);
+    }
+
+    #[test]
+    fn backend_selection_large_multi() {
+        let stats = ConversionStats {
+            total_bytes: 16 * 1024 * 1024 * 1024,
+            shard_count: 8,
+            partition_count: 32,
+            tensor_count: 500,
+            max_shard_bytes: 2 * 1024 * 1024 * 1024,
+            mean_shard_bytes: 2 * 1024 * 1024 * 1024,
+            max_partition_bytes: 512 * 1024 * 1024,
+            mean_partition_bytes: 512 * 1024 * 1024,
+            mean_shards_per_partition: 2.0,
+            max_shards_per_partition: 4,
+            copy_op_count: 500,
+            mean_copy_size: 32.0 * 1024.0 * 1024.0,
+            max_copy_size: 64 * 1024 * 1024,
+        };
+        let b = choose_conversion_backend(&stats);
+        assert_ne!(b, ConversionBackend::Sync);
+    }
+
+    #[test]
+    fn score_functions_produce_finite() {
+        let stats = ConversionStats {
+            total_bytes: 1024 * 1024,
+            shard_count: 2,
+            partition_count: 4,
+            tensor_count: 10,
+            max_shard_bytes: 512 * 1024,
+            mean_shard_bytes: 512 * 1024,
+            max_partition_bytes: 256 * 1024,
+            mean_partition_bytes: 256 * 1024,
+            mean_shards_per_partition: 1.0,
+            max_shards_per_partition: 2,
+            copy_op_count: 10,
+            mean_copy_size: 100_000.0,
+            max_copy_size: 200_000,
+        };
+        assert!(score_sync(&stats).is_finite());
+        assert!(score_async(&stats).is_finite());
+        #[cfg(target_os = "linux")]
+        assert!(score_io_uring(&stats).is_finite());
+    }
+
+    #[test]
+    fn convert_duplicate_tensor_name_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path();
+        let shard1 = src.join("model-00001-of-00002.safetensors");
+        let shard2 = src.join("model-00002-of-00002.safetensors");
+
+        let data = vec![0u8; 8];
+        let view1 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
+        let view2 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
+        write_shard(&shard1, vec![("same_name", view1)]);
+        write_shard(&shard2, vec![("same_name", view2)]);
+
+        let out = tmp.path().join("out_dup");
+        let err = convert_safetensors_to_serverlessllm_sync(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            2,
+        )
+        .unwrap_err();
+        assert!(matches!(err, WriterError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn partition_balancing_many_tensors() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path();
+        let shard = src.join("model.safetensors");
+
+        let data_a = vec![0u8; 16];
+        let data_b = vec![0u8; 32];
+        let data_c = vec![0u8; 64];
+        let data_d = vec![0u8; 128];
+        let va = StTensorView::new(safetensors::Dtype::U8, vec![16], &data_a).unwrap();
+        let vb = StTensorView::new(safetensors::Dtype::U8, vec![32], &data_b).unwrap();
+        let vc = StTensorView::new(safetensors::Dtype::U8, vec![64], &data_c).unwrap();
+        let vd = StTensorView::new(safetensors::Dtype::U8, vec![128], &data_d).unwrap();
+        write_shard(&shard, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
+
+        let out = tmp.path().join("out_balance");
+        convert_safetensors_to_serverlessllm_sync(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            2,
+        )
+        .unwrap();
+
+        let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
+        let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();
+        let tensors = index.as_object().unwrap();
+        assert_eq!(tensors.len(), 4);
+
+        let partitions: std::collections::BTreeSet<u64> = tensors
+            .values()
+            .filter_map(|v| v.as_array().and_then(|a| a[5].as_u64()))
+            .collect();
+        assert!(
+            partitions.len() <= 2,
+            "expected at most 2 partitions, got {partitions:?}"
+        );
+    }
+
+    #[test]
+    fn discover_shards_sorts_paths() {
+        let tmp = TempDir::new().unwrap();
+        let z = tmp.path().join("z_shard.safetensors");
+        let a = tmp.path().join("a_shard.safetensors");
+        let data = vec![0u8; 4];
+        let v = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
+        write_shard(&z, vec![("z", v.clone())]);
+        let v2 = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
+        write_shard(&a, vec![("a", v2)]);
+
+        let shards = discover_safetensors_shards(tmp.path()).unwrap();
+        assert!(shards[0].file_name().unwrap() < shards[1].file_name().unwrap());
+    }
 }
