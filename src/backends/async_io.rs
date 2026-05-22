@@ -8,15 +8,10 @@ use super::{
     byte::OwnedBytes,
     file_chunk_plan, get_buffer_pool, range_batch_plan,
 };
-use crate::backends::availability::BackendAvailability;
 use std::path::Path;
 use std::sync::Arc;
 
 pub(crate) struct TokioReader;
-
-pub(crate) const fn availability() -> BackendAvailability {
-    BackendAvailability::Available
-}
 
 impl TokioReader {
     pub(crate) const fn new() -> Self {

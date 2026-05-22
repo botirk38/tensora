@@ -186,6 +186,10 @@ enum LoadBackend {
 }
 
 const MULTI_SHARD_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const IOURING_SHARD_THRESHOLD: usize = 4;
+#[cfg(target_os = "linux")]
+const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
 impl LoadStats {
     fn choose_backend(&self) -> LoadBackend {
@@ -195,33 +199,15 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = backends::backend_capabilities();
-            self.choose_backend_with_capabilities(&capabilities)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
-                return LoadBackend::TokioAsync;
+            if self.shard_count >= IOURING_SHARD_THRESHOLD
+                && self.total_bytes >= IOURING_BYTE_THRESHOLD
+                && crate::backends::io_uring::availability().is_available()
+            {
+                return LoadBackend::IoUring;
             }
-            LoadBackend::Sync
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn choose_backend_with_capabilities(
-        &self,
-        capabilities: &backends::BackendCapabilities,
-    ) -> LoadBackend {
-        if self.shard_count >= IOURING_SHARD_THRESHOLD
-            && self.total_bytes >= IOURING_BYTE_THRESHOLD
-            && capabilities.is_available(backends::Backend::IoUring)
-        {
-            return LoadBackend::IoUring;
         }
 
-        if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
-            && capabilities.is_available(backends::Backend::Async)
-        {
+        if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
             return LoadBackend::TokioAsync;
         }
 
@@ -759,8 +745,6 @@ impl TryFrom<Vec<u8>> for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "linux")]
-    use crate::backends::{BackendAvailability, BackendCapabilities, BackendUnavailableReason};
     use crate::formats::traits::TensorView;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
@@ -892,66 +876,6 @@ mod tests {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {}
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn capabilities_with_io_uring(io_uring: BackendAvailability) -> BackendCapabilities {
-        BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            io_uring,
-        )
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_uses_async_for_large_safetensors_when_io_uring_unavailable() {
-        let stats = LoadStats {
-            shard_count: 5,
-            total_bytes: 16 * 1024 * 1024 * 1024,
-        };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
-
-        assert_eq!(
-            stats.choose_backend_with_capabilities(&capabilities),
-            LoadBackend::TokioAsync
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_keeps_sync_for_small_safetensors_when_io_uring_unavailable() {
-        let stats = LoadStats {
-            shard_count: 2,
-            total_bytes: 1024 * 1024 * 1024,
-        };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
-
-        assert_eq!(
-            stats.choose_backend_with_capabilities(&capabilities),
-            LoadBackend::Sync
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_boundary_four_shard_small() {
-        let stats = LoadStats {
-            shard_count: 4,
-            total_bytes: 2 * 1024 * 1024 * 1024,
-        };
-        match stats.choose_backend() {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
-            LoadBackend::IoUring => panic!("expected Sync below threshold"),
         }
     }
 
