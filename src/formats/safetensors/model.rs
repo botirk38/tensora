@@ -17,145 +17,6 @@ use std::sync::Arc;
 type TensorShardMap = HashMap<Arc<str>, usize>;
 type TensorNameList = Arc<[Arc<str>]>;
 
-#[inline]
-#[must_use]
-fn dtype_to_str(dtype: &Dtype) -> &'static str {
-    match dtype {
-        Dtype::BOOL => "BOOL",
-        Dtype::U8 => "U8",
-        Dtype::I8 => "I8",
-        Dtype::I16 => "I16",
-        Dtype::U16 => "U16",
-        Dtype::F16 => "F16",
-        Dtype::F32 => "F32",
-        Dtype::F64 => "F64",
-        Dtype::I32 => "I32",
-        Dtype::I64 => "I64",
-        Dtype::U32 => "U32",
-        Dtype::U64 => "U64",
-        Dtype::BF16 => "BF16",
-        _ => "UNKNOWN",
-    }
-}
-
-#[inline]
-fn invalid_metadata(msg: impl Into<String>) -> ReaderError {
-    ReaderError::InvalidMetadata(msg.into())
-}
-
-fn dir_only_error(path: &Path) -> ReaderError {
-    invalid_metadata(format!(
-        "SafeTensors loads a directory of .safetensors shards, got file path {}",
-        path.display()
-    ))
-}
-
-fn discover_shard_paths(dir: &Path) -> ReaderResult<Vec<PathBuf>> {
-    if !dir.is_dir() {
-        return Err(dir_only_error(dir));
-    }
-
-    let mut shard_paths = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if name.ends_with(".safetensors") {
-            shard_paths.push(path);
-        }
-    }
-
-    shard_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-
-    if shard_paths.is_empty() {
-        return Err(invalid_metadata(format!(
-            "no .safetensors files found in {}",
-            dir.display()
-        )));
-    }
-
-    Ok(shard_paths)
-}
-
-fn normalize_directory(path: impl AsRef<Path>) -> ReaderResult<Vec<PathBuf>> {
-    let path = path.as_ref();
-    if path.is_file() {
-        return Err(dir_only_error(path));
-    }
-
-    discover_shard_paths(path)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LoadStats {
-    shard_count: usize,
-    total_bytes: u64,
-}
-
-impl LoadStats {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoadBackend {
-    Sync,
-    TokioAsync,
-    #[cfg(target_os = "linux")]
-    IoUring,
-}
-
-const MULTI_SHARD_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
-const IOURING_SHARD_THRESHOLD: usize = 4;
-const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
-
-/// Backend selection for SafeTensors.
-///
-/// Single-shard models always use sync (avoids 18% spawn_blocking overhead).
-/// Multi-shard loads use sync for small workloads, io_uring or async for large.
-fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
-    if stats.shard_count <= 1 {
-        return LoadBackend::Sync;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let capabilities = backends::backend_capabilities();
-        choose_load_backend_with_capabilities(stats, &capabilities)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if stats.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
-            return LoadBackend::TokioAsync;
-        }
-        LoadBackend::Sync
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn choose_load_backend_with_capabilities(
-    stats: &LoadStats,
-    capabilities: &backends::BackendCapabilities,
-) -> LoadBackend {
-    if stats.shard_count >= IOURING_SHARD_THRESHOLD
-        && stats.total_bytes >= IOURING_BYTE_THRESHOLD
-        && capabilities.is_available(backends::Backend::IoUring)
-    {
-        return LoadBackend::IoUring;
-    }
-
-    if stats.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
-        && capabilities.is_available(backends::Backend::Async)
-    {
-        return LoadBackend::TokioAsync;
-    }
-
-    LoadBackend::Sync
-}
-
 #[derive(Debug)]
 struct OwnedShard {
     tensors: SafeTensors<'static>,
@@ -197,55 +58,6 @@ impl Clone for MmapShard {
     fn clone(&self) -> Self {
         Self::from_mmap(self._mmap.clone()).expect("valid safetensors mmap data")
     }
-}
-
-fn build_tensor_index<'a>(
-    shards: impl Iterator<Item = &'a SafeTensors<'static>>,
-) -> ReaderResult<(TensorShardMap, TensorNameList)> {
-    let mut tensor_shards = HashMap::new();
-    let mut tensor_names = Vec::new();
-
-    for (shard_idx, tensors) in shards.enumerate() {
-        for name in tensors.names() {
-            let name: Arc<str> = name.into();
-            if tensor_shards.insert(name.clone(), shard_idx).is_some() {
-                return Err(invalid_metadata(format!(
-                    "duplicate tensor name across shards: {}",
-                    name
-                )));
-            }
-            tensor_names.push(name);
-        }
-    }
-
-    tensor_names.sort_unstable();
-    Ok((tensor_shards, tensor_names.into()))
-}
-
-async fn load_bytes_async(path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
-    let mut reader = backends::AsyncReader::new();
-    reader.load(path).await.map_err(Into::into)
-}
-
-fn load_bytes_sync(path: &Path) -> ReaderResult<backends::byte::OwnedBytes> {
-    let mut reader = backends::SyncReader::new();
-    reader.load(path).map_err(Into::into)
-}
-
-#[cfg(target_os = "linux")]
-fn load_bytes_io_uring(
-    reader: &mut backends::io_uring::Reader,
-    path: &Path,
-) -> ReaderResult<backends::byte::OwnedBytes> {
-    reader.load(path).map_err(Into::into)
-}
-
-fn load_mmap(path: &Path) -> ReaderResult<MmapShard> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| invalid_metadata("path contains invalid UTF-8".to_owned()))?;
-    let mmap = backends::mmap::map(path_str)?;
-    MmapShard::from_mmap(mmap)
 }
 
 #[derive(Debug)]
@@ -295,12 +107,36 @@ struct OwnedShardedModel {
 
 impl OwnedShardedModel {
     fn from_shards(shards: Vec<OwnedShard>) -> ReaderResult<Self> {
-        let (tensor_shards, tensor_names) = build_tensor_index(shards.iter().map(|s| &s.tensors))?;
+        let (tensor_shards, tensor_names) =
+            Self::build_index(shards.iter().map(|s| &s.tensors))?;
         Ok(Self {
             shards,
             tensor_shards,
             tensor_names,
         })
+    }
+
+    fn build_index<'a>(
+        shards: impl Iterator<Item = &'a SafeTensors<'static>>,
+    ) -> ReaderResult<(TensorShardMap, TensorNameList)> {
+        let mut tensor_shards = HashMap::new();
+        let mut tensor_names = Vec::new();
+
+        for (shard_idx, tensors) in shards.enumerate() {
+            for name in tensors.names() {
+                let name: Arc<str> = name.into();
+                if tensor_shards.insert(name.clone(), shard_idx).is_some() {
+                    return Err(ReaderError::InvalidMetadata(format!(
+                        "duplicate tensor name across shards: {}",
+                        name
+                    )));
+                }
+                tensor_names.push(name);
+            }
+        }
+
+        tensor_names.sort_unstable();
+        Ok((tensor_shards, tensor_names.into()))
     }
 
     fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
@@ -335,6 +171,66 @@ impl OwnedShardedModel {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LoadStats {
+    shard_count: usize,
+    total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadBackend {
+    Sync,
+    TokioAsync,
+    #[cfg(target_os = "linux")]
+    IoUring,
+}
+
+const MULTI_SHARD_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
+const IOURING_SHARD_THRESHOLD: usize = 4;
+const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
+
+impl LoadStats {
+    fn choose_backend(&self) -> LoadBackend {
+        if self.shard_count <= 1 {
+            return LoadBackend::Sync;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let capabilities = backends::backend_capabilities();
+            self.choose_backend_with_capabilities(&capabilities)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
+                return LoadBackend::TokioAsync;
+            }
+            LoadBackend::Sync
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn choose_backend_with_capabilities(
+        &self,
+        capabilities: &backends::BackendCapabilities,
+    ) -> LoadBackend {
+        if self.shard_count >= IOURING_SHARD_THRESHOLD
+            && self.total_bytes >= IOURING_BYTE_THRESHOLD
+            && capabilities.is_available(backends::Backend::IoUring)
+        {
+            return LoadBackend::IoUring;
+        }
+
+        if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
+            && capabilities.is_available(backends::Backend::Async)
+        {
+            return LoadBackend::TokioAsync;
+        }
+
+        LoadBackend::Sync
+    }
+}
+
 #[derive(Debug)]
 enum ModelStorage {
     Single(OwnedSingleModel),
@@ -354,43 +250,91 @@ impl Model {
         })
     }
 
-    fn directory_stats(path: impl AsRef<Path>) -> ReaderResult<LoadStats> {
-        let shard_paths = normalize_directory(path)?;
+    fn discover_shards(path: impl AsRef<Path>) -> ReaderResult<Vec<PathBuf>> {
+        let path = path.as_ref();
+        if path.is_file() {
+            return Err(ReaderError::InvalidMetadata(format!(
+                "SafeTensors loads a directory of .safetensors shards, got file path {}",
+                path.display()
+            )));
+        }
+        if !path.is_dir() {
+            return Err(ReaderError::InvalidMetadata(format!(
+                "SafeTensors loads a directory of .safetensors shards, got file path {}",
+                path.display()
+            )));
+        }
+
+        let mut shard_paths = Vec::new();
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+
+            let Some(name) = entry_path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".safetensors") {
+                shard_paths.push(entry_path);
+            }
+        }
+
+        shard_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        if shard_paths.is_empty() {
+            return Err(ReaderError::InvalidMetadata(format!(
+                "no .safetensors files found in {}",
+                path.display()
+            )));
+        }
+
+        Ok(shard_paths)
+    }
+
+    fn directory_stats(path: impl AsRef<Path>) -> ReaderResult<(LoadStats, Vec<PathBuf>)> {
+        let shard_paths = Self::discover_shards(path)?;
         let mut total_bytes = 0u64;
         for shard_path in &shard_paths {
             let size = fs::metadata(shard_path)?.len();
             total_bytes = total_bytes.saturating_add(size);
         }
-        Ok(LoadStats {
-            shard_count: shard_paths.len(),
-            total_bytes,
-        })
+        Ok((
+            LoadStats {
+                shard_count: shard_paths.len(),
+                total_bytes,
+            },
+            shard_paths,
+        ))
     }
 
     pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let stats = Self::directory_stats(&path)?;
-        match choose_load_backend(&stats) {
+        let (stats, shard_paths) = Self::directory_stats(&path)?;
+        match stats.choose_backend() {
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => Self::load_io_uring(path),
-            LoadBackend::TokioAsync => Self::load_async(path).await,
-            LoadBackend::Sync => Self::load_sync(path),
+            LoadBackend::IoUring => Self::load_io_uring_from_shards(shard_paths),
+            LoadBackend::TokioAsync => Self::load_async_from_shards(shard_paths).await,
+            LoadBackend::Sync => Self::load_sync_from_shards(shard_paths),
         }
     }
 
     #[cfg(target_os = "linux")]
     pub fn load_io_uring(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let shard_paths = normalize_directory(path)?;
+        let shard_paths = Self::discover_shards(path)?;
+        Self::load_io_uring_from_shards(shard_paths)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn load_io_uring_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
+        let mut reader = backends::io_uring::Reader::new();
         if shard_paths.len() == 1 {
-            let mut reader = backends::io_uring::Reader::new();
+            let bytes = reader.load(&shard_paths[0]).map_err(ReaderError::from)?;
             return Ok(Self {
-                storage: ModelStorage::Single(OwnedSingleModel::from_owned(load_bytes_io_uring(
-                    &mut reader,
-                    &shard_paths[0],
-                )?)?),
+                storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
             });
         }
 
-        let mut reader = backends::io_uring::Reader::new();
         let shard_bytes = reader.load_batch(&shard_paths)?;
         let shards: ReaderResult<Vec<_>> = shard_bytes
             .into_iter()
@@ -402,12 +346,19 @@ impl Model {
     }
 
     pub async fn load_async(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let shard_paths = normalize_directory(path)?;
+        let shard_paths = Self::discover_shards(path)?;
+        Self::load_async_from_shards(shard_paths).await
+    }
+
+    async fn load_async_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
+        let mut reader = backends::AsyncReader::new();
         if shard_paths.len() == 1 {
+            let bytes = reader
+                .load(&shard_paths[0])
+                .await
+                .map_err(ReaderError::from)?;
             return Ok(Self {
-                storage: ModelStorage::Single(OwnedSingleModel::from_owned(
-                    load_bytes_async(&shard_paths[0]).await?,
-                )?),
+                storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
             });
         }
 
@@ -422,7 +373,6 @@ impl Model {
 
         let limit =
             backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
-        let mut reader = backends::AsyncReader::new();
         let mut shard_bytes: Vec<backends::byte::OwnedBytes> = Vec::new();
         for chunk in shard_paths.chunks(limit) {
             let chunk_paths: Vec<_> = chunk.to_vec();
@@ -439,16 +389,19 @@ impl Model {
     }
 
     pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let shard_paths = normalize_directory(path)?;
+        let shard_paths = Self::discover_shards(path)?;
+        Self::load_sync_from_shards(shard_paths)
+    }
+
+    fn load_sync_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
+        let mut reader = backends::SyncReader::new();
         if shard_paths.len() == 1 {
+            let bytes = reader.load(&shard_paths[0]).map_err(ReaderError::from)?;
             return Ok(Self {
-                storage: ModelStorage::Single(OwnedSingleModel::from_owned(load_bytes_sync(
-                    &shard_paths[0],
-                )?)?),
+                storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
             });
         }
 
-        let mut reader = backends::SyncReader::new();
         let shard_bytes = reader.load_batch(&shard_paths)?;
         let shards: ReaderResult<Vec<_>> = shard_bytes
             .into_iter()
@@ -593,11 +546,27 @@ struct MmapShardedModel {
 
 impl MmapShardedModel {
     fn from_shards(shards: Vec<MmapShard>) -> ReaderResult<Self> {
-        let (tensor_shards, tensor_names) = build_tensor_index(shards.iter().map(|s| &s.tensors))?;
+        let mut tensor_shards = HashMap::new();
+        let mut tensor_names = Vec::new();
+
+        for (shard_idx, shard) in shards.iter().enumerate() {
+            for name in shard.tensors.names() {
+                let name: Arc<str> = name.into();
+                if tensor_shards.insert(name.clone(), shard_idx).is_some() {
+                    return Err(ReaderError::InvalidMetadata(format!(
+                        "duplicate tensor name across shards: {}",
+                        name
+                    )));
+                }
+                tensor_names.push(name);
+            }
+        }
+
+        tensor_names.sort_unstable();
         Ok(Self {
             shards,
             tensor_shards,
-            tensor_names,
+            tensor_names: tensor_names.into(),
         })
     }
 
@@ -647,18 +616,30 @@ pub struct MmapModel {
 
 impl MmapModel {
     pub fn open(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let shard_paths = normalize_directory(path)?;
+        let shard_paths = Model::discover_shards(path)?;
         if shard_paths.len() == 1 {
+            let path_str = shard_paths[0]
+                .to_str()
+                .ok_or_else(|| {
+                    ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
+                })?;
+            let mmap = backends::mmap::map(path_str)?;
             return Ok(Self {
-                storage: MmapStorage::Single(MmapSingleModel::from_shard(load_mmap(
-                    &shard_paths[0],
-                )?)),
+                storage: MmapStorage::Single(MmapSingleModel::from_shard(
+                    MmapShard::from_mmap(mmap)?,
+                )),
             });
         }
 
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_par_iter()
-            .map(|shard_path| load_mmap(&shard_path))
+            .map(|shard_path| {
+                let path_str = shard_path.to_str().ok_or_else(|| {
+                    ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
+                })?;
+                let mmap = backends::mmap::map(path_str)?;
+                MmapShard::from_mmap(mmap)
+            })
             .collect();
         Ok(Self {
             storage: MmapStorage::Sharded(MmapShardedModel::from_shards(shards?)?),
@@ -732,13 +713,36 @@ impl ModelTrait for MmapModel {
 /// Newtype wrapper around safetensors tensor view to implement `TensorView`.
 pub struct Tensor<'a>(pub(super) safetensors::tensor::TensorView<'a>);
 
+impl<'a> Tensor<'a> {
+    #[inline]
+    #[must_use]
+    fn dtype_str(dtype: &Dtype) -> &'static str {
+        match dtype {
+            Dtype::BOOL => "BOOL",
+            Dtype::U8 => "U8",
+            Dtype::I8 => "I8",
+            Dtype::I16 => "I16",
+            Dtype::U16 => "U16",
+            Dtype::F16 => "F16",
+            Dtype::F32 => "F32",
+            Dtype::F64 => "F64",
+            Dtype::I32 => "I32",
+            Dtype::I64 => "I64",
+            Dtype::U32 => "U32",
+            Dtype::U64 => "U64",
+            Dtype::BF16 => "BF16",
+            _ => "UNKNOWN",
+        }
+    }
+}
+
 impl<'a> TensorView for Tensor<'a> {
     fn shape(&self) -> &[usize] {
         self.0.shape()
     }
 
     fn dtype(&self) -> &str {
-        dtype_to_str(&self.0.dtype())
+        Self::dtype_str(&self.0.dtype())
     }
 
     fn data(&self) -> &[u8] {
@@ -838,7 +842,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        assert_eq!(choose_load_backend(&stats), LoadBackend::Sync);
+        assert_eq!(stats.choose_backend(), LoadBackend::Sync);
     }
 
     #[test]
@@ -848,7 +852,7 @@ mod tests {
             total_bytes: 256 * 1024 * 1024,
         };
 
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -862,7 +866,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        assert_eq!(choose_load_backend(&stats), LoadBackend::Sync);
+        assert_eq!(stats.choose_backend(), LoadBackend::Sync);
     }
 
     #[test]
@@ -871,7 +875,7 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -885,7 +889,7 @@ mod tests {
             shard_count: 4,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -916,7 +920,7 @@ mod tests {
         ));
 
         assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
+            stats.choose_backend_with_capabilities(&capabilities),
             LoadBackend::TokioAsync
         );
     }
@@ -934,7 +938,7 @@ mod tests {
         ));
 
         assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
+            stats.choose_backend_with_capabilities(&capabilities),
             LoadBackend::Sync
         );
     }
@@ -946,7 +950,7 @@ mod tests {
             shard_count: 4,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             LoadBackend::IoUring => panic!("expected Sync below threshold"),
