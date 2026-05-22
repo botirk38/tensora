@@ -1,48 +1,35 @@
 # SafeTensors Format
 
-SafeTensors support for tensora: whole-file and multi-shard eager loading with adaptive backend selection.
+Whole-file and multi-shard eager loading for HuggingFace SafeTensors checkpoints with adaptive backend selection.
 
-## Module Structure
+## Files
 
-```
-safetensors/
-├── mod.rs          # Public API re-exports
-├── model.rs        # Model loading (sync, async, io_uring, mmap)
-└── serializer.rs   # SafeTensors serialization
-```
-
-## Loading Models
-
-The `Model` type provides adaptive loading through `Model::load(path).await`, which selects the best backend based on checkpoint size and shard structure. Explicit paths are also available:
-
-- `Model::load_sync(path)` — blocking POSIX reads with dynamic chunking
-- `Model::load_async(path).await` — Tokio-based async loading
-- `Model::load_io_uring(path)` — Linux io_uring with multi-worker submission
-- `Model::load_mmap(path)` — memory-mapped lazy access
-
-### Backend Selection
-
-The `default` policy uses workload-aware heuristics:
-
-- Single-shard or small multi-shard checkpoints → `sync`
-- Large multi-shard checkpoints (≥ ~4 GB total) → `io_uring`
-- Non-Linux platforms → `sync` or `async`
+| File | Purpose |
+|------|---------|
+| `mod.rs` | Public API re-exports |
+| `model.rs` | Model loading (sync, async, io_uring, mmap) |
+| `serializer.rs` | SafeTensors serialization |
 
 ## API
 
 ```rust
 use tensora::safetensors::Model;
 
+// Adaptive loading (picks best backend automatically)
 let model = Model::load("model_dir").await?;
-for name in model.tensor_names() {
-    let view = model.tensor(&name)?;
-    println!("{}: shape={:?}, dtype={:?}", name, view.shape(), view.dtype());
-}
+
+// Explicit backend
+let model = Model::load_sync("model_dir")?;
+let model = Model::load_async("model_dir").await?;
+let model = Model::load_io_uring("model_dir")?;  // Linux only
+let model = Model::load_mmap("model_dir")?;
 ```
 
-## Multi-Shard Support
+## Backend Selection
 
-SafeTensors models often span multiple shard files (e.g., `model-00001-of-00004.safetensors`). The loader automatically discovers shards in a directory and loads them as a unified model.
+- Single-shard or small multi-shard → `sync`
+- Large multi-shard (≥ 4 GB) → `io_uring`
+- Non-Linux → `sync` or `async`
 
 ## Testing
 
@@ -50,8 +37,3 @@ SafeTensors models often span multiple shard files (e.g., `model-00001-of-00004.
 cargo test safetensors
 cargo bench --bench safetensors
 ```
-
-## References
-
-- [SafeTensors Format Specification](https://github.com/huggingface/safetensors)
-- [HuggingFace SafeTensors Library](https://github.com/huggingface/safetensors)

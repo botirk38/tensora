@@ -1,117 +1,39 @@
-# Converters Module
+# Converters
 
-This module provides **high-level conversion orchestration** between different checkpoint formats.
+High-level format conversion pipelines between checkpoint layouts.
 
-## Purpose
+## Files
 
-Converters are responsible for:
-- **Orchestrating** the conversion process from input to output formats
-- **Implementing conversion logic** (dtype mapping, shape transformations, partitioning)
-- **Coordinating** readers and writers
-- **Managing** the overall conversion workflow
+| File | Purpose |
+|------|---------|
+| `mod.rs` | Module exports |
+| `safetensors_to_serverlessllm.rs` | SafeTensors → ServerlessLLM conversion with partitioning |
 
-## Architecture Principle
-
-**Converters contain ALL conversion logic.** They:
-- Use readers to parse input formats
-- Apply transformations and mappings
-- Use writers to serialize output formats
-- Handle all format-specific conversion details
-
-## Module Structure
-
-```
-converters/
-├── mod.rs                              # Module exports
-├── safetensors_to_serverlessllm.rs    # SafeTensors → ServerlessLLM conversion
-└── safetensors_to_tensorstore.rs       # SafeTensors → Tensora conversion
-```
-
-## Key Functions
-
-### SafeTensors to ServerlessLLM
-```rust
-use tensora::converters::safetensors_to_serverlessllm;
-
-// Convert a directory of SafeTensors shards with partitioning
-convert_safetensors_to_serverlessllm(
-    "model_dir",           // input directory
-    "output_dir/",          // output directory
-    8,                      // partition count
-).await?;
-```
-
-## Conversion Logic
-
-Converters implement format-specific transformations:
-
-### Dtype Mapping
-```rust
-// SafeTensors Dtype → ServerlessLLM string
-fn dtype_to_serverlessllm_string(dtype: safetensors::Dtype) -> &'static str {
-    match dtype {
-        Dtype::F32 => "torch.float32",
-        Dtype::F16 => "torch.float16",
-        // ... more mappings
-    }
-}
-```
-
-### Shape and Stride Calculations
-```rust
-// Calculate contiguous strides from shape
-fn calculate_strides(shape: &[usize]) -> Vec<i64> {
-    let mut strides = vec![1i64; shape.len()];
-    for i in (1..shape.len()).rev() {
-        strides[i-1] = strides[i] * shape[i] as i64;
-    }
-    strides
-}
-```
-
-### Partitioning Logic
-```rust
-// Assign tensors to partitions
-fn partition_tensors(tensor_count: usize, partition_count: usize) -> Vec<usize> {
-    (0..tensor_count)
-        .map(|i| i % partition_count)
-        .collect()
-}
-```
-
-## Usage Pattern
+## API
 
 ```rust
-// 1. Choose appropriate converter for input→output format pair
-use tensora::converters::safetensors_to_serverlessllm;
+use tensora::convert_safetensors_to_serverlessllm;
 
-// 2. Call converter with input directory/output paths and parameters
-convert_safetensors_to_serverlessllm(
-    input_dir,
-    output_dir,
-    partition_count,
-).await?;
+// Adaptive (picks best I/O backend)
+convert_safetensors_to_serverlessllm("input_dir", "output_dir", 8).await?;
 
-// 3. Converter handles the full pipeline:
-//    - Load input using readers::safetensors
-//    - Apply conversions (dtypes, shapes, partitioning)
-//    - Write output using writers::serverlessllm
+// Explicit backends
+convert_safetensors_to_serverlessllm_sync("input_dir", "output_dir", 8)?;
+convert_safetensors_to_serverlessllm_async("input_dir", "output_dir", 8).await?;
 ```
 
-## Design Rationale
+## Design
 
-**Why separate converters from readers/writers?**
+Converters orchestrate the full pipeline:
+1. Parse input format via format readers
+2. Apply transformations (dtype mapping, stride calculation, partitioning)
+3. Write output via format serializers
 
-1. **Single Responsibility**: Readers parse, writers serialize, converters transform
-2. **Reusability**: Same reader can be used by multiple converters
-3. **Testability**: Each component can be tested independently
-4. **Maintainability**: Conversion logic is centralized and versioned together
-5. **Extensibility**: Easy to add new format conversions without touching core I/O
+This separation keeps readers/writers reusable and conversion logic centralized.
 
-## Future Extensions
+## Testing
 
-Additional converters can be added for:
-- `safetensors_to_tensorstore.rs`
-- `tensorstore_to_serverlessllm.rs`
-- `serverlessllm_to_safetensors.rs`
-- etc.
+```bash
+cargo test converters
+cargo bench --bench conversion
+```

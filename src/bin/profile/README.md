@@ -1,40 +1,37 @@
 # profile
 
-Profiling harness for measuring tensora loader performance. Pass a **Hugging Face model id**; SafeTensors shards are resolved through the Hub client cache, and ServerlessLLM layouts are built under the OS cache (`tensora/<slug>/serverlessllm`).
+Performance measurement harness for Tensora I/O backends.
 
 ## Usage
 
 ```bash
-cargo run --release --bin profile -- <COMMAND> <CASE> --model-id <ORG/NAME> [OPTIONS]
+cargo run --release --bin profile -- <FORMAT> <BACKEND> --model-id <HF/MODEL> [--iterations N]
 ```
 
-## Commands
-
-### SafeTensors
-
-```bash
-cargo run --release --bin profile -- safetensors <CASE> --model-id <HF/MODEL> [--iterations <N>]
-```
-
-### ServerlessLLM
-
-```bash
-cargo run --release --bin profile -- serverlessllm <CASE> --model-id <HF/MODEL> [--iterations <N>]
-```
-
-**Cases:** `default`, `sync`, `async`, `mmap`, `io-uring` (Linux only).
-
-## Options
-
-- `--model-id` — **Required.** Hugging Face repository id (e.g. `Qwen/Qwen3-8B`).
-- `-i, --iterations` — Repeat count (default `1`).
+**Formats:** `safetensors`, `serverlessllm`
+**Backends:** `default`, `sync`, `async`, `mmap`, `io-uring` (Linux only)
 
 ## Examples
 
 ```bash
-cargo build --release --bin profile
 cargo run --release --bin profile -- safetensors default --model-id openai-community/gpt2
-cargo run --release --bin profile -- serverlessllm sync --model-id Qwen/Qwen3-0.6B --iterations 3
+cargo run --release --bin profile -- serverlessllm sync --model-id Qwen/Qwen3-0.6B -i 3
 ```
 
-Cold-cache measurements: run `sync` and `echo 3 > /proc/sys/vm/drop_caches` before `profile` as in the paper’s Experimental Setup.
+## Cold-Cache Measurements
+
+```bash
+sync && echo 3 > /proc/sys/vm/drop_caches
+cargo run --release --bin profile -- safetensors sync --model-id Qwen/Qwen3-8B -i 1
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `main.rs` | CLI entry point and argument parsing |
+| `config.rs` | Run configuration |
+| `evict.rs` | Cache eviction utilities |
+| `safetensors.rs` | SafeTensors profiling logic |
+| `serverlessllm.rs` | ServerlessLLM profiling logic |
+| `stats.rs` | Timing statistics and reporting |

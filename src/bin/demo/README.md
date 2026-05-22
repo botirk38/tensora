@@ -1,32 +1,15 @@
 # demo
 
-Interactive demonstration tool showcasing SafeTensors and ServerlessLLM loader capabilities. Pass a **Hugging Face model id**; checkpoints come from the Hub cache (and ServerlessLLM is converted under the OS cache when needed).
+Interactive demonstration of SafeTensors and ServerlessLLM loader capabilities.
 
 ## Usage
 
 ```bash
-cargo run [--release] --bin demo -- <COMMAND> <SCENARIO> --model-id <ORG/NAME>
+cargo run --release --bin demo -- <FORMAT> <SCENARIO> --model-id <HF/MODEL>
 ```
 
-**Important**: Put `--release` (recommended) before `--bin`, and use `--` before program arguments.
-
-## Commands
-
-### SafeTensors
-
-```bash
-cargo run --release --bin demo -- safetensors <SCENARIO> --model-id <HF/MODEL>
-```
-
-**Scenarios:** `async`, `sync`, `mmap`, `metadata`, `all`. **`parallel-sync`** is not wired for Hub-backed models (returns a clear error).
-
-### ServerlessLLM
-
-```bash
-cargo run --release --bin demo -- serverlessllm <SCENARIO> --model-id <HF/MODEL>
-```
-
-Same scenario list; **`parallel-sync`** is not wired for Hub-backed models.
+**Formats:** `safetensors`, `serverlessllm`
+**Scenarios:** `async`, `sync`, `mmap`, `metadata`, `all`
 
 ## Examples
 
@@ -35,7 +18,12 @@ cargo run --release --bin demo -- safetensors async --model-id Qwen/Qwen3-0.6B
 cargo run --release --bin demo -- serverlessllm all --model-id Qwen/Qwen3-0.6B
 ```
 
-## Purpose
+## Files
 
-- Compare loading strategies on a real checkpoint
-- Inspect tensor metadata and ServerlessLLM partitions
+| File | Purpose |
+|------|---------|
+| `main.rs` | CLI entry point |
+| `config.rs` | Demo configuration |
+| `io_metrics.rs` | I/O metrics collection and display |
+| `safetensors.rs` | SafeTensors demo scenarios |
+| `serverlessllm.rs` | ServerlessLLM demo scenarios |

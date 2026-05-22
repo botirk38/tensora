@@ -1,27 +1,23 @@
-# tensora_py
+# tensora (Python package)
 
-Python bindings for the tensora Rust library.
+Core Python package providing framework integrations on top of the Rust extension.
 
 ## Modules
 
-- **_tensora_rust** — Native extension (load/save functions, handles)
-- **torch** — PyTorch convenience API
-- **tensorflow** — TensorFlow convenience API
-
-## Installation
-
-```bash
-cd bindings/python
-uv sync --group dev --group torch
-uv run maturin develop --release
-```
+| Module | Description |
+|--------|-------------|
+| `_tensora_rust` | Native extension — low-level load/save functions |
+| `torch` | PyTorch `state_dict` loading for SafeTensors and ServerlessLLM |
+| `tensorflow` | TensorFlow tensor loading |
 
 ## Usage
 
 ```python
-from tensora_py.torch import load_safetensors
+# PyTorch
+from tensora_py.torch import load_safetensors, load_serverlessllm
+state_dict = load_safetensors("model_dir", device="cuda")
 
-state_dict = load_safetensors("model.safetensors", device="cuda")
+# TensorFlow
+from tensora_py.tensorflow import load_safetensors as tf_load
+tensors = tf_load("model_dir")
 ```
-
-See `examples/` for runnable inference scripts.

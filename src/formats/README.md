@@ -1,20 +1,22 @@
 # Tensor Formats
 
+Checkpoint format parsers and serializers implementing a shared `Model` trait.
+
 ## Modules
 
-- **safetensors/** — SafeTensors format reading/writing
-- **serverlessllm/** — ServerlessLLM format (partitioned tensor layout)
-- **traits.rs** — Common interfaces (Model, TensorView, Serializers)
-- **error.rs** — Error types
+| Module | Description |
+|--------|-------------|
+| [`safetensors/`](safetensors/) | HuggingFace SafeTensors format (single/multi-shard) |
+| [`serverlessllm/`](serverlessllm/) | ServerlessLLM partitioned layout |
+| `traits.rs` | Common interfaces — `Model`, `TensorView`, `SyncSerializer`, `AsyncSerializer` |
+| `error.rs` | Unified error types (`ReaderError`, `WriterError`) |
 
 ## Usage
 
 ```rust
-use tensora::safetensors;
-use tensora::serverlessllm;
+use tensora::formats::safetensors::Model;
+use tensora::formats::serverlessllm::Model as SllmModel;
+use tensora::formats::traits::Model as ModelTrait;
 ```
 
-Each format module exposes `Model` and `TensorView` implementations via the traits in `traits.rs`. Choose based on your source checkpoint format:
-
-- **SafeTensors**: HuggingFace standard, single or multi-shard
-- **ServerlessLLM**: Partitioned layout for range-oriented access, requires conversion
+Both format modules implement the `Model` trait, enabling generic code over checkpoint formats.
