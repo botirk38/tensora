@@ -112,14 +112,13 @@ enum LoadBackend {
 fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
     #[cfg(target_os = "linux")]
     {
-        let capabilities = backends::backend_capabilities();
         let log2_bytes = stats.log2_bytes();
         let fanout = stats.partition_fanout_score();
         let avg_partition_gb = stats.avg_partition_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
 
         let score = log2_bytes + 2.0 * fanout + avg_partition_gb;
 
-        if score >= 25.0 && capabilities.is_available(backends::Backend::IoUring) {
+        if score >= 25.0 && backends::io_uring::availability().is_available() {
             return LoadBackend::IoUring;
         }
         LoadBackend::TokioAsync

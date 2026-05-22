@@ -162,16 +162,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error::Error>> {
-    let capabilities = tensora::backends::backend_capabilities();
+    let mmap_avail = tensora::backends::mmap::availability();
+    let io_uring_avail: tensora::backends::BackendAvailability = {
+        #[cfg(target_os = "linux")]
+        {
+            tensora::backends::io_uring::availability()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            tensora::backends::BackendAvailability::unavailable(
+                tensora::backends::BackendUnavailableReason::UnsupportedPlatform,
+                "io_uring is only available on Linux",
+            )
+        }
+    };
+    let entries: [(&str, &tensora::backends::BackendAvailability); 4] = [
+        ("sync", &tensora::backends::BackendAvailability::Available),
+        ("async", &tensora::backends::BackendAvailability::Available),
+        ("mmap", &mmap_avail),
+        ("io-uring", &io_uring_avail),
+    ];
+
     match format {
         CapabilityFormat::Text => {
-            for (backend, availability) in capabilities.iter() {
-                println!("{backend:<10} {availability}");
+            for (name, availability) in &entries {
+                println!("{name:<10} {availability}");
             }
         }
         CapabilityFormat::Shell => {
-            for (backend, availability) in capabilities.iter() {
-                let key = backend.as_str().replace('-', "_").to_ascii_uppercase();
+            for (name, availability) in &entries {
+                let key = name.replace('-', "_").to_ascii_uppercase();
                 println!(
                     "TENSORA_BACKEND_{key}_AVAILABLE={}",
                     availability.is_available()
@@ -179,8 +199,8 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
             }
         }
         CapabilityFormat::Json => {
-            let mut entries = serde_json::Map::new();
-            for (backend, availability) in capabilities.iter() {
+            let mut map = serde_json::Map::new();
+            for (name, availability) in &entries {
                 let value = match availability {
                     tensora::backends::BackendAvailability::Available => serde_json::json!({
                         "available": true,
@@ -193,9 +213,9 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
                         })
                     }
                 };
-                entries.insert(backend.as_str().to_owned(), value);
+                map.insert(name.to_string(), value);
             }
-            println!("{}", serde_json::Value::Object(entries));
+            println!("{}", serde_json::Value::Object(map));
         }
     }
     Ok(())

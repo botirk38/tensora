@@ -194,11 +194,8 @@ impl ConversionStats {
     fn choose_backend(&self) -> ConversionBackend {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
-            {
-                let capabilities = backends::backend_capabilities();
-                if capabilities.is_available(backends::Backend::IoUring) {
-                    return ConversionBackend::IoUring;
-                }
+            if crate::backends::io_uring::availability().is_available() {
+                return ConversionBackend::IoUring;
             }
             return ConversionBackend::TokioAsync;
         }
