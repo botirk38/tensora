@@ -38,9 +38,9 @@ pub async fn convert_safetensors_to_serverlessllm(
             "partition_count must be greater than zero".to_owned(),
         ));
     }
-    let plan = build_plan(input_dir, partition_count).await?;
-    let backend = choose_conversion_backend(&plan.stats);
-    materialize(output_dir, &plan, backend).await
+    let plan = ConversionPlan::build(input_dir, partition_count).await?;
+    let backend = plan.stats.choose_backend();
+    plan.materialize(output_dir, backend).await
 }
 
 /// Convert SafeTensors shards to ServerlessLLM format using synchronous I/O.
@@ -55,8 +55,8 @@ pub fn convert_safetensors_to_serverlessllm_sync(
             "partition_count must be greater than zero".to_owned(),
         ));
     }
-    let plan = build_plan_sync(input_dir, partition_count)?;
-    materialize_sync(output_dir, &plan)
+    let plan = ConversionPlan::build_sync(input_dir, partition_count)?;
+    plan.materialize_sync(output_dir)
 }
 
 /// Convert SafeTensors shards to ServerlessLLM format using Tokio async I/O.
@@ -71,8 +71,8 @@ pub async fn convert_safetensors_to_serverlessllm_async(
             "partition_count must be greater than zero".to_owned(),
         ));
     }
-    let plan = build_plan(input_dir, partition_count).await?;
-    materialize_async(output_dir, &plan).await
+    let plan = ConversionPlan::build(input_dir, partition_count).await?;
+    plan.materialize_async(output_dir).await
 }
 
 /// Convert SafeTensors shards to ServerlessLLM format using Linux io_uring I/O.
@@ -88,8 +88,8 @@ pub fn convert_safetensors_to_serverlessllm_io_uring(
             "partition_count must be greater than zero".to_owned(),
         ));
     }
-    let plan = build_plan_sync(input_dir, partition_count)?;
-    materialize_io_uring(output_dir, &plan)
+    let plan = ConversionPlan::build_sync(input_dir, partition_count)?;
+    plan.materialize_io_uring(output_dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +107,44 @@ pub struct TensorSource {
     pub shape: Vec<usize>,
     pub stride: Vec<usize>,
     pub dtype: String,
+}
+
+impl TensorSource {
+    fn map_dtype(dtype: safetensors::Dtype) -> WriterResult<&'static str> {
+        match dtype {
+            safetensors::Dtype::F32 => Ok("torch.float32"),
+            safetensors::Dtype::F16 => Ok("torch.float16"),
+            safetensors::Dtype::BF16 => Ok("torch.bfloat16"),
+            safetensors::Dtype::F64 => Ok("torch.float64"),
+            safetensors::Dtype::I32 => Ok("torch.int32"),
+            safetensors::Dtype::I16 => Ok("torch.int16"),
+            safetensors::Dtype::I8 => Ok("torch.int8"),
+            safetensors::Dtype::I64 => Ok("torch.int64"),
+            safetensors::Dtype::U32 => Ok("torch.uint32"),
+            safetensors::Dtype::U16 => Ok("torch.uint16"),
+            safetensors::Dtype::U8 => Ok("torch.uint8"),
+            safetensors::Dtype::U64 => Ok("torch.uint64"),
+            safetensors::Dtype::BOOL => Ok("torch.bool"),
+            _ => Err(WriterError::InvalidInput(format!(
+                "unsupported dtype: {:?}",
+                dtype
+            ))),
+        }
+    }
+
+    fn contiguous_stride(shape: &[usize]) -> Vec<usize> {
+        if shape.is_empty() {
+            return Vec::new();
+        }
+        let mut stride = vec![1usize; shape.len()];
+        for i in (0..shape.len().saturating_sub(1)).rev() {
+            let next_i = i + 1;
+            let next_stride = stride.get(next_i).copied().unwrap_or(1);
+            let next_shape = shape.get(next_i).copied().unwrap_or(1);
+            stride[i] = next_stride * next_shape;
+        }
+        stride
+    }
 }
 
 /// A single copy operation from source range to destination range.
@@ -138,14 +176,6 @@ pub struct ConversionStats {
     pub max_copy_size: usize,
 }
 
-/// Complete conversion plan with copy operations and index entries.
-#[derive(Debug)]
-pub struct ConversionPlan {
-    pub copy_ops: Vec<CopyOp>,
-    pub index: HashMap<String, TensorWriteEntry>,
-    pub stats: ConversionStats,
-}
-
 // ---------------------------------------------------------------------------
 // Backend selection
 // ---------------------------------------------------------------------------
@@ -160,511 +190,470 @@ enum ConversionBackend {
 
 const LARGE_CONVERSION_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
 
-/// Backend selection for conversion.
-///
-/// Sync with parallel partition writes is the default.
-/// Only use async for very large conversions where concurrent I/O helps.
-fn choose_conversion_backend(stats: &ConversionStats) -> ConversionBackend {
-    if stats.total_bytes >= LARGE_CONVERSION_THRESHOLD && stats.partition_count >= 4 {
-        #[cfg(target_os = "linux")]
-        {
-            let capabilities = backends::backend_capabilities();
-            if capabilities.is_available(backends::Backend::IoUring) {
-                return ConversionBackend::IoUring;
+impl ConversionStats {
+    fn choose_backend(&self) -> ConversionBackend {
+        if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
+            #[cfg(target_os = "linux")]
+            {
+                let capabilities = backends::backend_capabilities();
+                if capabilities.is_available(backends::Backend::IoUring) {
+                    return ConversionBackend::IoUring;
+                }
             }
+            return ConversionBackend::TokioAsync;
         }
-        return ConversionBackend::TokioAsync;
+        ConversionBackend::Sync
     }
-    ConversionBackend::Sync
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline — scan, plan, materialize
+// Conversion plan
 // ---------------------------------------------------------------------------
 
-async fn build_plan(input_dir: &str, partition_count: usize) -> WriterResult<ConversionPlan> {
-    let input_dir = Path::new(input_dir);
-    let shard_paths = discover_safetensors_shards(input_dir)?;
-    validate_index_manifest(input_dir, &shard_paths)?;
-    let tensors = scan_shards_mmap(&shard_paths)?;
-    build_plan_from_tensors(tensors, partition_count)
+/// Complete conversion plan with copy operations and index entries.
+#[derive(Debug)]
+pub struct ConversionPlan {
+    pub copy_ops: Vec<CopyOp>,
+    pub index: HashMap<String, TensorWriteEntry>,
+    pub stats: ConversionStats,
 }
 
-fn build_plan_sync(input_dir: &str, partition_count: usize) -> WriterResult<ConversionPlan> {
-    let input_dir = Path::new(input_dir);
-    let shard_paths = discover_safetensors_shards(input_dir)?;
-    validate_index_manifest(input_dir, &shard_paths)?;
-    let tensors = scan_shards_mmap(&shard_paths)?;
-    build_plan_from_tensors(tensors, partition_count)
-}
+impl ConversionPlan {
+    // -- Construction --------------------------------------------------------
 
-fn build_plan_from_tensors(
-    mut tensors: Vec<TensorSource>,
-    partition_count: usize,
-) -> WriterResult<ConversionPlan> {
-    if tensors.is_empty() {
-        return Err(WriterError::InvalidInput(
-            "no tensors found in input directory".to_owned(),
-        ));
+    async fn build(input_dir: &str, partition_count: usize) -> WriterResult<Self> {
+        let input_dir = Path::new(input_dir);
+        let shard_paths = Self::discover_shards(input_dir)?;
+        Self::validate_index_manifest(input_dir, &shard_paths)?;
+        let tensors = Self::scan_shards_mmap(&shard_paths)?;
+        Self::from_tensors(tensors, partition_count)
     }
 
-    let shard_count = tensors
-        .iter()
-        .map(|t| t.shard_id)
-        .max()
-        .map(|m| m + 1)
-        .unwrap_or(1);
-
-    let mut shard_sizes: Vec<u64> = vec![0; shard_count];
-    for t in &tensors {
-        shard_sizes[t.shard_id] += t.size as u64;
+    fn build_sync(input_dir: &str, partition_count: usize) -> WriterResult<Self> {
+        let input_dir = Path::new(input_dir);
+        let shard_paths = Self::discover_shards(input_dir)?;
+        Self::validate_index_manifest(input_dir, &shard_paths)?;
+        let tensors = Self::scan_shards_mmap(&shard_paths)?;
+        Self::from_tensors(tensors, partition_count)
     }
 
-    tensors.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    fn from_tensors(
+        mut tensors: Vec<TensorSource>,
+        partition_count: usize,
+    ) -> WriterResult<Self> {
+        if tensors.is_empty() {
+            return Err(WriterError::InvalidInput(
+                "no tensors found in input directory".to_owned(),
+            ));
+        }
 
-    let mut partition_sizes: Vec<u64> = vec![0; partition_count];
-    let mut partition_shards: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); partition_count];
-    let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
-    let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
+        let shard_count = tensors
+            .iter()
+            .map(|t| t.shard_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(1);
 
-    for tensor in tensors {
-        let best_partition = (0..partition_count)
-            .min_by_key(|&pid| {
-                let new_shard = if partition_shards[pid].contains(&tensor.shard_id) {
-                    0
-                } else {
-                    1
-                };
-                (partition_sizes[pid], new_shard, pid)
-            })
-            .unwrap_or(0);
+        let mut shard_sizes: Vec<u64> = vec![0; shard_count];
+        for t in &tensors {
+            shard_sizes[t.shard_id] += t.size as u64;
+        }
 
-        let offset = partition_sizes[best_partition];
-        partition_sizes[best_partition] += tensor.size as u64;
-        partition_shards[best_partition].insert(tensor.shard_id);
+        tensors.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 
-        let size_u64 = tensor.size as u64;
-        index.insert(
-            tensor.name.clone(),
-            TensorWriteEntry {
-                offset,
-                size: size_u64,
-                shape: tensor.shape.clone(),
-                stride: tensor.stride.clone(),
-                dtype: tensor.dtype.clone(),
-                partition_id: best_partition,
-            },
-        );
+        let mut partition_sizes: Vec<u64> = vec![0; partition_count];
+        let mut partition_shards: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); partition_count];
+        let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
+        let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
 
-        copy_ops.push(CopyOp {
-            shard_id: tensor.shard_id,
-            shard_path: tensor.shard_path,
-            source_offset: tensor.source_offset,
-            dest_partition: best_partition,
-            dest_offset: offset,
-            size: tensor.size,
-        });
-    }
+        for tensor in tensors {
+            let best_partition = (0..partition_count)
+                .min_by_key(|&pid| {
+                    let new_shard = if partition_shards[pid].contains(&tensor.shard_id) {
+                        0
+                    } else {
+                        1
+                    };
+                    (partition_sizes[pid], new_shard, pid)
+                })
+                .unwrap_or(0);
 
-    let total_bytes: u64 = copy_ops.iter().map(|op| op.size as u64).sum();
-    let max_shard_bytes = shard_sizes.iter().copied().max().unwrap_or(0);
-    let mean_shard_bytes = if shard_count > 0 {
-        shard_sizes.iter().sum::<u64>() / shard_count as u64
-    } else {
-        0
-    };
-    let max_partition_bytes = partition_sizes.iter().copied().max().unwrap_or(0);
-    let mean_partition_bytes = if partition_count > 0 {
-        partition_sizes.iter().sum::<u64>() / partition_count as u64
-    } else {
-        0
-    };
+            let offset = partition_sizes[best_partition];
+            partition_sizes[best_partition] += tensor.size as u64;
+            partition_shards[best_partition].insert(tensor.shard_id);
 
-    let shards_per_partition: Vec<usize> = partition_shards.iter().map(|s| s.len()).collect();
-    let mean_shards_per_partition = if partition_count > 0 {
-        shards_per_partition.iter().sum::<usize>() as f64 / partition_count as f64
-    } else {
-        0.0
-    };
-    let max_shards_per_partition = shards_per_partition.into_iter().max().unwrap_or(0);
+            let size_u64 = tensor.size as u64;
+            index.insert(
+                tensor.name.clone(),
+                TensorWriteEntry {
+                    offset,
+                    size: size_u64,
+                    shape: tensor.shape.clone(),
+                    stride: tensor.stride.clone(),
+                    dtype: tensor.dtype.clone(),
+                    partition_id: best_partition,
+                },
+            );
 
-    let copy_op_count = copy_ops.len();
-    let mean_copy_size = if copy_op_count > 0 {
-        total_bytes as f64 / copy_op_count as f64
-    } else {
-        0.0
-    };
-    let max_copy_size = copy_ops.iter().map(|op| op.size).max().unwrap_or(0);
-
-    let stats = ConversionStats {
-        total_bytes,
-        shard_count,
-        partition_count,
-        tensor_count: copy_op_count,
-        max_shard_bytes,
-        mean_shard_bytes,
-        max_partition_bytes,
-        mean_partition_bytes,
-        mean_shards_per_partition,
-        max_shards_per_partition,
-        copy_op_count,
-        mean_copy_size,
-        max_copy_size,
-    };
-
-    Ok(ConversionPlan {
-        copy_ops,
-        index,
-        stats,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Scan — metadata-only SafeTensors header parsing via mmap
-// ---------------------------------------------------------------------------
-
-fn scan_shards_mmap(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
-    use memmap2::Mmap;
-    use std::fs::File;
-
-    let mut all_tensors = Vec::new();
-    let mut seen_names = std::collections::BTreeSet::new();
-
-    for (shard_id, shard_path) in shard_paths.iter().enumerate() {
-        let file = File::open(shard_path).map_err(WriterError::from)?;
-        let mmap = unsafe { Mmap::map(&file).map_err(WriterError::from)? };
-        let model = SafeTensors::deserialize(&mmap)
-            .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
-
-        for name in model.names() {
-            if !seen_names.insert(name.to_owned()) {
-                return Err(WriterError::InvalidInput(format!(
-                    "duplicate tensor name across shards: {name}"
-                )));
-            }
-
-            let tensor = model
-                .tensor(name)
-                .map_err(|e| WriterError::InvalidInput(e.to_string()))?;
-            let view = tensor.data();
-            let offset = view.as_ptr() as usize - mmap.as_ptr() as usize;
-
-            all_tensors.push(TensorSource {
-                name: name.to_owned(),
-                shard_id,
-                shard_path: shard_path.clone(),
-                source_offset: offset as u64,
-                size: view.len(),
-                shape: tensor.shape().to_vec(),
-                stride: calculate_contiguous_stride(tensor.shape()),
-                dtype: dtype_str_to_serverlessllm(tensor.dtype())?.to_owned(),
+            copy_ops.push(CopyOp {
+                shard_id: tensor.shard_id,
+                shard_path: tensor.shard_path,
+                source_offset: tensor.source_offset,
+                dest_partition: best_partition,
+                dest_offset: offset,
+                size: tensor.size,
             });
         }
-    }
 
-    Ok(all_tensors)
-}
-
-// ---------------------------------------------------------------------------
-// Materialization — streaming copy from source ranges to destination offsets
-// ---------------------------------------------------------------------------
-
-async fn materialize(
-    output_dir: &str,
-    plan: &ConversionPlan,
-    backend: ConversionBackend,
-) -> WriterResult<()> {
-    let output_dir = Path::new(output_dir);
-    tokio::fs::create_dir_all(output_dir).await?;
-
-    match backend {
-        ConversionBackend::Sync => materialize_sync_parallel(output_dir, plan)?,
-        ConversionBackend::TokioAsync => materialize_async_inner(output_dir, plan).await?,
-        #[cfg(target_os = "linux")]
-        ConversionBackend::IoUring => materialize_sync_parallel(output_dir, plan)?,
-    }
-
-    let index_path = output_dir.join("tensor_index.json");
-    write_index(&index_path, &plan.index).await?;
-
-    Ok(())
-}
-
-async fn materialize_async(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()> {
-    let output_dir = Path::new(output_dir);
-    tokio::fs::create_dir_all(output_dir).await?;
-    materialize_async_inner(output_dir, plan).await?;
-    let index_path = output_dir.join("tensor_index.json");
-    write_index(&index_path, &plan.index).await?;
-    Ok(())
-}
-
-fn materialize_sync(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()> {
-    let output_dir = Path::new(output_dir);
-    std::fs::create_dir_all(output_dir)?;
-    materialize_sync_parallel(output_dir, plan)?;
-    let index_path = output_dir.join("tensor_index.json");
-    write_index_sync(&index_path, &plan.index)?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn materialize_io_uring(output_dir: &str, plan: &ConversionPlan) -> WriterResult<()> {
-    let output_dir = Path::new(output_dir);
-    std::fs::create_dir_all(output_dir)?;
-    materialize_sync_parallel(output_dir, plan)?;
-    let index_path = output_dir.join("tensor_index.json");
-    write_index_sync(&index_path, &plan.index)?;
-    Ok(())
-}
-
-async fn materialize_async_inner(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
-    let partitions = group_by_partition(plan);
-    let futs: Vec<_> = partitions
-        .into_iter()
-        .map(|(partition_id, ops)| {
-            let dir = output_dir.to_path_buf();
-            async move { write_partition_async(&dir, partition_id, &ops).await }
-        })
-        .collect();
-    try_join_all(futs).await?;
-    Ok(())
-}
-
-fn group_by_partition(plan: &ConversionPlan) -> Vec<(usize, Vec<&CopyOp>)> {
-    let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
-    for op in &plan.copy_ops {
-        by_partition.entry(op.dest_partition).or_default().push(op);
-    }
-    by_partition.into_iter().collect()
-}
-
-fn materialize_sync_parallel(output_dir: &Path, plan: &ConversionPlan) -> WriterResult<()> {
-    let partitions = group_by_partition(plan);
-    partitions
-        .into_par_iter()
-        .try_for_each(|(partition_id, ops)| {
-            write_partition_sync_single(output_dir, partition_id, &ops)
-        })
-}
-
-async fn write_partition_async(
-    output_dir: &Path,
-    partition_id: usize,
-    ops: &[&CopyOp],
-) -> WriterResult<()> {
-    let path = output_dir.join(format!("tensor.data_{}", partition_id));
-
-    // Pre-size partition file
-    let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-    {
-        let f = std::fs::File::create(&path)?;
-        f.set_len(total_size)?;
-    }
-
-    let mut writer = backends::AsyncWriter::create(&path)
-        .await
-        .map_err(WriterError::from)?;
-
-    // Group ops by shard to minimize reopens
-    let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
-    for op in ops {
-        by_shard.entry(&op.shard_path).or_default().push(op);
-    }
-
-    for (shard_path, shard_ops) in by_shard {
-        let mut reader = backends::AsyncReader::new();
-        for op in shard_ops {
-            let data = reader
-                .load_range(shard_path, op.source_offset, op.size)
-                .await
-                .map_err(WriterError::from)?;
-            writer
-                .write_at(op.dest_offset, data.as_ref())
-                .await
-                .map_err(WriterError::from)?;
-        }
-    }
-
-    writer.sync_all().await.map_err(WriterError::from)?;
-    Ok(())
-}
-
-fn write_partition_sync_single(
-    output_dir: &Path,
-    partition_id: usize,
-    ops: &[&CopyOp],
-) -> WriterResult<()> {
-    let path = output_dir.join(format!("tensor.data_{}", partition_id));
-
-    // Pre-size partition file
-    let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-    let f = std::fs::File::create(&path)?;
-    f.set_len(total_size)?;
-
-    let mut writer = backends::SyncWriter::create(&path)?;
-    let mut reader = backends::SyncReader::new();
-
-    let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
-    for op in ops {
-        by_shard.entry(&op.shard_path).or_default().push(op);
-    }
-
-    for (shard_path, shard_ops) in by_shard {
-        for op in shard_ops {
-            let data = reader
-                .load_range(shard_path.clone(), op.source_offset, op.size)
-                .map_err(WriterError::from)?;
-            writer
-                .write_at(op.dest_offset, data.as_ref())
-                .map_err(WriterError::from)?;
-        }
-    }
-
-    writer.sync_all().map_err(WriterError::from)?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn discover_safetensors_shards(input_dir: &Path) -> WriterResult<Vec<PathBuf>> {
-    if !input_dir.is_dir() {
-        return Err(WriterError::InvalidInput(format!(
-            "input path is not a directory: {}",
-            input_dir.display()
-        )));
-    }
-
-    let mut shards = Vec::new();
-    for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
-        let entry = entry.map_err(WriterError::from)?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
+        let total_bytes: u64 = copy_ops.iter().map(|op| op.size as u64).sum();
+        let max_shard_bytes = shard_sizes.iter().copied().max().unwrap_or(0);
+        let mean_shard_bytes = if shard_count > 0 {
+            shard_sizes.iter().sum::<u64>() / shard_count as u64
+        } else {
+            0
         };
-        if name.ends_with(".safetensors") {
-            shards.push(path);
-        }
-    }
+        let max_partition_bytes = partition_sizes.iter().copied().max().unwrap_or(0);
+        let mean_partition_bytes = if partition_count > 0 {
+            partition_sizes.iter().sum::<u64>() / partition_count as u64
+        } else {
+            0
+        };
 
-    shards.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        let shards_per_partition: Vec<usize> = partition_shards.iter().map(|s| s.len()).collect();
+        let mean_shards_per_partition = if partition_count > 0 {
+            shards_per_partition.iter().sum::<usize>() as f64 / partition_count as f64
+        } else {
+            0.0
+        };
+        let max_shards_per_partition = shards_per_partition.into_iter().max().unwrap_or(0);
 
-    if shards.is_empty() {
-        return Err(WriterError::InvalidInput(format!(
-            "no .safetensors files found in {}",
-            input_dir.display()
-        )));
-    }
+        let copy_op_count = copy_ops.len();
+        let mean_copy_size = if copy_op_count > 0 {
+            total_bytes as f64 / copy_op_count as f64
+        } else {
+            0.0
+        };
+        let max_copy_size = copy_ops.iter().map(|op| op.size).max().unwrap_or(0);
 
-    Ok(shards)
-}
+        let stats = ConversionStats {
+            total_bytes,
+            shard_count,
+            partition_count,
+            tensor_count: copy_op_count,
+            max_shard_bytes,
+            mean_shard_bytes,
+            max_partition_bytes,
+            mean_partition_bytes,
+            mean_shards_per_partition,
+            max_shards_per_partition,
+            copy_op_count,
+            mean_copy_size,
+            max_copy_size,
+        };
 
-fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> WriterResult<()> {
-    let mut index_files = Vec::new();
-    for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
-        let entry = entry.map_err(WriterError::from)?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".safetensors.index.json"))
-        {
-            index_files.push(path);
-        }
-    }
-
-    if index_files.is_empty() {
-        return Ok(());
-    }
-
-    let shard_names: BTreeSet<String> = shard_paths
-        .iter()
-        .filter_map(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .map(|s| s.to_owned())
+        Ok(ConversionPlan {
+            copy_ops,
+            index,
+            stats,
         })
-        .collect();
+    }
 
-    for index_path in index_files {
-        let bytes = std::fs::read(&index_path).map_err(WriterError::from)?;
-        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            WriterError::InvalidInput(format!(
-                "failed to parse index manifest {}: {e}",
-                index_path.display()
-            ))
-        })?;
-        let weight_map = json
-            .get("weight_map")
-            .and_then(|value| value.as_object())
-            .ok_or_else(|| {
+    // -- Shard discovery ----------------------------------------------------
+
+    fn discover_shards(input_dir: &Path) -> WriterResult<Vec<PathBuf>> {
+        if !input_dir.is_dir() {
+            return Err(WriterError::InvalidInput(format!(
+                "input path is not a directory: {}",
+                input_dir.display()
+            )));
+        }
+
+        let mut shards = Vec::new();
+        for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
+            let entry = entry.map_err(WriterError::from)?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".safetensors") {
+                shards.push(path);
+            }
+        }
+
+        shards.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        if shards.is_empty() {
+            return Err(WriterError::InvalidInput(format!(
+                "no .safetensors files found in {}",
+                input_dir.display()
+            )));
+        }
+
+        Ok(shards)
+    }
+
+    fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> WriterResult<()> {
+        let mut index_files = Vec::new();
+        for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
+            let entry = entry.map_err(WriterError::from)?;
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".safetensors.index.json"))
+            {
+                index_files.push(path);
+            }
+        }
+
+        if index_files.is_empty() {
+            return Ok(());
+        }
+
+        let shard_names: BTreeSet<String> = shard_paths
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|s| s.to_owned())
+            })
+            .collect();
+
+        for index_path in index_files {
+            let bytes = std::fs::read(&index_path).map_err(WriterError::from)?;
+            let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
                 WriterError::InvalidInput(format!(
-                    "index manifest {} is missing weight_map",
+                    "failed to parse index manifest {}: {e}",
                     index_path.display()
                 ))
             })?;
+            let weight_map = json
+                .get("weight_map")
+                .and_then(|value| value.as_object())
+                .ok_or_else(|| {
+                    WriterError::InvalidInput(format!(
+                        "index manifest {} is missing weight_map",
+                        index_path.display()
+                    ))
+                })?;
 
-        let referenced: BTreeSet<String> = weight_map
-            .values()
-            .filter_map(|value| value.as_str().map(|s| s.to_owned()))
+            let referenced: BTreeSet<String> = weight_map
+                .values()
+                .filter_map(|value| value.as_str().map(|s| s.to_owned()))
+                .collect();
+
+            if referenced != shard_names {
+                return Err(WriterError::InvalidInput(format!(
+                    "index manifest {} does not match discovered shard set",
+                    index_path.display()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    // -- Shard scanning -----------------------------------------------------
+
+    fn scan_shards_mmap(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
+        use memmap2::Mmap;
+        use std::fs::File;
+
+        let mut all_tensors = Vec::new();
+        let mut seen_names = std::collections::BTreeSet::new();
+
+        for (shard_id, shard_path) in shard_paths.iter().enumerate() {
+            let file = File::open(shard_path).map_err(WriterError::from)?;
+            let mmap = unsafe { Mmap::map(&file).map_err(WriterError::from)? };
+            let model = SafeTensors::deserialize(&mmap)
+                .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
+
+            for name in model.names() {
+                if !seen_names.insert(name.to_owned()) {
+                    return Err(WriterError::InvalidInput(format!(
+                        "duplicate tensor name across shards: {name}"
+                    )));
+                }
+
+                let tensor = model
+                    .tensor(name)
+                    .map_err(|e| WriterError::InvalidInput(e.to_string()))?;
+                let view = tensor.data();
+                let offset = view.as_ptr() as usize - mmap.as_ptr() as usize;
+
+                all_tensors.push(TensorSource {
+                    name: name.to_owned(),
+                    shard_id,
+                    shard_path: shard_path.clone(),
+                    source_offset: offset as u64,
+                    size: view.len(),
+                    shape: tensor.shape().to_vec(),
+                    stride: TensorSource::contiguous_stride(tensor.shape()),
+                    dtype: TensorSource::map_dtype(tensor.dtype())?.to_owned(),
+                });
+            }
+        }
+
+        Ok(all_tensors)
+    }
+
+    // -- Materialization ----------------------------------------------------
+
+    async fn materialize(
+        &self,
+        output_dir: &str,
+        backend: ConversionBackend,
+    ) -> WriterResult<()> {
+        let output_dir = Path::new(output_dir);
+        tokio::fs::create_dir_all(output_dir).await?;
+
+        match backend {
+            ConversionBackend::Sync => self.materialize_sync_parallel(output_dir)?,
+            ConversionBackend::TokioAsync => self.materialize_async_inner(output_dir).await?,
+            #[cfg(target_os = "linux")]
+            ConversionBackend::IoUring => self.materialize_sync_parallel(output_dir)?,
+        }
+
+        let index_path = output_dir.join("tensor_index.json");
+        write_index(&index_path, &self.index).await?;
+
+        Ok(())
+    }
+
+    async fn materialize_async(&self, output_dir: &str) -> WriterResult<()> {
+        let output_dir = Path::new(output_dir);
+        tokio::fs::create_dir_all(output_dir).await?;
+        self.materialize_async_inner(output_dir).await?;
+        let index_path = output_dir.join("tensor_index.json");
+        write_index(&index_path, &self.index).await?;
+        Ok(())
+    }
+
+    fn materialize_sync(&self, output_dir: &str) -> WriterResult<()> {
+        let output_dir = Path::new(output_dir);
+        std::fs::create_dir_all(output_dir)?;
+        self.materialize_sync_parallel(output_dir)?;
+        let index_path = output_dir.join("tensor_index.json");
+        write_index_sync(&index_path, &self.index)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn materialize_io_uring(&self, output_dir: &str) -> WriterResult<()> {
+        let output_dir = Path::new(output_dir);
+        std::fs::create_dir_all(output_dir)?;
+        self.materialize_sync_parallel(output_dir)?;
+        let index_path = output_dir.join("tensor_index.json");
+        write_index_sync(&index_path, &self.index)?;
+        Ok(())
+    }
+
+    async fn materialize_async_inner(&self, output_dir: &Path) -> WriterResult<()> {
+        let partitions = self.group_by_partition();
+        let futs: Vec<_> = partitions
+            .into_iter()
+            .map(|(partition_id, ops)| {
+                let dir = output_dir.to_path_buf();
+                async move { Self::write_partition_async(&dir, partition_id, &ops).await }
+            })
             .collect();
+        try_join_all(futs).await?;
+        Ok(())
+    }
 
-        if referenced != shard_names {
-            return Err(WriterError::InvalidInput(format!(
-                "index manifest {} does not match discovered shard set",
-                index_path.display()
-            )));
+    fn materialize_sync_parallel(&self, output_dir: &Path) -> WriterResult<()> {
+        let partitions = self.group_by_partition();
+        partitions
+            .into_par_iter()
+            .try_for_each(|(partition_id, ops)| {
+                Self::write_partition_sync(output_dir, partition_id, &ops)
+            })
+    }
+
+    fn group_by_partition(&self) -> Vec<(usize, Vec<&CopyOp>)> {
+        let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
+        for op in &self.copy_ops {
+            by_partition.entry(op.dest_partition).or_default().push(op);
         }
+        by_partition.into_iter().collect()
     }
 
-    Ok(())
-}
+    async fn write_partition_async(
+        output_dir: &Path,
+        partition_id: usize,
+        ops: &[&CopyOp],
+    ) -> WriterResult<()> {
+        let path = output_dir.join(format!("tensor.data_{}", partition_id));
 
-fn dtype_str_to_serverlessllm(dtype: safetensors::Dtype) -> WriterResult<&'static str> {
-    let mapped = match dtype {
-        safetensors::Dtype::F32 => "torch.float32",
-        safetensors::Dtype::F16 => "torch.float16",
-        safetensors::Dtype::BF16 => "torch.bfloat16",
-        safetensors::Dtype::F64 => "torch.float64",
-        safetensors::Dtype::I32 => "torch.int32",
-        safetensors::Dtype::I16 => "torch.int16",
-        safetensors::Dtype::I8 => "torch.int8",
-        safetensors::Dtype::I64 => "torch.int64",
-        safetensors::Dtype::U32 => "torch.uint32",
-        safetensors::Dtype::U16 => "torch.uint16",
-        safetensors::Dtype::U8 => "torch.uint8",
-        safetensors::Dtype::U64 => "torch.uint64",
-        safetensors::Dtype::BOOL => "torch.bool",
-        _ => {
-            return Err(WriterError::InvalidInput(format!(
-                "unsupported dtype: {:?}",
-                dtype
-            )));
+        let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
+        {
+            let f = std::fs::File::create(&path)?;
+            f.set_len(total_size)?;
         }
-    };
 
-    Ok(mapped)
-}
+        let mut writer = backends::AsyncWriter::create(&path)
+            .await
+            .map_err(WriterError::from)?;
 
-fn calculate_contiguous_stride(shape: &[usize]) -> Vec<usize> {
-    if shape.is_empty() {
-        return Vec::new();
+        let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
+        for op in ops {
+            by_shard.entry(&op.shard_path).or_default().push(op);
+        }
+
+        for (shard_path, shard_ops) in by_shard {
+            let mut reader = backends::AsyncReader::new();
+            for op in shard_ops {
+                let data = reader
+                    .load_range(shard_path, op.source_offset, op.size)
+                    .await
+                    .map_err(WriterError::from)?;
+                writer
+                    .write_at(op.dest_offset, data.as_ref())
+                    .await
+                    .map_err(WriterError::from)?;
+            }
+        }
+
+        writer.sync_all().await.map_err(WriterError::from)?;
+        Ok(())
     }
 
-    let mut stride = vec![1usize; shape.len()];
-    for i in (0..shape.len().saturating_sub(1)).rev() {
-        let next_i = i + 1;
-        let next_stride = stride.get(next_i).copied().unwrap_or(1);
-        let next_shape = shape.get(next_i).copied().unwrap_or(1);
-        stride[i] = next_stride * next_shape;
-    }
+    fn write_partition_sync(
+        output_dir: &Path,
+        partition_id: usize,
+        ops: &[&CopyOp],
+    ) -> WriterResult<()> {
+        let path = output_dir.join(format!("tensor.data_{}", partition_id));
 
-    stride
+        let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
+        let f = std::fs::File::create(&path)?;
+        f.set_len(total_size)?;
+
+        let mut writer = backends::SyncWriter::create(&path)?;
+        let mut reader = backends::SyncReader::new();
+
+        let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
+        for op in ops {
+            by_shard.entry(&op.shard_path).or_default().push(op);
+        }
+
+        for (shard_path, shard_ops) in by_shard {
+            for op in shard_ops {
+                let data = reader
+                    .load_range(shard_path.clone(), op.source_offset, op.size)
+                    .map_err(WriterError::from)?;
+                writer
+                    .write_at(op.dest_offset, data.as_ref())
+                    .map_err(WriterError::from)?;
+            }
+        }
+
+        writer.sync_all().map_err(WriterError::from)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -847,32 +836,32 @@ mod tests {
     }
 
     #[test]
-    fn calculate_contiguous_stride_basic() {
-        assert_eq!(calculate_contiguous_stride(&[2, 3, 4]), vec![12, 4, 1]);
-        assert_eq!(calculate_contiguous_stride(&[5]), vec![1]);
-        assert_eq!(calculate_contiguous_stride(&[]), Vec::<usize>::new());
+    fn contiguous_stride_basic() {
+        assert_eq!(TensorSource::contiguous_stride(&[2, 3, 4]), vec![12, 4, 1]);
+        assert_eq!(TensorSource::contiguous_stride(&[5]), vec![1]);
+        assert_eq!(TensorSource::contiguous_stride(&[]), Vec::<usize>::new());
     }
 
     #[test]
     fn dtype_mapping_covers_common_types() {
         assert_eq!(
-            dtype_str_to_serverlessllm(safetensors::Dtype::F32).unwrap(),
+            TensorSource::map_dtype(safetensors::Dtype::F32).unwrap(),
             "torch.float32"
         );
         assert_eq!(
-            dtype_str_to_serverlessllm(safetensors::Dtype::F16).unwrap(),
+            TensorSource::map_dtype(safetensors::Dtype::F16).unwrap(),
             "torch.float16"
         );
         assert_eq!(
-            dtype_str_to_serverlessllm(safetensors::Dtype::BF16).unwrap(),
+            TensorSource::map_dtype(safetensors::Dtype::BF16).unwrap(),
             "torch.bfloat16"
         );
         assert_eq!(
-            dtype_str_to_serverlessllm(safetensors::Dtype::I64).unwrap(),
+            TensorSource::map_dtype(safetensors::Dtype::I64).unwrap(),
             "torch.int64"
         );
         assert_eq!(
-            dtype_str_to_serverlessllm(safetensors::Dtype::U8).unwrap(),
+            TensorSource::map_dtype(safetensors::Dtype::U8).unwrap(),
             "torch.uint8"
         );
     }
@@ -896,19 +885,19 @@ mod tests {
             (safetensors::Dtype::BOOL, "torch.bool"),
         ];
         for (dt, expected) in &dtypes {
-            assert_eq!(dtype_str_to_serverlessllm(*dt).unwrap(), *expected);
+            assert_eq!(TensorSource::map_dtype(*dt).unwrap(), *expected);
         }
     }
 
     #[test]
-    fn calculate_contiguous_stride_scalar() {
-        assert_eq!(calculate_contiguous_stride(&[1]), vec![1]);
+    fn contiguous_stride_scalar() {
+        assert_eq!(TensorSource::contiguous_stride(&[1]), vec![1]);
     }
 
     #[test]
-    fn calculate_contiguous_stride_4d() {
+    fn contiguous_stride_4d() {
         assert_eq!(
-            calculate_contiguous_stride(&[2, 3, 4, 5]),
+            TensorSource::contiguous_stride(&[2, 3, 4, 5]),
             vec![60, 20, 5, 1]
         );
     }
@@ -985,8 +974,7 @@ mod tests {
             mean_copy_size: 1024.0,
             max_copy_size: 1024,
         };
-        let b = choose_conversion_backend(&stats);
-        assert_eq!(b, ConversionBackend::Sync);
+        assert_eq!(stats.choose_backend(), ConversionBackend::Sync);
     }
 
     #[test]
@@ -1006,8 +994,7 @@ mod tests {
             mean_copy_size: 32.0 * 1024.0 * 1024.0,
             max_copy_size: 64 * 1024 * 1024,
         };
-        let b = choose_conversion_backend(&stats);
-        assert_ne!(b, ConversionBackend::Sync);
+        assert_ne!(stats.choose_backend(), ConversionBackend::Sync);
     }
 
     #[test]
@@ -1027,7 +1014,7 @@ mod tests {
             mean_copy_size: 100_000.0,
             max_copy_size: 200_000,
         };
-        assert_eq!(choose_conversion_backend(&stats), ConversionBackend::Sync);
+        assert_eq!(stats.choose_backend(), ConversionBackend::Sync);
     }
 
     #[test]
@@ -1103,7 +1090,7 @@ mod tests {
         let v2 = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
         write_shard(&a, vec![("a", v2)]);
 
-        let shards = discover_safetensors_shards(tmp.path()).unwrap();
+        let shards = ConversionPlan::discover_shards(tmp.path()).unwrap();
         assert!(shards[0].file_name().unwrap() < shards[1].file_name().unwrap());
     }
 
@@ -1124,7 +1111,7 @@ mod tests {
                         ((rng >> 33) % 10 + 1) as usize
                     })
                     .collect();
-                let stride = calculate_contiguous_stride(&shape);
+                let stride = TensorSource::contiguous_stride(&shape);
                 prop_assert_eq!(stride.len(), shape.len());
                 if !shape.is_empty() {
                     let total: usize = shape.iter().product();
@@ -1135,7 +1122,7 @@ mod tests {
             #[test]
             fn stride_last_is_one(ndim in 1usize..8) {
                 let shape: Vec<usize> = vec![2; ndim];
-                let stride = calculate_contiguous_stride(&shape);
+                let stride = TensorSource::contiguous_stride(&shape);
                 prop_assert_eq!(*stride.last().unwrap(), 1);
             }
         }
