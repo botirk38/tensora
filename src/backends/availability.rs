@@ -1,32 +1,5 @@
 use std::fmt;
 
-/// Public backend names used by capability checks and profiling tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Backend {
-    Sync,
-    Async,
-    Mmap,
-    IoUring,
-}
-
-impl Backend {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Sync => "sync",
-            Self::Async => "async",
-            Self::Mmap => "mmap",
-            Self::IoUring => "io-uring",
-        }
-    }
-}
-
-impl fmt::Display for Backend {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Why a backend cannot be used in the current process/environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendUnavailableReason {
@@ -108,57 +81,6 @@ impl fmt::Display for BackendAvailability {
     }
 }
 
-/// Snapshot of all backend capabilities for deterministic selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackendCapabilities {
-    pub sync: BackendAvailability,
-    pub async_io: BackendAvailability,
-    pub mmap: BackendAvailability,
-    pub io_uring: BackendAvailability,
-}
-
-impl BackendCapabilities {
-    #[must_use]
-    pub const fn new(
-        sync: BackendAvailability,
-        async_io: BackendAvailability,
-        mmap: BackendAvailability,
-        io_uring: BackendAvailability,
-    ) -> Self {
-        Self {
-            sync,
-            async_io,
-            mmap,
-            io_uring,
-        }
-    }
-
-    #[must_use]
-    pub fn availability(&self, backend: Backend) -> &BackendAvailability {
-        match backend {
-            Backend::Sync => &self.sync,
-            Backend::Async => &self.async_io,
-            Backend::Mmap => &self.mmap,
-            Backend::IoUring => &self.io_uring,
-        }
-    }
-
-    #[must_use]
-    pub fn is_available(&self, backend: Backend) -> bool {
-        self.availability(backend).is_available()
-    }
-
-    #[must_use]
-    pub fn iter(&self) -> [(Backend, &BackendAvailability); 4] {
-        [
-            (Backend::Sync, &self.sync),
-            (Backend::Async, &self.async_io),
-            (Backend::Mmap, &self.mmap),
-            (Backend::IoUring, &self.io_uring),
-        ]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,21 +96,6 @@ mod tests {
             status.to_string(),
             "unavailable: permission denied (io_uring_setup returned EPERM)"
         );
-    }
-
-    #[test]
-    fn backend_as_str_all_variants() {
-        assert_eq!(Backend::Sync.as_str(), "sync");
-        assert_eq!(Backend::Async.as_str(), "async");
-        assert_eq!(Backend::Mmap.as_str(), "mmap");
-        assert_eq!(Backend::IoUring.as_str(), "io-uring");
-    }
-
-    #[test]
-    fn backend_display_matches_as_str() {
-        for backend in [Backend::Sync, Backend::Async, Backend::Mmap, Backend::IoUring] {
-            assert_eq!(format!("{backend}"), backend.as_str());
-        }
     }
 
     #[test]
@@ -263,36 +170,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn capabilities_availability_lookup() {
-        let caps = BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::unavailable(
-                BackendUnavailableReason::UnsupportedPlatform,
-                "test",
-            ),
-            BackendAvailability::Available,
-        );
-        assert!(caps.is_available(Backend::Sync));
-        assert!(caps.is_available(Backend::Async));
-        assert!(!caps.is_available(Backend::Mmap));
-        assert!(caps.is_available(Backend::IoUring));
-    }
 
-    #[test]
-    fn capabilities_iter_returns_four_entries() {
-        let caps = BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-        );
-        let entries = caps.iter();
-        assert_eq!(entries.len(), 4);
-        assert_eq!(entries[0].0, Backend::Sync);
-        assert_eq!(entries[1].0, Backend::Async);
-        assert_eq!(entries[2].0, Backend::Mmap);
-        assert_eq!(entries[3].0, Backend::IoUring);
-    }
 }

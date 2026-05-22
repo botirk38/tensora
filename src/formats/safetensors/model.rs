@@ -133,58 +133,39 @@ enum LoadBackend {
     IoUring,
 }
 
-/// Score-based backend selection for SafeTensors.
-///
-/// Uses a simple scoring function to estimate whether io_uring or sync will perform better.
-/// This adapts across hosts by considering:
-/// - Total bytes (log scale)
-/// - Shard count (fanout bucket)
-/// - Average shard size
-///
-/// The score is: score = log2(total_bytes) + 2*fanout_bucket + avg_shard_gb
-/// If score exceeds the threshold, use io_uring when available. Large multi-shard
-/// loads fall back to Tokio async when io_uring is blocked by the host.
-///
-/// Threshold tuned for H100 environments - sync generally better below ~20GB
-fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
-    #[cfg(target_os = "linux")]
-    {
-        let capabilities = backends::backend_capabilities();
-        choose_load_backend_with_capabilities(stats, &capabilities)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = stats.shard_count;
-        if stats.total_bytes >= 8 * 1024 * 1024 * 1024 {
-            return LoadBackend::TokioAsync;
+impl LoadStats {
+    fn choose_backend(&self) -> LoadBackend {
+        #[cfg(target_os = "linux")]
+        {
+            let log2_bytes = self.log2_bytes();
+            let fanout = self.shard_fanout_score();
+            let avg_shard_gb = self.avg_shard_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
+            let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
+
+            if score >= 48.0
+                && crate::backends::io_uring::availability().is_available()
+            {
+                return LoadBackend::IoUring;
+            }
+
+            let large_candidate = score >= 40.0
+                || self.total_bytes >= 8 * 1024 * 1024 * 1024
+                || (self.shard_count >= 4 && self.total_bytes >= 4 * 1024 * 1024 * 1024);
+            if large_candidate {
+                return LoadBackend::TokioAsync;
+            }
+
+            LoadBackend::Sync
         }
-        LoadBackend::Sync
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = self.shard_count;
+            if self.total_bytes >= 8 * 1024 * 1024 * 1024 {
+                return LoadBackend::TokioAsync;
+            }
+            LoadBackend::Sync
+        }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn choose_load_backend_with_capabilities(
-    stats: &LoadStats,
-    capabilities: &backends::BackendCapabilities,
-) -> LoadBackend {
-    let log2_bytes = stats.log2_bytes();
-    let fanout = stats.shard_fanout_score();
-    let avg_shard_gb = stats.avg_shard_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
-
-    let score = log2_bytes + 2.0 * fanout + avg_shard_gb;
-
-    if score >= 48.0 && capabilities.is_available(backends::Backend::IoUring) {
-        return LoadBackend::IoUring;
-    }
-
-    let large_candidate = score >= 40.0
-        || stats.total_bytes >= 8 * 1024 * 1024 * 1024
-        || (stats.shard_count >= 4 && stats.total_bytes >= 4 * 1024 * 1024 * 1024);
-    if large_candidate && capabilities.is_available(backends::Backend::Async) {
-        return LoadBackend::TokioAsync;
-    }
-
-    LoadBackend::Sync
 }
 
 #[derive(Debug)]
@@ -400,7 +381,7 @@ impl Model {
 
     pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let stats = Self::directory_stats(&path)?;
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => Self::load_io_uring(path),
             LoadBackend::TokioAsync => Self::load_async(path).await,
@@ -789,7 +770,7 @@ impl TryFrom<Vec<u8>> for Model {
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
-    use crate::backends::{BackendAvailability, BackendCapabilities, BackendUnavailableReason};
+    use crate::backends::{BackendAvailability, BackendUnavailableReason};
     use crate::formats::traits::TensorView;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
@@ -870,7 +851,7 @@ mod tests {
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
 
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -885,7 +866,7 @@ mod tests {
             total_bytes: 256 * 1024 * 1024,
         };
 
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -899,7 +880,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -913,7 +894,7 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -927,7 +908,7 @@ mod tests {
             shard_count: 4,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::Sync => {}
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -935,65 +916,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn capabilities_with_io_uring(io_uring: BackendAvailability) -> BackendCapabilities {
-        BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            io_uring,
-        )
-    }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_uses_async_for_large_safetensors_when_io_uring_unavailable() {
-        let stats = LoadStats {
-            shard_count: 5,
-            total_bytes: 16 * 1024 * 1024 * 1024,
-        };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
-
-        assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
-            LoadBackend::TokioAsync
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_keeps_sync_for_small_safetensors_when_io_uring_unavailable() {
-        let stats = LoadStats {
-            shard_count: 2,
-            total_bytes: 1024 * 1024 * 1024,
-        };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
-            "io_uring_setup returned EPERM",
-        ));
-
-        assert_eq!(
-            choose_load_backend_with_capabilities(&stats, &capabilities),
-            LoadBackend::Sync
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn selector_boundary_four_shard_small() {
-        let stats = LoadStats {
-            shard_count: 4,
-            total_bytes: 2 * 1024 * 1024 * 1024,
-        };
-        match choose_load_backend(&stats) {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
-            LoadBackend::IoUring => panic!("expected Sync below threshold"),
-        }
-    }
 
     #[test]
     fn load_async_one_shard() {

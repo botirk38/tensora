@@ -102,32 +102,29 @@ enum LoadBackend {
     IoUring,
 }
 
-/// Score-based backend selection for ServerlessLLM on Linux.
-///
-/// Uses a simple scoring function to estimate whether io_uring or async will perform better.
-/// Score = log2(total_bytes) + 2*fanout_bucket + avg_partition_gb
-/// If score exceeds threshold, use io_uring; otherwise async.
-///
-/// Threshold tuned for H100 environments - async generally better below large partition counts
-fn choose_load_backend(stats: &LoadStats) -> LoadBackend {
-    #[cfg(target_os = "linux")]
-    {
-        let capabilities = backends::backend_capabilities();
-        let log2_bytes = stats.log2_bytes();
-        let fanout = stats.partition_fanout_score();
-        let avg_partition_gb = stats.avg_partition_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
+impl LoadStats {
+    fn choose_backend(&self) -> LoadBackend {
+        #[cfg(target_os = "linux")]
+        {
+            let log2_bytes = self.log2_bytes();
+            let fanout = self.partition_fanout_score();
+            let avg_partition_gb =
+                self.avg_partition_bytes() as f64 / (1024.0 * 1024.0 * 1024.0);
 
-        let score = log2_bytes + 2.0 * fanout + avg_partition_gb;
+            let score = log2_bytes + 2.0 * fanout + avg_partition_gb;
 
-        if score >= 25.0 && capabilities.is_available(backends::Backend::IoUring) {
-            return LoadBackend::IoUring;
+            if score >= 25.0
+                && crate::backends::io_uring::availability().is_available()
+            {
+                return LoadBackend::IoUring;
+            }
+            LoadBackend::TokioAsync
         }
-        LoadBackend::TokioAsync
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (stats.partition_count, stats.total_bytes);
-        LoadBackend::TokioAsync
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (self.partition_count, self.total_bytes);
+            LoadBackend::TokioAsync
+        }
     }
 }
 
@@ -407,7 +404,7 @@ impl Model {
 
     pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<Self> {
         let (index, plan) = Self::compile_load_plan(directory)?;
-        match choose_load_backend(&load_stats(&index)) {
+        match load_stats(&index).choose_backend() {
             #[cfg(target_os = "linux")]
             LoadBackend::IoUring => {
                 let tensors = execute_load_plan_io_uring(&plan)?;
@@ -641,7 +638,7 @@ mod tests {
             partition_count: 3,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
+        let b = stats.choose_backend();
         match b {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -655,7 +652,7 @@ mod tests {
             partition_count: 16,
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
+        let b = stats.choose_backend();
         match b {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -669,7 +666,7 @@ mod tests {
             partition_count: 12,
             total_bytes: 524 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
+        let b = stats.choose_backend();
         match b {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -683,7 +680,7 @@ mod tests {
             partition_count: 16,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        let b = choose_load_backend(&stats);
+        let b = stats.choose_backend();
         match b {
             LoadBackend::TokioAsync => {}
             #[cfg(target_os = "linux")]
@@ -698,7 +695,7 @@ mod tests {
             partition_count: 1,
             total_bytes: 512 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::IoUring | LoadBackend::TokioAsync => {}
         }
     }
@@ -710,7 +707,7 @@ mod tests {
             partition_count: 32,
             total_bytes: 32 * 1024 * 1024 * 1024,
         };
-        match choose_load_backend(&stats) {
+        match stats.choose_backend() {
             LoadBackend::IoUring | LoadBackend::TokioAsync => {}
         }
     }
