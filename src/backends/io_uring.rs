@@ -1004,8 +1004,16 @@ mod tests {
         fs::write(path, data).unwrap();
     }
 
+    fn io_uring_available() -> bool {
+        availability().is_available()
+    }
+
     #[test]
     fn load_matches_sync_reader_for_large_file() {
+        if !io_uring_available() {
+            eprintln!("io_uring unavailable, skipping test");
+            return;
+        }
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("large.bin");
         write_file(&path, 5 * 1024 * 1024, 7);
@@ -1021,6 +1029,10 @@ mod tests {
 
     #[test]
     fn load_batch_preserves_order_and_bytes() {
+        if !io_uring_available() {
+            eprintln!("io_uring unavailable, skipping test");
+            return;
+        }
         let dir = TempDir::new().unwrap();
         let path_a = dir.path().join("a.bin");
         let path_b = dir.path().join("b.bin");
@@ -1041,6 +1053,10 @@ mod tests {
 
     #[test]
     fn load_range_batch_matches_sync_reader() {
+        if !io_uring_available() {
+            eprintln!("io_uring unavailable, skipping test");
+            return;
+        }
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("ranges.bin");
         write_file(&path, 6 * 1024 * 1024, 13);
@@ -1075,5 +1091,45 @@ mod tests {
         assert_eq!(reader.ring_depth_override, Some(MIN_RING_DEPTH));
         assert_eq!(reader.cq_depth_override, Some(MAX_RING_DEPTH * 2));
         assert_eq!(reader.sqpoll_idle_ms, 1);
+    }
+
+    #[test]
+    fn availability_returns_consistent_result() {
+        let a = availability();
+        let b = availability();
+        assert_eq!(a.is_available(), b.is_available());
+    }
+
+    #[test]
+    fn writer_roundtrip() {
+        if !io_uring_available() {
+            eprintln!("io_uring unavailable, skipping test");
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("writer.bin");
+        let data = vec![42u8; 8192];
+
+        let mut writer = Writer::create(&path).unwrap();
+        writer.write_at(&path, 0, &data).unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+
+        let read_back = fs::read(&path).unwrap();
+        assert_eq!(read_back, data);
+    }
+
+    #[test]
+    fn builder_chain_accessors() {
+        let reader = Reader::new()
+            .with_ring_depth(64)
+            .with_cq_depth(128)
+            .with_sqpoll(true)
+            .with_sqpoll_idle_ms(500);
+
+        assert_eq!(reader.ring_depth_override, Some(64));
+        assert_eq!(reader.cq_depth_override, Some(128));
+        assert!(reader.enable_sqpoll);
+        assert_eq!(reader.sqpoll_idle_ms, 500);
     }
 }

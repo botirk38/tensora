@@ -256,4 +256,61 @@ mod tests {
         assert_eq!(groups[1].offset, 1024);
         assert_eq!(groups[1].members.len(), 1);
     }
+
+    #[test]
+    fn test_coalesce_zero_window_no_merge_with_gap() {
+        let requests = vec![
+            ("file.bin", 0u64, 100usize),
+            ("file.bin", 101, 100),
+        ];
+        let groups = coalesce_requests(group_requests_by_file(&requests), 0);
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn test_coalesce_zero_window_touching_still_merges() {
+        let requests = vec![
+            ("file.bin", 0u64, 100usize),
+            ("file.bin", 100, 100),
+        ];
+        let groups = coalesce_requests(group_requests_by_file(&requests), 0);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len, 200);
+    }
+
+    #[test]
+    fn test_coalesce_single_request() {
+        let requests = vec![("file.bin", 0u64, 50usize)];
+        let groups = coalesce_requests(group_requests_by_file(&requests), 1024);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].members.len(), 1);
+    }
+
+    #[test]
+    fn test_coalesce_cross_file_never_merged() {
+        let requests = vec![
+            ("a.bin", 0u64, 100usize),
+            ("b.bin", 0, 100),
+        ];
+        let groups = coalesce_requests(group_requests_by_file(&requests), usize::MAX);
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn test_group_requests_empty() {
+        let requests: Vec<(&str, u64, usize)> = vec![];
+        let groups = group_requests_by_file(&requests);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_coalesce_overlapping_ranges() {
+        let requests = vec![
+            ("file.bin", 0u64, 200usize),
+            ("file.bin", 100, 200),
+        ];
+        let groups = coalesce_requests(group_requests_by_file(&requests), 0);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].members.len(), 2);
+    }
 }
