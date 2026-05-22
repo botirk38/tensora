@@ -1208,4 +1208,38 @@ mod tests {
         let shards = discover_safetensors_shards(tmp.path()).unwrap();
         assert!(shards[0].file_name().unwrap() < shards[1].file_name().unwrap());
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn stride_product_equals_element_count(
+                ndim in 1usize..6,
+                seed in any::<u64>()
+            ) {
+                let mut rng = seed;
+                let shape: Vec<usize> = (0..ndim)
+                    .map(|_| {
+                        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        ((rng >> 33) % 10 + 1) as usize
+                    })
+                    .collect();
+                let stride = calculate_contiguous_stride(&shape);
+                prop_assert_eq!(stride.len(), shape.len());
+                if !shape.is_empty() {
+                    let total: usize = shape.iter().product();
+                    prop_assert_eq!(stride[0] * shape[0], total);
+                }
+            }
+
+            #[test]
+            fn stride_last_is_one(ndim in 1usize..8) {
+                let shape: Vec<usize> = vec![2; ndim];
+                let stride = calculate_contiguous_stride(&shape);
+                prop_assert_eq!(*stride.last().unwrap(), 1);
+            }
+        }
+    }
 }

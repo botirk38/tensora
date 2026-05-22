@@ -378,4 +378,39 @@ mod tests {
         let p = index.partition(0).unwrap();
         assert_eq!(p.tensor_names.len(), 2);
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_tensor_entry(name: &str) -> String {
+            format!(r#""{name}": [0, 4, [2, 2], [2, 1], "f32", 0]"#)
+        }
+
+        proptest! {
+            #[test]
+            fn parse_preserves_tensor_count(count in 1usize..20) {
+                let entries: Vec<String> = (0..count)
+                    .map(|i| arb_tensor_entry(&format!("t_{i}")))
+                    .collect();
+                let json = format!("{{{}}}", entries.join(","));
+                let index = Index::from_bytes(json.as_bytes()).unwrap();
+                prop_assert_eq!(index.len(), count);
+                prop_assert_eq!(index.tensor_names().len(), count);
+            }
+
+            #[test]
+            fn names_always_sorted(count in 1usize..20) {
+                let entries: Vec<String> = (0..count)
+                    .map(|i| arb_tensor_entry(&format!("tensor_{:04}", count - i)))
+                    .collect();
+                let json = format!("{{{}}}", entries.join(","));
+                let index = Index::from_bytes(json.as_bytes()).unwrap();
+                let names: Vec<&str> = index.tensor_names().iter().map(|n| &**n).collect();
+                for w in names.windows(2) {
+                    prop_assert!(w[0] <= w[1], "names not sorted: {:?}", names);
+                }
+            }
+        }
+    }
 }

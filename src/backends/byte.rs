@@ -327,4 +327,34 @@ mod tests {
         assert_eq!(&ob.as_ref()[..4], &[1, 2, 3, 4]);
         assert_eq!(ob.into_vec(), vec![1, 2, 3, 4]);
     }
+
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn vec_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                prop_assert_eq!(ob.len(), data.len());
+                prop_assert_eq!(ob.as_ref(), &data[..]);
+                let v = ob.into_vec();
+                prop_assert_eq!(v, data);
+            }
+
+            #[test]
+            fn shared_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                let shared = ob.into_shared();
+                prop_assert_eq!(&shared[..], &data[..]);
+            }
+
+            #[test]
+            fn is_empty_matches_len(data in proptest::collection::vec(any::<u8>(), 0..128)) {
+                let ob = OwnedBytes::from_vec(data.clone());
+                prop_assert_eq!(ob.is_empty(), data.is_empty());
+                prop_assert_eq!(ob.len(), data.len());
+            }
+        }
+    }
 }

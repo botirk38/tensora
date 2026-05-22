@@ -640,4 +640,35 @@ mod tests {
         let _ar = AsyncReader::default();
         let _sr = SyncReader::default();
     }
+
+    mod prop {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn chunk_plan_covers_file(file_size in 0usize..512 * 1024 * 1024) {
+                let plan = build_chunk_plan(file_size);
+                let total: usize = plan.iter().map(|c| c.len).sum();
+                prop_assert_eq!(total, file_size);
+                for i in 1..plan.len() {
+                    prop_assert_eq!(plan[i].offset, plan[i - 1].offset + plan[i - 1].len as u64);
+                }
+            }
+
+            #[test]
+            fn chunk_size_within_bounds(file_size in 1usize..4 * 1024 * 1024 * 1024) {
+                for kind in [BackendKind::Sync, BackendKind::Async, BackendKind::IoUring] {
+                    let plan = file_chunk_plan(file_size, kind);
+                    prop_assert!(plan.chunk_size >= MIN_CHUNK_SIZE);
+                    prop_assert!(plan.chunk_size <= MAX_CHUNK_SIZE);
+                }
+            }
+
+            #[test]
+            fn calculate_chunks_at_least_one(file_size in 0usize..usize::MAX / 2) {
+                prop_assert!(calculate_chunks(file_size) >= 1);
+            }
+        }
+    }
 }
