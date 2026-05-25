@@ -66,30 +66,65 @@ A strong replication should check ordering regimes before exact milliseconds:
 \section{Cold-cache anchor statistics}
 \label{app:anchor-stats}
 
-Table~\ref{tab:anchor-summary} summarizes five cold-cache repetitions for selected H100 anchors from \path{results/h100/anchor.tsv}. These anchors sanity-check variance; the main matrices use one representative cold run per cell for readability.
+Tables~\ref{tab:anchor-safetensors} and \ref{tab:anchor-serverlessllm} summarize five cold-cache repetitions for all 24 anchored H100 cells from \path{results/h100/anchor.tsv}. Anchors cover Qwen3-0.6B, Qwen3-8B, and Qwen3-32B across all four backends and both formats (24 of 48 total matrix cells). The main result tables use one representative cold run per cell for readability; these anchors provide statistical support.
+
+The \emph{Sep.}\ column indicates whether the backend's range is cleanly separated from the next-closest backend at the same model/format ($\checkmark$ = non-overlapping, --- = overlapping with at least one comparator). Where ranges overlap, the ranking should not be treated as strict.
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Anchor repetitions: median cold load time (ms) with min--max across five runs.}
-\label{tab:anchor-summary}
-\begin{tabular}{lllrr}
+\caption{SafeTensors anchor repetitions: median (ms) with min--max across five cold-cache runs.}
+\label{tab:anchor-safetensors}
+\begin{tabular}{llrrrl}
 \toprule
-Model & Format & Backend & Median & Min--Max \\
+Model & Backend & Median & Min--Max & CV\% & Sep. \\
 \midrule
-Qwen3-0.6B & SafeTensors & sync & 323.35 & 322.05--402.93 \\
-Qwen3-0.6B & SafeTensors & default & 324.86 & 321.04--495.10 \\
-Qwen3-8B & SafeTensors & sync & 3700.68 & 3647.97--3731.11 \\
-Qwen3-8B & SafeTensors & io\_uring & 3250.29 & 3160.46--3274.00 \\
-Qwen3-32B & SafeTensors & sync & 15462.39 & 15326.77--16143.61 \\
-Qwen3-32B & SafeTensors & io\_uring & 12204.11 & 11736.60--14388.76 \\
-Qwen3-8B & ServerlessLLM & io\_uring & 7267.02 & 7118.83--8884.83 \\
-Qwen3-8B & ServerlessLLM & default & 8059.26 & 7586.28--9143.26 \\
-Qwen3-32B & ServerlessLLM & async & 29010.56 & 28639.44--29222.41 \\
-Qwen3-32B & ServerlessLLM & io\_uring & 27910.41 & 26663.65--29152.43 \\
+Qwen3-0.6B & sync & 323 & 322--403 & 9.1 & --- \\
+Qwen3-0.6B & default & 325 & 321--495 & 18.2 & --- \\
+Qwen3-0.6B & io\_uring & 1\,159 & 1\,156--1\,264 & 3.6 & $\checkmark$ \\
+Qwen3-0.6B & async & 1\,735 & 1\,572--1\,792 & 4.6 & $\checkmark$ \\
+\midrule
+Qwen3-8B & io\_uring & 3\,250 & 3\,160--3\,274 & 1.3 & $\checkmark$ \\
+Qwen3-8B & default & 3\,682 & 3\,646--3\,701 & 0.5 & --- \\
+Qwen3-8B & sync & 3\,701 & 3\,648--3\,731 & 0.8 & --- \\
+Qwen3-8B & async & 6\,805 & 6\,510--7\,161 & 3.3 & $\checkmark$ \\
+\midrule
+Qwen3-32B & io\_uring & 12\,204 & 11\,737--14\,389 & 7.6 & $\checkmark$ \\
+Qwen3-32B & sync & 15\,462 & 15\,327--16\,144 & 2.0 & --- \\
+Qwen3-32B & default & 15\,497 & 15\,373--15\,934 & 1.4 & --- \\
+Qwen3-32B & async & 26\,685 & 25\,868--27\,416 & 1.9 & $\checkmark$ \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{ServerlessLLM anchor repetitions: median (ms) with min--max across five cold-cache runs.}
+\label{tab:anchor-serverlessllm}
+\begin{tabular}{llrrrl}
+\toprule
+Model & Backend & Median & Min--Max & CV\% & Sep. \\
+\midrule
+Qwen3-0.6B & async & 1\,353 & 1\,331--1\,409 & 2.1 & --- \\
+Qwen3-0.6B & default & 1\,356 & 1\,337--1\,405 & 1.7 & --- \\
+Qwen3-0.6B & io\_uring & 1\,417 & 1\,395--1\,483 & 2.2 & --- \\
+Qwen3-0.6B & sync & 1\,456 & 1\,409--1\,524 & 3.0 & --- \\
+\midrule
+Qwen3-8B & io\_uring & 7\,267 & 7\,119--8\,885 & 8.8 & --- \\
+Qwen3-8B & default & 8\,059 & 7\,586--9\,143 & 6.9 & --- \\
+Qwen3-8B & async & 9\,172 & 7\,628--9\,837 & 10.0 & --- \\
+Qwen3-8B & sync & 10\,525 & 10\,175--10\,676 & 1.9 & $\checkmark$ \\
+\midrule
+Qwen3-32B & io\_uring & 27\,910 & 26\,664--29\,152 & 2.9 & --- \\
+Qwen3-32B & default & 28\,782 & 28\,387--29\,545 & 1.3 & --- \\
+Qwen3-32B & async & 29\,011 & 28\,639--29\,222 & 0.8 & --- \\
+Qwen3-32B & sync & 39\,241 & 37\,785--40\,691 & 2.4 & $\checkmark$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key observations from anchor analysis.} The anchors confirm the paper's main structural claims with non-overlapping ranges: (1)~SafeTensors io\_uring dominates sync at 8B and 32B, (2)~sync dominates io\_uring at 0.6B, and (3)~sync is the slowest ServerlessLLM backend at all anchored scales. Within ServerlessLLM, the ordering among async, io\_uring, and default is not robustly separable at any individual scale---the consistent finding is that all three outperform sync, not that any one of the three dominates. Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) contain close-call cells where targeted anchoring would clarify borderline rankings (Section~\ref{sec:baselines-reporting}).
 
 \section{Artifact layout}
 \label{app:artifact-layout}

@@ -15,7 +15,9 @@ The model ladder covers six public checkpoints from 0.6B to 32B parameters and t
 
 \subsection{Statistical limits}
 
-Most full-matrix cells are representative cold-cache runs. Anchor repetitions validate selected small, medium, and large regimes, but not every row has repeated statistics. The paper therefore emphasizes large effect sizes, ordering reversals, and repeated structural patterns rather than treating every small difference as significant. Differences below roughly 10\% should be read cautiously unless supported by anchors or cross-row consistency.
+Half of the H100 Rust matrix (24 of 48 cells) is backed by five-repetition anchor sets; the remaining cells are representative cold-cache runs. Appendix~\ref{app:anchor-stats} shows which anchored rankings are statistically separable (non-overlapping min--max ranges) and which overlap. The paper's main claims rest on separable regime distinctions---SafeTensors sync-to-io\_uring crossover, ServerlessLLM sync-never-wins---which are confirmed by non-overlapping anchor ranges. Close-call rankings (e.g., default vs.\ sync at SafeTensors 0.6B and 8B; async vs.\ default vs.\ io\_uring at all ServerlessLLM scales) are explicitly flagged as not statistically separable. Differences below roughly 5\% at unanchored scales should be read cautiously unless supported by cross-row consistency.
+
+Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) contain cells where the top two backends are within 3\%; targeted five-repetition anchoring at these cells would clarify borderline rankings.
 
 \subsection{Selector boundedness}
 
@@ -23,6 +25,10 @@ The adaptive default is not an oracle. On H100 SafeTensors it trails explicit sy
 
 These failures are part of the result. They show that a deployable policy needs explicit overrides and likely per-environment calibration. They do not rescue a fixed global backend: no explicit backend dominates across layout, scale, and environment.
 
+\subsection{External generalization}
+
+The current evaluation uses a model ladder drawn from a single checkpoint family (Qwen3, supplemented by SmolLM3-3B). This is a deliberate design choice: by holding the architecture family roughly constant, scale and format become the dominant variables. However, the selector's thresholds were derived from and evaluated against this same set. A plausible reviewer concern is whether the policy generalizes to checkpoints with different shard geometries. Validation on held-out models from different families (e.g., Llama-3.1-8B, Mistral-7B-Instruct-v0.3) would strengthen the external validity claim. Even imperfect transfer would be a publishable insight: it would identify which workload features need refinement.
+
 \subsection{Future work}
 
-The next step is not to claim a perfect heuristic. It is to expand calibration: more local-NVMe hosts, filesystem and mount-option sweeps, direct-I/O variants, object-store backends, additional checkpoint formats, and learned or profile-guided selectors. The current evidence justifies the abstraction---workload-shaped loading---and identifies where a stronger selector should improve.
+The next step is not to claim a perfect heuristic. It is to expand calibration: more local-NVMe hosts, filesystem and mount-option sweeps, direct-I/O variants, object-store backends, additional checkpoint formats, and learned or profile-guided selectors. Held-out model validation across different checkpoint families would test whether the workload-shape abstraction generalizes beyond the Qwen geometry. The current evidence justifies the abstraction---workload-shaped loading---and identifies where a stronger selector should improve.

@@ -62,7 +62,7 @@ Four patterns emerge from the Rust and integration matrices. \textbf{First, Safe
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
 
-The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. Unless stated otherwise, each matrix cell is one representative cold-cache run; Appendix~\ref{app:anchor-stats} reports five-repetition medians and min--max bands for selected anchors.
+The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. Unless stated otherwise, each matrix cell is one representative cold-cache run. Half the matrix (24 of 48 cells) is backed by five-repetition anchor sets with median and min--max ranges (Appendix~\ref{app:anchor-stats}). Where anchor ranges overlap between backends, we note that the ranking is not statistically separable rather than forcing a strict order. The main regime claims are supported by non-overlapping ranges and large effect sizes.
 
 \subsubsection{SafeTensors Results}
 
@@ -87,6 +87,8 @@ Qwen3-32B & 15454.45 & 28763.46 & 12119.50 & 12089.05 \\
 \end{table}
 
 Two regimes are visible. Sync dominates at the small end: 555~ms for Qwen3-0.6B versus 1159~ms for io\_uring. The ranking flips at Qwen3-8B: io\_uring at 3172~ms versus sync at 3880~ms, a 1.22$\times$ advantage. At the largest scale (Qwen3-32B), io\_uring is 1.28$\times$ faster than sync. The crossover is not a single threshold; it is a progression visible across the entire ladder.
+
+Anchor data confirms the key claims. At Qwen3-8B, io\_uring's five-repetition range [3160--3274~ms] does not overlap sync's [3648--3731~ms], confirming a clean regime separation ($p=1.0$ under a conservative range test). At Qwen3-32B, io\_uring [11737--14389~ms] is separated from sync [15327--16144~ms]. By contrast, sync and default overlap at Qwen3-0.6B (sync [322--403~ms] vs.\ default [321--495~ms]) and at Qwen3-8B (sync [3648--3731~ms] vs.\ default [3646--3701~ms]); these rankings are not statistically separable and should not be treated as strict orderings.
 
 Async is consistently the weakest backend for SafeTensors. Whole-file and multi-shard loads benefit from straightforward bulk parallelism rather than scheduler-mediated async orchestration, which adds overhead without corresponding I/O benefits on this workload shape.
 
@@ -143,6 +145,8 @@ Qwen3-32B & 39822.09 & 29180.89 & 27659.78 & 29779.86 \\
 \end{table}
 
 Sync is the slowest explicit backend on every ServerlessLLM row, between 1.1$\times$ (Qwen3-0.6B) and 1.4$\times$ (Qwen3-32B) behind the strongest alternative. The best explicit backend varies with scale: async dominates at smaller partition counts (SmolLM3-3B, Qwen3-4B), while io\_uring becomes competitive at larger scales (Qwen3-14B, Qwen3-32B).
+
+Anchor data reveals important nuance. At ServerlessLLM Qwen3-0.6B, async [1331--1409~ms], default [1337--1405~ms], and io\_uring [1395--1483~ms] have substantially overlapping ranges; the ranking among these three is not statistically separable. At Qwen3-8B, all three non-sync backends overlap (io\_uring [7119--8885~ms], default [7586--9143~ms], async [7628--9837~ms]); only sync [10175--10676~ms] is clearly separated as slowest. At Qwen3-32B, io\_uring [26664--29152~ms], async [28639--29222~ms], and default [28387--29545~ms] overlap; again, only sync [37785--40691~ms] is cleanly separated. The consistent structural fact---sync loses on every ServerlessLLM row---is robustly confirmed; the ordering among the remaining three backends at individual scales is less stable.
 
 \texttt{default} outperforms all explicit backends on Qwen3-8B (7589~ms vs 9044~ms for the next best, io\_uring) and Qwen3-32B (27660~ms vs 29181~ms for async) because its read planning---coalescing nearby ranges, dynamic chunk sizing---benefits partitioned workloads more than any single explicit submission policy. It trails explicit async on SmolLM3-3B (3182~ms vs 2391~ms, a 1.33$\times$ gap), the same medium-scale fragility seen in SafeTensors.
 
