@@ -24,7 +24,7 @@ The study answers five questions.
 \item \textbf{RQ5: Policy.} What should an operational default promise, and where should explicit overrides remain available?
 \end{itemize}
 
-RQ1--RQ2 use the Rust matrices, RQ3 uses Python benchmarks, RQ4 uses vLLM, and RQ5 combines all layers.
+RQ1 and RQ2 use the Rust matrices, RQ3 uses Python benchmarks, RQ4 uses vLLM, and RQ5 combines all layers.
 
 \subsection{Platforms}
 
@@ -81,9 +81,9 @@ Each backend receives the same logical tensor read plan for a given model and la
 
 The Rust matrices compare Tensora backends against one another because the purpose is backend attribution under identical format handling. The vLLM matrix includes a deployment-style baseline: \texttt{native} is vLLM's stock loading path, while loaders prefixed \texttt{ts\_} use Tensora-backed integrations through the same harness.
 
-\textbf{Statistical methodology.} The H100 Rust evaluation uses a two-tier reporting approach. The main results tables (Tables~\ref{tab:rust-safetensors}, \ref{tab:rust-serverlessllm}) present representative cold-cache runs for readability. In parallel, 24 of 48 matrix cells (Qwen3-0.6B, Qwen3-8B, and Qwen3-32B across all four backends and both formats) are backed by five-repetition anchor sets with median and min--max ranges reported in Appendix~\ref{app:anchor-stats}.
+\textbf{Statistical methodology.} The H100 Rust evaluation uses a two-tier reporting approach. The main results tables (Tables~\ref{tab:rust-safetensors}, \ref{tab:rust-serverlessllm}) present representative cold-cache runs for readability. In parallel, 24 of 48 matrix cells (Qwen3-0.6B, Qwen3-8B, and Qwen3-32B across all four backends and both formats) are backed by five-repetition anchor sets with median and range reported in Appendix~\ref{app:anchor-stats}.
 
-Where anchor ranges overlap between backends, we avoid forcing a strict ranking and instead state that the difference is not statistically separable at the resolution of five cold-cache repetitions. Separability is assessed by min--max range overlap: if the ranges of two backends overlap, neither can be declared confidently faster. This conservative criterion is appropriate for cold-cache measurements, which have higher variance than warm-cache runs due to cache-state sensitivity. The main claims of the paper rely on large effect sizes and consistent regime patterns (e.g., sync versus \texttt{io\_uring} at SafeTensors 8B+, sync's consistent failure on ServerlessLLM), not on close-call single-cell comparisons.
+Where anchor ranges overlap between backends, we avoid forcing a strict ranking and instead state that the difference is not statistically separable at the resolution of five cold-cache repetitions. Separability is assessed by range overlap: if the ranges of two backends overlap, neither can be declared confidently faster. This conservative criterion is appropriate for cold-cache measurements, which have higher variance than warm-cache runs due to cache-state sensitivity. The main claims of the paper rely on large effect sizes and consistent regime patterns (e.g., sync versus \texttt{io\_uring} at SafeTensors 8B+, sync's consistent failure on ServerlessLLM), not on close-call single-cell comparisons.
 
 Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) have close-call cells where the gap between the top two backends is less than 3\%. These cells are candidates for targeted five-repetition anchoring to determine whether the observed differences are robust. Specifically: SafeTensors Qwen3-14B (io\_uring vs.\ default, 2.7\% gap) and ServerlessLLM Qwen3-14B (io\_uring vs.\ default, 1.2\% gap) and ServerlessLLM Qwen3-4B (async vs.\ default, 1.4\% gap).
 

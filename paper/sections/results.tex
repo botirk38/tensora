@@ -62,7 +62,7 @@ Four patterns emerge from the Rust and integration matrices. \textbf{First, Safe
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
 
-The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. Unless stated otherwise, each matrix cell is one representative cold-cache run. Half the matrix (24 of 48 cells) is backed by five-repetition anchor sets with median and min--max ranges (Appendix~\ref{app:anchor-stats}). Where anchor ranges overlap between backends, we note that the ranking is not statistically separable rather than forcing a strict order. The main regime claims are supported by non-overlapping ranges and large effect sizes.
+The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. Unless stated otherwise, each matrix cell is one representative cold-cache run. Half the matrix (24 of 48 cells) is backed by five-repetition anchor sets with median and range (Appendix~\ref{app:anchor-stats}). Where anchor ranges overlap between backends, we note that the ranking is not statistically separable rather than forcing a strict order. The main regime claims are supported by non-overlapping ranges and large effect sizes.
 
 \subsubsection{SafeTensors Results}
 
@@ -88,7 +88,7 @@ Qwen3-32B & 15454.45 & 28763.46 & 12119.50 & 12089.05 \\
 
 Two regimes are visible. Sync dominates at the small end: 555~ms for Qwen3-0.6B versus 1159~ms for io\_uring. The ranking flips at Qwen3-8B: io\_uring at 3172~ms versus sync at 3880~ms, a 1.22$\times$ advantage. At the largest scale (Qwen3-32B), io\_uring is 1.28$\times$ faster than sync. The crossover is not a single threshold; it is a progression visible across the entire ladder.
 
-Anchor data confirms the key claims. At Qwen3-8B, io\_uring's five-repetition range [3160--3274~ms] does not overlap sync's [3648--3731~ms], confirming a clean regime separation ($p=1.0$ under a conservative range test). At Qwen3-32B, io\_uring [11737--14389~ms] is separated from sync [15327--16144~ms]. By contrast, sync and default overlap at Qwen3-0.6B (sync [322--403~ms] vs.\ default [321--495~ms]) and at Qwen3-8B (sync [3648--3731~ms] vs.\ default [3646--3701~ms]); these rankings are not statistically separable and should not be treated as strict orderings.
+Anchor data confirms the key claims. At Qwen3-8B, io\_uring's five-repetition range [3160 to 3274~ms] does not overlap sync's [3648 to 3731~ms], confirming a clean regime separation ($p=1.0$ under a conservative range test). At Qwen3-32B, io\_uring [11737 to 14389~ms] is separated from sync [15327 to 16144~ms]. By contrast, sync and default overlap at Qwen3-0.6B (sync [322 to 403~ms] vs.\ default [321 to 495~ms]) and at Qwen3-8B (sync [3648 to 3731~ms] vs.\ default [3646 to 3701~ms]); these rankings are not statistically separable and should not be treated as strict orderings.
 
 Async is consistently the weakest backend for SafeTensors. Whole-file and multi-shard loads benefit from straightforward bulk parallelism rather than scheduler-mediated async orchestration, which adds overhead without corresponding I/O benefits on this workload shape.
 
@@ -146,9 +146,9 @@ Qwen3-32B & 39822.09 & 29180.89 & 27659.78 & 29779.86 \\
 
 Sync is the slowest explicit backend on every ServerlessLLM row, between 1.1$\times$ (Qwen3-0.6B) and 1.4$\times$ (Qwen3-32B) behind the strongest alternative. The best explicit backend varies with scale: async dominates at smaller partition counts (SmolLM3-3B, Qwen3-4B), while io\_uring becomes competitive at larger scales (Qwen3-14B, Qwen3-32B).
 
-Anchor data reveals important nuance. At ServerlessLLM Qwen3-0.6B, async [1331--1409~ms], default [1337--1405~ms], and io\_uring [1395--1483~ms] have substantially overlapping ranges; the ranking among these three is not statistically separable. At Qwen3-8B, all three non-sync backends overlap (io\_uring [7119--8885~ms], default [7586--9143~ms], async [7628--9837~ms]); only sync [10175--10676~ms] is clearly separated as slowest. At Qwen3-32B, io\_uring [26664--29152~ms], async [28639--29222~ms], and default [28387--29545~ms] overlap; again, only sync [37785--40691~ms] is cleanly separated. The consistent structural fact---sync loses on every ServerlessLLM row---is robustly confirmed; the ordering among the remaining three backends at individual scales is less stable.
+Anchor data reveals important nuance. At ServerlessLLM Qwen3-0.6B, async [1331 to 1409~ms], default [1337 to 1405~ms], and io\_uring [1395 to 1483~ms] have substantially overlapping ranges; the ranking among these three is not statistically separable. At Qwen3-8B, all three non-sync backends overlap (io\_uring [7119 to 8885~ms], default [7586 to 9143~ms], async [7628 to 9837~ms]); only sync [10175 to 10676~ms] is clearly separated as slowest. At Qwen3-32B, io\_uring [26664 to 29152~ms], async [28639 to 29222~ms], and default [28387 to 29545~ms] overlap; again, only sync [37785 to 40691~ms] is cleanly separated. The consistent structural fact, that sync loses on every ServerlessLLM row, is robustly confirmed; the ordering among the remaining three backends at individual scales is less stable.
 
-\texttt{default} outperforms all explicit backends on Qwen3-8B (7589~ms vs 9044~ms for the next best, io\_uring) and Qwen3-32B (27660~ms vs 29181~ms for async) because its read planning---coalescing nearby ranges, dynamic chunk sizing---benefits partitioned workloads more than any single explicit submission policy. It trails explicit async on SmolLM3-3B (3182~ms vs 2391~ms, a 1.33$\times$ gap), the same medium-scale fragility seen in SafeTensors.
+\texttt{default} outperforms all explicit backends on Qwen3-8B (7589~ms vs 9044~ms for the next best, io\_uring) and Qwen3-32B (27660~ms vs 29181~ms for async) because its read planning (coalescing nearby ranges, dynamic chunk sizing) benefits partitioned workloads more than any single explicit submission policy. It trails explicit async on SmolLM3-3B (3182~ms vs 2391~ms, a 1.33$\times$ gap), the same medium-scale fragility seen in SafeTensors.
 
 \begin{figure}[htbp]
     \centering
@@ -178,12 +178,12 @@ Anchor data reveals important nuance. At ServerlessLLM Qwen3-0.6B, async [1331--
     \label{fig:serverlessllm-crossover}
 \end{figure}
 
-Figure~\ref{fig:serverlessllm-crossover} shows the ranking shift. The figure confirms that the ServerlessLLM workload shape---many small range reads across partition files---rewards different backend policies than the SafeTensors contiguous regime.
+Figure~\ref{fig:serverlessllm-crossover} shows the ranking shift. The figure confirms that the ServerlessLLM workload shape (many small range reads across partition files) rewards different backend policies than the SafeTensors contiguous regime.
 
 \subsection{Oracle analysis: how well does the adaptive default track the best backend?}
 \label{sec:oracle-analysis}
 
-The adaptive default is not expected to match the best per-row explicit backend in every cell---it is a heuristic, not an oracle. Table~\ref{tab:oracle} quantifies the gap.
+The adaptive default is not expected to match the best per-row explicit backend in every cell; it is a heuristic, not an oracle. Table~\ref{tab:oracle} quantifies the gap.
 
 \begin{table}[htbp]
 \caption{Default versus per-row best explicit backend. Cells show \texttt{default} / \texttt{best\_explicit} ratio. Ratios $<1.0$ mean default wins; ratios $>1.0$ mean default trails.}
@@ -203,7 +203,7 @@ Qwen3-32B & 1.00 & 0.93 \\
 \end{tabular}
 \end{table}
 
-Default beats the best explicit backend in 3 of 12 cells and lands within roughly 3\% on four additional cells. For SafeTensors, default correctly routes the smallest model (Qwen3-0.6B) to a fast path and tracks the large-scale io\_uring regime within 3\% at Qwen3-14B and near parity at Qwen3-32B. The medium-scale misses---SmolLM3-3B (2.79$\times$), Qwen3-4B (1.69$\times$), and Qwen3-8B (1.21$\times$)---are the region where the crossover from sync to io\_uring is most sensitive to per-checkpoint shard structure that the current feature set does not fully resolve.
+Default beats the best explicit backend in 3 of 12 cells and lands within roughly 3\% on four additional cells. For SafeTensors, default correctly routes the smallest model (Qwen3-0.6B) to a fast path and tracks the large-scale io\_uring regime within 3\% at Qwen3-14B and near parity at Qwen3-32B. The medium-scale misses (SmolLM3-3B (2.79$\times$), Qwen3-4B (1.69$\times$), and Qwen3-8B (1.21$\times$)) are the region where the crossover from sync to io\_uring is most sensitive to per-checkpoint shard structure that the current feature set does not fully resolve.
 
 For ServerlessLLM, default beats the best explicit backend in 2 of 6 cells and is close on most remaining rows. The single notable miss is SmolLM3-3B (1.33$\times$), where async's grouped range execution fits the partition structure better than default's chosen path. The remaining ratios are near-parity ($\leq 1.03$).
 
@@ -212,7 +212,7 @@ For ServerlessLLM, default beats the best explicit backend in 2 of 6 cells and i
 \subsection{Cross-Environment Validation}
 \label{sec:cross-env}
 
-The H100 results above were collected with all four backends available, including \texttt{io\_uring}. Two additional environments---an H200 container and an A100 container, both with network-attached storage---block \texttt{io\_uring} at the kernel level (\texttt{EPERM}). This constraint tests two questions: (1) whether the adaptive selector degrades gracefully when its strongest large-scale backend is unavailable, and (2) whether backend ordering regimes transfer across hardware.
+The H100 results above were collected with all four backends available, including \texttt{io\_uring}. Two additional environments (an H200 container and an A100 container, both with network-attached storage) block \texttt{io\_uring} at the kernel level (\texttt{EPERM}). This constraint tests two questions: (1) whether the adaptive selector degrades gracefully when its strongest large-scale backend is unavailable, and (2) whether backend ordering regimes transfer across hardware.
 
 \subsubsection{H200 Results (io\_uring blocked)}
 
@@ -236,7 +236,7 @@ Qwen3-32B & 36205.91 & 10623.83 & 12356.23 \\
 \end{tabular}
 \end{table}
 
-The H200 SafeTensors crossover preserves the structural pattern from H100: sync wins at small scale (0.6B--4B), while a different backend dominates at large scale (8B+). On H100 that backend is \texttt{io\_uring}; on H200 it is async. The selector adapts: \texttt{default} tracks within 3--8\% of the best available backend for 0.6B--14B, though it trails async by 16\% at 32B.
+The H200 SafeTensors crossover preserves the structural pattern from H100: sync wins at small scale (0.6B to 4B), while a different backend dominates at large scale (8B+). On H100 that backend is \texttt{io\_uring}; on H200 it is async. The selector adapts: \texttt{default} tracks within 3 to 8\% of the best available backend for 0.6B to 14B, though it trails async by 16\% at 32B.
 
 Table~\ref{tab:h200-serverlessllm} shows the H200 ServerlessLLM matrix.
 
@@ -265,7 +265,7 @@ The ServerlessLLM ordering on H200 matches H100 structurally: sync is never the 
 The A100 environment runs a four-model reduced ladder (0.6B, 4B, 8B, 32B) with the same \texttt{EPERM} constraint. Table~\ref{tab:a100-safetensors} and Table~\ref{tab:a100-serverlessllm} summarise the results.
 
 \begin{table}[htbp]
-\caption{A100 cold-cache SafeTensors results (ms). Network-attached storage with AMD EPYC CPU. Sync wins at 0.6B; async dominates at 4B--8B; sync recovers at 32B.}
+\caption{A100 cold-cache SafeTensors results (ms). Network-attached storage with AMD EPYC CPU. Sync wins at 0.6B; async dominates at 4B to 8B; sync recovers at 32B.}
 \label{tab:a100-safetensors}
 \centering
 \begin{tabular}{lrrr}
@@ -296,7 +296,7 @@ Qwen3-32B & 56025.98 & 40472.54 & 44854.60 \\
 \end{tabular}
 \end{table}
 
-The A100 SafeTensors results show a distinctive pattern: sync wins at 0.6B, async dominates the mid-range (4B--8B), but sync recovers at 32B. This contrasts with both H100 (where \texttt{io\_uring} dominates large scale) and H200 (where async dominates large scale). Section~\ref{sec:a100-anomaly} discusses this reversal in detail: a plausible explanation is that A100's network-attached storage saturates at 65~GB transfer sizes, causing async scheduling overhead to exceed its concurrency benefit. The \texttt{default} selector on A100 performs well at 0.6B and 32B but misses the mid-range async regime, producing its largest gap at 8B (2.81$\times$ behind async). For ServerlessLLM, \texttt{default} wins at 0.6B and 4B and tracks within 1\% of async at 8B.
+The A100 SafeTensors results show a distinctive pattern: sync wins at 0.6B, async dominates the mid-range (4B to 8B), but sync recovers at 32B. This contrasts with both H100 (where \texttt{io\_uring} dominates large scale) and H200 (where async dominates large scale). Section~\ref{sec:a100-anomaly} discusses this reversal in detail: a plausible explanation is that A100's network-attached storage saturates at 65~GB transfer sizes, causing async scheduling overhead to exceed its concurrency benefit. The \texttt{default} selector on A100 performs well at 0.6B and 32B but misses the mid-range async regime, producing its largest gap at 8B (2.81$\times$ behind async). For ServerlessLLM, \texttt{default} wins at 0.6B and 4B and tracks within 1\% of async at 8B.
 
 \subsubsection{Cross-Environment Summary}
 
@@ -318,12 +318,12 @@ Qwen3-32B & io\_uring & async & sync \\
 \end{tabular}
 \end{table}
 
-Three findings from the cross-environment comparison: (1)~Sync dominates small SafeTensors models in all three environments---this is the most portable ordering. (2)~At large scale, the strongest backend depends on available kernel interfaces and storage topology: \texttt{io\_uring} on local NVMe (H100), async on network storage (H200), and sync on a different network-storage configuration (A100 at 32B). (3)~The adaptive selector degrades gracefully: when \texttt{io\_uring} is unavailable, it produces within-regime-competitive results on most rows, confirming that the capability-gated fallback mechanism works as designed.
+Three findings from the cross-environment comparison: (1)~Sync dominates small SafeTensors models in all three environments; this is the most portable ordering. (2)~At large scale, the strongest backend depends on available kernel interfaces and storage topology: \texttt{io\_uring} on local NVMe (H100), async on network storage (H200), and sync on a different network-storage configuration (A100 at 32B). (3)~The adaptive selector degrades gracefully: when \texttt{io\_uring} is unavailable, it produces within-regime-competitive results on most rows, confirming that the capability-gated fallback mechanism works as designed.
 
 \subsection{Python Results}
 \label{sec:python-results}
 
-Python benchmarks focus on a single model (Qwen/Qwen3-8B) as a targeted case study of binding overhead and integration behavior, rather than replicating the full Rust matrix at the Python level. The goal is to quantify the cost of the Rust-to-Python boundary---FFI transitions, tensor materialization, and object construction---and to evaluate whether binding engineering can reduce that cost. A broader Python evaluation across the full model ladder would further validate these findings but is not required for the primary claim, which is that the binding layer is not a transparent pass-through.
+Python benchmarks focus on a single model (Qwen/Qwen3-8B) as a targeted case study of binding overhead and integration behavior, rather than replicating the full Rust matrix at the Python level. The goal is to quantify the cost of the Rust-to-Python boundary (FFI transitions, tensor materialization, and object construction) and to evaluate whether binding engineering can reduce that cost. A broader Python evaluation across the full model ladder would further validate these findings but is not required for the primary claim, which is that the binding layer is not a transparent pass-through.
 
 The most important Python result is that binding engineering matters. Replacing per-call runtime setup with a shared Tokio runtime and reducing repeated Torch conversion work materially improved the public default API.
 
@@ -389,7 +389,7 @@ Qwen3-32B & 88164 & ts\_safetensors\_io\_uring \\
 \end{tabular}
 \end{table}
 
-The vLLM best-loader pattern mirrors the Rust SafeTensors crossover: smaller models favor sync-style loaders, larger models favor default or io\_uring. The match is not exact---vLLM initialization includes fixed costs that dilute the pure-I/O ranking---but the regime structure survives.
+The vLLM best-loader pattern mirrors the Rust SafeTensors crossover: smaller models favor sync-style loaders, larger models favor default or io\_uring. The match is not exact (vLLM initialization includes fixed costs that dilute the pure-I/O ranking), but the regime structure survives.
 
 For TTFT (Table~\ref{tab:vllm-ttft}), the ranking is broadly similar to load\_only but does not match row-for-row because TTFT includes the first generation step after initialization.
 
