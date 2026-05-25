@@ -292,7 +292,7 @@ Qwen3-32B & 56025.98 & 40472.54 & 44854.60 \\
 \end{tabular}
 \end{table}
 
-The A100 SafeTensors results show a distinctive pattern: sync wins at 0.6B, async dominates the mid-range (4B--8B), but sync recovers at 32B. This contrasts with both H100 (where \texttt{io\_uring} dominates large scale) and H200 (where async dominates large scale). The \texttt{default} selector on A100 performs well at 0.6B and 32B but misses the mid-range async regime, producing its largest gap at 8B (2.81$\times$ behind async). For ServerlessLLM, \texttt{default} wins at 0.6B and 4B and tracks within 1\% of async at 8B.
+The A100 SafeTensors results show a distinctive pattern: sync wins at 0.6B, async dominates the mid-range (4B--8B), but sync recovers at 32B. This contrasts with both H100 (where \texttt{io\_uring} dominates large scale) and H200 (where async dominates large scale). Section~\ref{sec:a100-anomaly} discusses this reversal in detail: a plausible explanation is that A100's network-attached storage saturates at 65~GB transfer sizes, causing async scheduling overhead to exceed its concurrency benefit. The \texttt{default} selector on A100 performs well at 0.6B and 32B but misses the mid-range async regime, producing its largest gap at 8B (2.81$\times$ behind async). For ServerlessLLM, \texttt{default} wins at 0.6B and 4B and tracks within 1\% of async at 8B.
 
 \subsubsection{Cross-Environment Summary}
 
@@ -319,7 +319,7 @@ Three findings from the cross-environment comparison: (1)~Sync dominates small S
 \subsection{Python Results}
 \label{sec:python-results}
 
-Python benchmarks were collected on Qwen/Qwen3-8B to quantify user-facing overhead and to evaluate whether binding optimisation improved practical performance.
+Python benchmarks focus on a single model (Qwen/Qwen3-8B) as a targeted case study of binding overhead and integration behavior, rather than replicating the full Rust matrix at the Python level. The goal is to quantify the cost of the Rust-to-Python boundary---FFI transitions, tensor materialization, and object construction---and to evaluate whether binding engineering can reduce that cost. A broader Python evaluation across the full model ladder would further validate these findings but is not required for the primary claim, which is that the binding layer is not a transparent pass-through.
 
 The most important Python result is that binding engineering matters. Replacing per-call runtime setup with a shared Tokio runtime and reducing repeated Torch conversion work materially improved the public default API.
 

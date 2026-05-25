@@ -5,6 +5,8 @@ An LLM serving request cannot generate a token until model weights are resident.
 
 The usual shorthand is to call this a bandwidth problem. That shorthand is incomplete. A loader does not read an abstract number of gigabytes; it executes a concrete read plan. The checkpoint format decides whether bytes appear as a few contiguous shards or as many indexed ranges across partition files. The backend decides whether those reads are submitted through blocking POSIX calls, an async runtime, or \texttt{io\_uring}. The integration layer then adds its own costs: Python object construction, tensor materialization, CUDA context setup, allocator initialization, and serving-engine configuration. A device can have high peak throughput and still produce poor cold-start time when request geometry and submission policy are mismatched.
 
+Existing LLM serving systems and checkpoint libraries typically treat loading as a fixed initialization cost with a single code path. No prior work, to our knowledge, systematically characterizes checkpoint loading as a \emph{policy selection problem} with identifiable performance regimes that shift with format, scale, and deployment environment. This gap matters because the optimal backend is not stable: it changes across the parameter space, and a fixed choice leaves significant performance on the table.
+
 This paper studies a single thesis:
 
 \begin{quote}
@@ -19,11 +21,11 @@ The data support a regime claim, not a universal-loader claim. On H100 SafeTenso
 
 \textbf{Contributions.}
 \begin{enumerate}
-  \item A workload-shape characterization of LLM checkpoint loading: format-level request geometry, not peak device bandwidth alone, constrains which backend policy is plausible.
-  \item A controlled Rust-layer measurement matrix comparing sync, async, \texttt{io\_uring}, and adaptive default across SafeTensors and ServerlessLLM-style layouts.
-  \item Cross-layer evidence showing how Python bindings and vLLM integration reorder, but do not erase, backend effects.
-  \item Cross-environment validation across H100, H200, and A100 systems showing that ordering regimes are more portable than backend identities.
-  \item An operational policy recommendation: use a format-aware adaptive selector with explicit overrides, capability checks, and measured workload features instead of a universal I/O backend.
+  \item \textbf{Workload-shape abstraction.} We formalize checkpoint loading as a policy selection problem parameterized by format-level request geometry, model scale, and runtime capability---not peak device bandwidth alone. This abstraction identifies distinct performance regimes where different backends dominate, and regime boundaries that shift with checkpoint layout.
+  \item \textbf{Capability-gated adaptive selector.} We design and evaluate a format-aware selector that uses measured workload features (total bytes, shard/partition count, average shard size, request structure) and runtime capability checks to choose among sync, async, and \texttt{io\_uring} backends. The selector degrades gracefully when backends are unavailable in restricted container environments.
+  \item \textbf{Cross-layer evaluation.} We provide controlled evidence across three observation layers---Rust backend attribution, Python bindings, and a custom vLLM integration---showing that backend effects propagate through library and serving-engine boundaries. Integration layers reorder but do not erase backend differences.
+  \item \textbf{Cross-environment validation.} Measurements across H100 (local NVMe, full backend set), H200 (network storage, \texttt{io\_uring} blocked), and A100 (network storage, \texttt{io\_uring} blocked) systems show that ordering regimes are more portable than backend identities.
+  \item \textbf{Bounded operational policy.} We deliver a deliberately bounded recommendation: use a format-aware adaptive selector with explicit overrides and capability checks. The selector is not presented as an oracle; its misses are reported and used to identify where overrides and per-environment calibration are needed.
 \end{enumerate}
 
 \textbf{Roadmap.} Section~\ref{sec:related_work} positions the gap. Section~\ref{sec:design} describes Tensora and the adaptive policy. Section~\ref{sec:experimental_setup} defines methodology. Section~\ref{sec:results} presents results across three layers. Section~\ref{sec:discussion} interprets implications, Section~\ref{sec:limitations} bounds claims, and Section~\ref{sec:conclusion} concludes.

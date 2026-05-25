@@ -1,7 +1,7 @@
 \section{Tensora Design}
 \label{sec:design}
 
-Tensora is the measurement vehicle for this paper. Its design goal is not to hide loading behind a single convenient API, but to make the workload shape, backend choice, and integration overhead explicit enough to measure.
+Tensora is both the measurement vehicle and the policy framework for this paper. Its design goal is not to hide loading behind a single convenient API, but to make the workload shape, backend choice, and integration overhead explicit enough to measure and to select from.
 
 \subsection{Design principles}
 
@@ -64,7 +64,7 @@ The selector and analysis use features available before reading tensor payloads:
 \item \textbf{Shard or partition count}: number of files contributing to the load.
 \item \textbf{Average shard or partition size}: a coarse scale signal for fanout and queue-depth potential.
 \item \textbf{Request structure}: whole-file sequential reads versus indexed ranges.
-\item \textbf{Backend capability}: whether \texttt{io\_uring} can be initialized on the host.
+\item \textbf{Backend capability}: whether \texttt{io\_uring} can be initialized on the host. In production container environments, \texttt{io\_uring} is often restricted by security policy (Section~\ref{sec:security-discussion}); the selector treats this as a deployment constraint rather than an error.
 \end{itemize}
 
 These features intentionally stop short of learning a per-file oracle. The policy should be explainable to an operator: small contiguous loads tend to favor low-overhead sync; large multi-shard loads can benefit from deeper submission; partitioned range loads need grouping and batching.
@@ -77,18 +77,65 @@ For SafeTensors, the selector uses total bytes, shard count, and average shard s
 
 The selector is intentionally not presented as an oracle. Section~\ref{sec:oracle-analysis} reports where it wins, where it is near parity, and where it misses. Those misses motivate explicit overrides. A deployable adaptive loader should expose both: a good default for stable regimes and manual labels for known boundary cases.
 
+\subsubsection{Decision logic and thresholds}
+\label{sec:selector-thresholds}
+
+Both format selectors compute a composite workload score from features available before reading tensor payloads:
+\begin{equation}
+\label{eq:workload-score}
+\text{score} = \log_2(\text{total\_bytes}) + 2 \cdot f(\text{count}) + \frac{\text{avg\_unit\_bytes}}{2^{30}}
+\end{equation}
+where \texttt{count} is the shard count (SafeTensors) or partition count (ServerlessLLM), \texttt{avg\_unit\_bytes} is the average shard or partition size, and $f$ maps the count into a discrete fanout bucket (Table~\ref{tab:fanout-buckets}). The $\log_2$ term captures overall scale, the fanout term captures parallelism potential, and the average-size term adds a coarse per-unit signal.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Fanout bucket mapping $f(\text{count})$. SafeTensors and ServerlessLLM use different bucket boundaries because their shard/partition counts have different typical ranges.}
+\label{tab:fanout-buckets}
+\begin{tabular}{lcc}
+\toprule
+Count range & SafeTensors $f$ & ServerlessLLM $f$ \\
+\midrule
+0--1 (ST) / 0--4 (SLLM) & 0.0 & 0.0 \\
+2--3 (ST) / 5--8 (SLLM) & 1.0 & 1.0 \\
+4--7 (ST) / 9--16 (SLLM) & 2.0 & 2.0 \\
+8--15 (ST) / 17--32 (SLLM) & 3.0 & 3.0 \\
+$\geq$16 (ST) / $\geq$33 (SLLM) & 4.0 & 4.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{SafeTensors decision rules.}
+\begin{enumerate}
+\item If $\text{score} \geq 48$ and \texttt{io\_uring} is available: select \texttt{io\_uring}.
+\item Else if $\text{score} \geq 40$, or $\text{total\_bytes} \geq 8\,\text{GiB}$, or (shard count $\geq 4$ and $\text{total\_bytes} \geq 4\,\text{GiB}$): select \texttt{async}.
+\item Otherwise: select \texttt{sync}.
+\end{enumerate}
+
+\textbf{ServerlessLLM decision rules.}
+\begin{enumerate}
+\item If $\text{score} \geq 25$ and \texttt{io\_uring} is available: select \texttt{io\_uring}.
+\item Otherwise: select \texttt{async}. Sync is never selected for this layout because the range-oriented request structure consistently penalizes blocking reads.
+\end{enumerate}
+
+On non-Linux platforms, SafeTensors uses a simpler fallback: async for checkpoints $\geq 8\,\text{GiB}$, sync otherwise. ServerlessLLM always selects async on non-Linux.
+
+These thresholds were derived empirically from the H100 training matrix (Section~\ref{sec:rust-results}). They are hardware-dependent and may require retuning across different storage stacks and environments. The score of 48 for SafeTensors corresponds approximately to the regime boundary where multi-shard checkpoints ($\geq$8B parameters, $\geq$16~GB, multiple shards) benefit from \texttt{io\_uring}'s batched submission. The lower ServerlessLLM threshold of 25 reflects the fact that partitioned range workloads benefit from non-sync backends at smaller scales than contiguous shard workloads.
+
 \begin{figure}[htbp]
 \centering
 \begin{tabular}{c}
-$\texttt{format metadata} \rightarrow \texttt{bytes, shards/partitions, request structure}$ \\
+$\texttt{format metadata} \rightarrow \texttt{total\_bytes, count, avg\_unit\_bytes}$ \\
+$\downarrow$ \\
+$\text{score} = \log_2(\texttt{total\_bytes}) + 2 \cdot f(\texttt{count}) + \texttt{avg\_unit\_gb}$ \\
 $\downarrow$ \\
 $\texttt{capability gate: is } \texttt{io\_uring} \texttt{ available?}$ \\
 $\downarrow$ \\
-$\texttt{select backend + execution plan}$ \\
+$\texttt{threshold check} \rightarrow \texttt{select backend}$ \\
 $\downarrow$ \\
-$\texttt{materialize tensor buffers}$ \\
+$\texttt{execute backend-specific planning} \rightarrow \texttt{tensor buffers}$ \\
 \end{tabular}
-\caption{Adaptive policy control flow. The selector uses workload features and backend availability before executing backend-specific planning.}
+\caption{Adaptive policy control flow with scoring. The selector computes a workload score from pre-load features, applies format-specific thresholds, and gates the selection by runtime capability before executing backend-specific planning.}
 \label{fig:policy-sketch}
 \end{figure}
 

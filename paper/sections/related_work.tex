@@ -5,7 +5,7 @@ Tensora sits between four lines of work: LLM serving engines, serverless cold-st
 
 \subsection{LLM serving systems}
 
-Modern serving systems primarily optimize inference after weights are resident. vLLM introduces PagedAttention for KV-cache management and high-throughput serving \cite{pagedattention}. Orca uses iteration-level scheduling \cite{orca}. Sarathi-Serve studies the prefill--decode scheduling trade-off \cite{sarathi_serve}. DeepSpeed Inference applies model parallelism and kernel optimizations \cite{deepspeed_inference_paper}. These systems make the steady-state serving pipeline efficient, but typically treat checkpoint loading as a fixed initialization cost.
+Modern serving systems primarily optimize inference after weights are resident. vLLM introduces PagedAttention for KV-cache management and high-throughput serving \cite{pagedattention}. Orca uses iteration-level scheduling \cite{orca}. Sarathi-Serve studies the prefill--decode scheduling trade-off \cite{sarathi_serve}. DeepSpeed Inference applies model parallelism and kernel optimizations \cite{deepspeed_inference_paper}. SGLang optimizes structured generation with RadixAttention and efficient runtime scheduling \cite{sglang2024}. These systems make the steady-state serving pipeline efficient, but typically treat checkpoint loading as a fixed initialization cost.
 
 Our vLLM integration is therefore a boundary test. Rust measurements explain backend mechanics; vLLM measurements test whether those mechanics survive in an engine with CUDA setup, memory pools, runtime configuration, and generation state. The contribution is not a new serving scheduler. It is a loader policy whose deployment impact can be observed inside a serving engine.
 
@@ -17,7 +17,7 @@ These systems optimize \emph{whether}, \emph{where}, or \emph{when} loading occu
 
 \subsection{Checkpoint formats and loading systems}
 
-Checkpoint formats define the request geometry visible to a loader. SafeTensors \cite{safetensors_docs} stores tensor bytes in safe, contiguous files or shards. GGUF targets memory-mapped CPU inference and quantized deployments. ServerlessLLM's layout \cite{serverlessllm_repo} distributes tensors across partition files with a central index, enabling tiered or partial placement at the cost of more range-oriented access.
+Checkpoint formats define the request geometry visible to a loader. SafeTensors \cite{safetensors_docs} stores tensor bytes in safe, contiguous files or shards. GGUF targets memory-mapped CPU inference and quantized deployments. ServerlessLLM's layout \cite{serverlessllm_repo} distributes tensors across partition files with a central index, enabling tiered or partial placement at the cost of more range-oriented access. Hugging Face's Accelerate library \cite{accelerate_docs} provides model sharding and checkpoint loading utilities at the Python level, but uses a fixed loading strategy rather than selecting among backends based on workload features.
 
 Recent systems work attacks loading from other layers. BlitzScale \cite{blitzscale} shares already-loaded models across inference instances over high-speed interconnects. PPC/MAIO \cite{fast26_maio} uses a programmable kernel page cache to adapt prefetching and eviction to LLM I/O patterns. MAIO operates below the system-call interface; Tensora operates above it. The two approaches are complementary: kernel cache policy changes how pages are served, while userspace backend policy changes how reads are issued.
 
@@ -31,4 +31,8 @@ LLM checkpoint loading spans both regimes. SafeTensors resembles contiguous bulk
 
 \subsection{Positioning}
 
-We do not introduce a checkpoint format, a serving scheduler, or a kernel cache. We measure the load mechanics between them: four backend policies, two layouts, six public checkpoints, three measurement layers, and three deployment environments. The contribution is operational and falsifiable: backend choice depends jointly on layout, scale, and runtime capability; therefore a production loader should select from measured workload features and expose explicit overrides.
+Tensora is a userspace backend-selection policy for checkpoint loading. It is not a disaggregated storage system, a kernel cache mechanism, a supply-chain verification framework, or a new serving scheduler. It does not change how checkpoints are stored, how pages are cached, or how inference is scheduled after weights are resident.
+
+The boundaries are deliberate. MAIO~\cite{fast26_maio} operates below the system-call interface, optimizing how the kernel serves pages; Tensora operates above it, optimizing how userspace issues reads. ServerlessLLM~\cite{FU:2024} optimizes \emph{where} and \emph{when} loading occurs across tiers; Tensora optimizes \emph{how} the required reads are submitted once a load is unavoidable. Serving engines such as vLLM~\cite{pagedattention} and SGLang~\cite{sglang2024} optimize inference after weights are resident; Tensora measures the loader-policy impact that precedes inference.
+
+The contribution is operational and falsifiable: backend choice depends jointly on layout, scale, and runtime capability; therefore a production loader should select from measured workload features and expose explicit overrides.

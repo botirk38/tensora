@@ -252,3 +252,74 @@
   year = {2022},
   publisher = {IEEE/ACM}
 }
+
+@misc{iouring_cve_2022_29582,
+  title = {{CVE}-2022-29582: io\_uring use-after-free vulnerability in the Linux kernel},
+  year = {2022},
+  howpublished = {\url{https://nvd.nist.gov/vuln/detail/CVE-2022-29582}},
+  note = {Use-after-free in io\_uring timeouts leading to privilege escalation}
+}
+
+@misc{iouring_cve_2023_2598,
+  title = {{CVE}-2023-2598: io\_uring out-of-bounds access vulnerability in the Linux kernel},
+  year = {2023},
+  howpublished = {\url{https://nvd.nist.gov/vuln/detail/CVE-2023-2598}},
+  note = {Out-of-bounds access in io\_uring fixed buffers}
+}
+
+@misc{google_iouring_restriction,
+  author = {Jann Horn},
+  title = {io\_uring is disabled everywhere that you can use it},
+  year = {2023},
+  howpublished = {\url{https://security.googleblog.com/2023/06/learnings-from-kctf-vrps-42-linux.html}},
+  note = {Google security analysis of io\_uring attack surface in container environments}
+}
+
+@misc{docker_seccomp_default,
+  title = {Docker default seccomp profile},
+  author = {{Docker, Inc.}},
+  year = {2024},
+  howpublished = {\url{https://docs.docker.com/engine/security/seccomp/}},
+  note = {Default seccomp profile blocks io\_uring system calls}
+}
+
+@misc{lwn_iouring_sysctl,
+  author = {Jonathan Corbet},
+  title = {Controlling access to io\_uring},
+  year = {2023},
+  howpublished = {\url{https://lwn.net/Articles/932209/}},
+  note = {Linux 6.6 io\_uring\_disabled sysctl for restricting io\_uring access}
+}
+
+@misc{safetensors_security,
+  author = {{Hugging Face}},
+  title = {SafeTensors: A Safe and Fast File Format for Storing Tensors},
+  year = {2023},
+  howpublished = {\url{https://huggingface.co/docs/safetensors/en/speed}},
+  note = {SafeTensors prevents arbitrary code execution during model loading, unlike pickle-based formats}
+}
+
+@misc{pytorch_pickle_warning,
+  author = {{PyTorch Contributors}},
+  title = {torch.load --- Security Warning},
+  year = {2024},
+  howpublished = {\url{https://pytorch.org/docs/stable/generated/torch.load.html}},
+  note = {Warning about arbitrary code execution via pickle in torch.load}
+}
+
+@misc{sglang2024,
+  author = {Lianmin Zheng and Liangsheng Yin and Zhiqiang Xie and Chuyue Sun and Jeff Huang and Cody Hao Yu and Shiyi Cao and Christos Kozyrakis and Ion Stoica and Joseph E. Gonzalez and Clark Barrett and Ying Sheng},
+  title = {{SGLang}: Efficient Execution of Structured Language Model Programs},
+  year = {2024},
+  eprint = {2312.07104},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AI}
+}
+
+@misc{accelerate_docs,
+  author = {{Hugging Face}},
+  title = {Accelerate: A Library for Easy Mixed Precision and Distributed Training},
+  year = {2024},
+  howpublished = {\url{https://huggingface.co/docs/accelerate}},
+  note = {Checkpoint loading and model sharding utilities}
+}
