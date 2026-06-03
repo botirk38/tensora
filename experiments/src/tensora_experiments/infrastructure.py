@@ -10,7 +10,7 @@ import modal
 # App singleton
 # ---------------------------------------------------------------------------
 
-app = modal.App("tensora-experiments")
+app = modal.App()
 
 # ---------------------------------------------------------------------------
 # Container image: Debian + Rust 1.92 + tensora profile binary
@@ -56,6 +56,6 @@ HF_CACHE_MOUNT = "/root/.cache/huggingface"
 # ---------------------------------------------------------------------------
 
 GPU = "H100!"
-EPHEMERAL_DISK_MIB = 65_536  # 64 GiB local NVMe for checkpoint I/O
+EPHEMERAL_DISK_MIB = 524_288  # 512 GiB — minimum for H100 on Modal
 MEMORY_MIB = 32_768  # 32 GiB system RAM
 TIMEOUT_S = 3600  # 1 hour max per container lifetime

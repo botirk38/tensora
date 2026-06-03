@@ -13,12 +13,10 @@ import modal
 from tensora_experiments.infrastructure import (
     EPHEMERAL_DISK_MIB,
     GPU,
-    HF_CACHE_MOUNT,
     MEMORY_MIB,
     PROFILE_BIN,
     TIMEOUT_S,
     app,
-    hf_volume,
     image,
 )
 from tensora_experiments.result import CellResult
@@ -29,9 +27,7 @@ from tensora_experiments.result import CellResult
     gpu=GPU,
     ephemeral_disk=EPHEMERAL_DISK_MIB,
     memory=MEMORY_MIB,
-    volumes={HF_CACHE_MOUNT: hf_volume},
     timeout=TIMEOUT_S,
-    retries=modal.Retries(max_retries=2, backoff_coefficient=2.0),
 )
 class Profiler:
     """Stateful profiling executor on Modal H100 hardware.
@@ -129,7 +125,6 @@ class Profiler:
                 )
             ]
 
-        hf_volume.commit()
         return results
 
     @modal.method()

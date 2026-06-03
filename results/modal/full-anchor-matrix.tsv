@@ -1,0 +1,181 @@
+model	format	backend	rep	time_ms	tensors	bytes
+Qwen/Qwen3-0.6B	safetensors	sync	1	723.99	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	2	713.37	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	3	686.20	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	4	715.85	311	0
+Qwen/Qwen3-0.6B	safetensors	sync	5	674.62	311	0
+Qwen/Qwen3-0.6B	safetensors	async	1	634.99	311	0
+Qwen/Qwen3-0.6B	safetensors	async	2	558.02	311	0
+Qwen/Qwen3-0.6B	safetensors	async	3	580.95	311	0
+Qwen/Qwen3-0.6B	safetensors	async	4	517.70	311	0
+Qwen/Qwen3-0.6B	safetensors	async	5	531.57	311	0
+Qwen/Qwen3-0.6B	safetensors	default	1	715.79	311	0
+Qwen/Qwen3-0.6B	safetensors	default	2	688.52	311	0
+Qwen/Qwen3-0.6B	safetensors	default	3	634.74	311	0
+Qwen/Qwen3-0.6B	safetensors	default	4	603.51	311	0
+Qwen/Qwen3-0.6B	safetensors	default	5	650.36	311	0
+Qwen/Qwen3-0.6B	serverlessllm	sync	1	1402.29	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	2	1254.65	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	3	1067.68	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	4	1302.81	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	sync	5	1336.61	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	1	1170.86	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-0.6B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-0.6B	serverlessllm	async	3	1173.28	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	4	1117.88	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	async	5	1119.76	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	default	1	1222.73	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	default	2	1213.53	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	default	3	1146.82	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	default	4	1134.59	311	1503264768
+Qwen/Qwen3-0.6B	serverlessllm	default	5	1195.77	311	1503264768
+HuggingFaceTB/SmolLM3-3B	safetensors	sync	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/686ceee17e3b40a013a9afdc/ff0eb16803440f7398f0f30af3dbe91a98c63eb33bd5d0a4c25aa2e44a59bc54?Expires=1780500766&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY4NmNlZWUxN2UzYjQwYTAxM2E5YWZkYy9mZjBlYjE2ODAzNDQwZjczOThmMGYzMGFmM2RiZTkxYTk4YzYzZWIzM2JkNWQwYTRjMjVhYTJlNDRhNTliYzU0KiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDUwMDc2Nn19fV19&Signature=MEYCIQDyDQ6xZwd5v8LO7HrnaZTHVLmfLr5eVrFpxyyqA7vjjQIhAOXMcMF9cYQ8hYGdELh18-C%7EalMEzfrlfh6VEpjHRgui&Key-Pair-Id=K1LYXO563TGWFU&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00002.safetensors%3B+filename%3D%22model-00001-of-00002.safetensors%22%3B&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260603%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260603T143246Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=bb91a7b8ce97cd1c61a3e84624fff2ce257c14808a9b09ae64c5428f2915e324: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+HuggingFaceTB/SmolLM3-3B	safetensors	sync	2	2725.03	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	sync	3	2831.67	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	sync	4	2334.71	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	sync	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/686ceee17e3b40a013a9afdc/ff0eb16803440f7398f0f30af3dbe91a98c63eb33bd5d0a4c25aa2e44a59bc54?Expires=1780500766&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY4NmNlZWUxN2UzYjQwYTAxM2E5YWZkYy9mZjBlYjE2ODAzNDQwZjczOThmMGYzMGFmM2RiZTkxYTk4YzYzZWIzM2JkNWQwYTRjMjVhYTJlNDRhNTliYzU0KiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDUwMDc2Nn19fV19&Signature=MEYCIQDyDQ6xZwd5v8LO7HrnaZTHVLmfLr5eVrFpxyyqA7vjjQIhAOXMcMF9cYQ8hYGdELh18-C%7EalMEzfrlfh6VEpjHRgui&Key-Pair-Id=K1LYXO563TGWFU&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00002.safetensors%3B+filename%3D%22model-00001-of-00002.safetensors%22%3B&X-Xet-Cas-Uid=public&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260603%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260603T143246Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=bb91a7b8ce97cd1c61a3e84624fff2ce257c14808a9b09ae64c5428f2915e324: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+HuggingFaceTB/SmolLM3-3B	safetensors	async	1	2402.27	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	async	2	2119.90	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	async	3	2339.40	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	async	4	2316.90	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	async	5	2546.83	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	1	2122.00	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	2	2278.71	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	3	2312.65	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	4	2473.17	326	0
+HuggingFaceTB/SmolLM3-3B	safetensors	default	5	3588.31	326	0
+HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	1	4740.89	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	2	4758.28	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	3	5221.45	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	4	4271.54	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	sync	5	4695.13	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	async	1	4569.33	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	async	2	4586.99	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	async	3	4683.54	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	async	4	4514.97	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	async	5	4262.51	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	1	4571.77	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	2	4694.70	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	3	4397.63	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	4	4907.48	326	6150197248
+HuggingFaceTB/SmolLM3-3B	serverlessllm	default	5	4672.78	326	6150197248
+Qwen/Qwen3-4B	safetensors	sync	1	3210.17	398	0
+Qwen/Qwen3-4B	safetensors	sync	2	3169.46	398	0
+Qwen/Qwen3-4B	safetensors	sync	3	3231.69	398	0
+Qwen/Qwen3-4B	safetensors	sync	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-4B/resolve/main/model-00002-of-00003.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-4B	safetensors	sync	5	3182.34	398	0
+Qwen/Qwen3-4B	safetensors	async	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-4B/resolve/main/model-00001-of-00003.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-4B	safetensors	async	2	2764.37	398	0
+Qwen/Qwen3-4B	safetensors	async	3	2908.27	398	0
+Qwen/Qwen3-4B	safetensors	async	4	3114.24	398	0
+Qwen/Qwen3-4B	safetensors	async	5	2860.31	398	0
+Qwen/Qwen3-4B	safetensors	default	1	2563.63	398	0
+Qwen/Qwen3-4B	safetensors	default	2	2750.71	398	0
+Qwen/Qwen3-4B	safetensors	default	3	2838.13	398	0
+Qwen/Qwen3-4B	safetensors	default	4	2887.68	398	0
+Qwen/Qwen3-4B	safetensors	default	5	2950.90	398	0
+Qwen/Qwen3-4B	serverlessllm	sync	1	6412.08	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	sync	2	7079.36	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	sync	3	5137.53	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	sync	4	6563.05	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	sync	5	6902.64	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	async	1	7058.44	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	async	2	5493.80	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	async	3	6091.55	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	async	4	6676.68	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	async	5	6232.86	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	default	1	6694.13	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	default	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-4B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-4B	serverlessllm	default	3	4687.71	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	default	4	6199.62	398	8044936192
+Qwen/Qwen3-4B	serverlessllm	default	5	5386.85	398	8044936192
+Qwen/Qwen3-8B	safetensors	sync	1	6502.38	399	0
+Qwen/Qwen3-8B	safetensors	sync	2	6498.20	399	0
+Qwen/Qwen3-8B	safetensors	sync	3	6496.19	399	0
+Qwen/Qwen3-8B	safetensors	sync	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-8B/resolve/main/model-00003-of-00005.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	sync	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-8B/resolve/main/model-00005-of-00005.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	async	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-8B/resolve/main/model-00003-of-00005.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	async	2	6267.35	399	0
+Qwen/Qwen3-8B	safetensors	async	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-8B/resolve/main/model-00001-of-00005.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	async	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-8B/resolve/main/model-00001-of-00005.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	async	5	5377.93	399	0
+Qwen/Qwen3-8B	safetensors	default	1	5272.55	399	0
+Qwen/Qwen3-8B	safetensors	default	2	5000.08	399	0
+Qwen/Qwen3-8B	safetensors	default	3	6400.43	399	0
+Qwen/Qwen3-8B	safetensors	default	4	5563.76	399	0
+Qwen/Qwen3-8B	safetensors	default	5	6364.27	399	0
+Qwen/Qwen3-8B	serverlessllm	sync	1	13871.92	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	2	13381.87	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	3	13831.37	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	4	11369.41	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-8B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	serverlessllm	async	1	12585.02	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	2	12808.10	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	3	10834.72	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	4	13578.81	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	5	13252.48	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	1	12017.31	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	2	11819.37	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-8B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	serverlessllm	default	4	10221.10	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	5	11889.80	399	16381470720
+Qwen/Qwen3-14B	safetensors	sync	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-14B/resolve/main/model-00005-of-00008.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	sync	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-14B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	sync	3	10547.35	443	0
+Qwen/Qwen3-14B	safetensors	sync	4	11189.17	443	0
+Qwen/Qwen3-14B	safetensors	sync	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/680da7b53a9818192728e751/a1a7d849176272d0c59be18366ab3a4743d0a34ede7d0e5e462185e66d610510?Expires=1780501086&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY4MGRhN2I1M2E5ODE4MTkyNzI4ZTc1MS9hMWE3ZDg0OTE3NjI3MmQwYzU5YmUxODM2NmFiM2E0NzQzZDBhMzRlZGU3ZDBlNWU0NjIxODVlNjZkNjEwNTEwKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDUwMTA4Nn19fV19&Signature=MEYCIQCFmRJM-gtygGBw5m-ffvqbhbmWmn4xlXI7U-4xR6mAdQIhAJ8KDBMfURcz65%7Ew8i-NAX7P6sjKphUlb1VclGHVqDBJ&Key-Pair-Id=K1LYXO563TGWFU&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00008.safetensors%3B+filename%3D%22model-00001-of-00008.safetensors%22%3B&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260603%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260603T143806Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=fa9534747e6ed101c3b758f418d22c35594e73a02095813d701a8355e6240cf4: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	async	1	9981.21	443	0
+Qwen/Qwen3-14B	safetensors	async	2	9910.27	443	0
+Qwen/Qwen3-14B	safetensors	async	3	10747.75	443	0
+Qwen/Qwen3-14B	safetensors	async	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-14B/resolve/main/model-00005-of-00008.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	async	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-14B/resolve/main/model-00001-of-00008.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	default	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-14B/resolve/main/model-00005-of-00008.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-14B	safetensors	default	2	21393.62	443	0
+Qwen/Qwen3-14B	safetensors	default	3	9429.51	443	0
+Qwen/Qwen3-14B	safetensors	default	4	11365.27	443	0
+Qwen/Qwen3-14B	safetensors	default	5	10515.76	443	0
+Qwen/Qwen3-14B	serverlessllm	sync	1	24870.92	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	sync	2	22816.41	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	sync	3	23612.68	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	sync	4	22290.22	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	sync	5	21697.45	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	async	1	23069.44	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	async	2	23326.62	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	async	3	22043.25	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	async	4	22506.89	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	async	5	23203.05	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	default	1	22480.26	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	default	2	19498.15	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	default	3	24596.36	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	default	4	19781.53	443	29536614400
+Qwen/Qwen3-14B	serverlessllm	default	5	24068.82	443	29536614400
+Qwen/Qwen3-32B	safetensors	sync	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00002-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	sync	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00014-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	sync	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00012-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	sync	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-32B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	sync	5	23067.83	707	0
+Qwen/Qwen3-32B	safetensors	async	1	20871.34	707	0
+Qwen/Qwen3-32B	safetensors	async	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/680daa1b62e834e6fd9fdbdf/f0d40747997577ca9377da620e0c19f97c1544e1ec5031c96592d4563ac1e54b?Expires=1780501367&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY4MGRhYTFiNjJlODM0ZTZmZDlmZGJkZi9mMGQ0MDc0Nzk5NzU3N2NhOTM3N2RhNjIwZTBjMTlmOTdjMTU0NGUxZWM1MDMxYzk2NTkyZDQ1NjNhYzFlNTRiKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDUwMTM2N319fV19&Signature=MEYCIQC4tfDkrFOar7C-hfwaC0LXh16COQ20EJ1OvK-JPnEfIAIhAPMuilglflxW9klIeEVjj93wpCm9ZfTxG2NyyTh9cGa%7E&Key-Pair-Id=K1LYXO563TGWFU&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00017.safetensors%3B+filename%3D%22model-00001-of-00017.safetensors%22%3B&X-Xet-Cas-Uid=public&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260603%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260603T144247Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=632534635f2dbc5bcf2d970b5d58465349532ab048595d39f8a47eda44937417: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	async	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00005-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	async	4	21031.94	707	0
+Qwen/Qwen3-32B	safetensors	async	5	23550.13	707	0
+Qwen/Qwen3-32B	safetensors	default	1	50334.04	707	0
+Qwen/Qwen3-32B	safetensors	default	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00006-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	default	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00005-of-00017.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	safetensors	default	4	22284.43	707	0
+Qwen/Qwen3-32B	safetensors	default	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00016-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	serverlessllm	sync	1	71611.91	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	sync	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00014-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	serverlessllm	sync	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00016-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	serverlessllm	sync	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00015-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	serverlessllm	sync	5	56166.51	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	1	52184.80	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	2	51719.91	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/Qwen/Qwen3-32B/resolve/main/model-00016-of-00017.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-32B	serverlessllm	async	4	47340.35	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	async	5	50981.06	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	default	1	82264.82	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	default	2	50148.68	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	default	3	46417.10	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	default	4	45844.61	707	65524246528
+Qwen/Qwen3-32B	serverlessllm	default	5	52238.40	707	65524246528

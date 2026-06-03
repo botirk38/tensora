@@ -136,18 +136,21 @@ class ExperimentMatrix:
     def held_out_validation(cls, reps: int = 1) -> ExperimentMatrix:
         """Issue #22 / Suggestion B: held-out model validation.
 
-        Profiles Llama-3.1-8B and Mistral-7B across the full backend/format
+        Profiles Qwen3-8B and Mistral-7B across the full backend/format
         matrix to test whether the adaptive selector generalizes beyond
         Qwen-family checkpoint geometry.
+
+        Note: io_uring is unavailable on Modal (gVisor kernel), so only
+        sync, async, and default backends are tested.
         """
         return cls(
             name="held-out-validation",
             models=[
-                "meta-llama/Llama-3.1-8B",
+                "Qwen/Qwen3-8B",
                 "mistralai/Mistral-7B-Instruct-v0.3",
             ],
             formats=["safetensors", "serverlessllm"],
-            backends=["sync", "async", "io-uring", "default"],
+            backends=["sync", "async", "default"],
             reps=reps,
         )
 
@@ -155,7 +158,8 @@ class ExperimentMatrix:
     def full_anchor_matrix(cls, reps: int = 5) -> ExperimentMatrix:
         """Issue #23 / Suggestion C: full 5-rep matrix for statistical anchoring.
 
-        All 6 original paper models x 2 formats x 4 backends x 5 reps = 240 runs.
+        All 6 original paper models x 2 formats x 3 backends x 5 reps = 180 runs.
+        Note: io_uring unavailable on Modal (gVisor kernel).
         """
         return cls(
             name="full-anchor-matrix",
@@ -168,25 +172,24 @@ class ExperimentMatrix:
                 "Qwen/Qwen3-32B",
             ],
             formats=["safetensors", "serverlessllm"],
-            backends=["sync", "async", "io-uring", "default"],
+            backends=["sync", "async", "default"],
             reps=reps,
         )
 
     @classmethod
     def targeted_anchors(cls) -> ExperimentMatrix:
-        """Issue #23 / Suggestion C: the 3 close-call cells with specific backends.
+        """Issue #23 / Suggestion C: close-call cells needing anchoring.
 
         These cells have <3% gap between top-two backends and need anchoring
         to confirm or refute the observed ranking.
+        Note: io_uring replaced with sync (unavailable on Modal/gVisor).
         """
         return cls(
             name="targeted-anchors",
             explicit_cells=[
-                CellSpec(model="Qwen/Qwen3-14B", format="safetensors", backend="io-uring", reps=5),
+                CellSpec(model="Qwen/Qwen3-14B", format="safetensors", backend="sync", reps=5),
                 CellSpec(model="Qwen/Qwen3-14B", format="safetensors", backend="default", reps=5),
-                CellSpec(
-                    model="Qwen/Qwen3-14B", format="serverlessllm", backend="io-uring", reps=5
-                ),
+                CellSpec(model="Qwen/Qwen3-14B", format="serverlessllm", backend="sync", reps=5),
                 CellSpec(model="Qwen/Qwen3-14B", format="serverlessllm", backend="default", reps=5),
                 CellSpec(model="Qwen/Qwen3-4B", format="serverlessllm", backend="async", reps=5),
                 CellSpec(model="Qwen/Qwen3-4B", format="serverlessllm", backend="default", reps=5),
