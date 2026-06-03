@@ -79,6 +79,8 @@ enum SafeTensorsCase {
     Async,
     /// Memory-mapped open
     Mmap,
+    /// Upstream safetensors crate baseline (std::fs::read + deserialize)
+    HfNative,
     /// Explicit io_uring backend (Linux only)
     #[cfg(target_os = "linux")]
     IoUring,
@@ -106,6 +108,7 @@ impl SafeTensorsCase {
             Self::Sync => "sync",
             Self::Async => "async",
             Self::Mmap => "mmap",
+            Self::HfNative => "hf-native",
             #[cfg(target_os = "linux")]
             Self::IoUring => "io-uring",
         }

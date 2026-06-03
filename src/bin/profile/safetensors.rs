@@ -193,12 +193,68 @@ fn profile_load_io_uring(config: &ProfileConfig) -> ProfileResult {
     Ok(())
 }
 
+fn profile_load_hf_native(config: &ProfileConfig) -> ProfileResult {
+    let (label, dir) = resolved_dir(config)?;
+    let iterations = config.normalized_iterations();
+    let total_bytes = total_file_bytes(&dir)?;
+    let mut durations = Vec::with_capacity(iterations);
+
+    println!(
+        "Running hf-native safetensors load for '{}' ({iterations}x)",
+        label
+    );
+    for i in 0..iterations {
+        let start = Instant::now();
+        let mut tensor_count = 0usize;
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".safetensors") {
+                continue;
+            }
+            let data = fs::read(&path)?;
+            let tensors =
+                ::safetensors::SafeTensors::deserialize(&data).map_err(|e| ProfileError::new(e.to_string()))?;
+            tensor_count += tensors.len();
+            black_box(&tensors);
+        }
+        let elapsed = start.elapsed();
+        durations.push(elapsed);
+        println!(
+            "  iteration {}: {} tensors, {} bytes, {:.2}ms",
+            i + 1,
+            tensor_count,
+            total_bytes,
+            elapsed.as_secs_f64() * 1000.0
+        );
+        black_box((tensor_count, total_bytes));
+        if config.evict_page_cache {
+            evict::evict_page_cache(&dir);
+        }
+    }
+
+    if let Some(summary) = summarize(&durations) {
+        println!(
+            "  summary: mean {:.2}ms | min {:.2}ms | max {:.2}ms",
+            summary.mean_ms, summary.min_ms, summary.max_ms
+        );
+    }
+    Ok(())
+}
+
 pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "default" => profile_load_async(config, true),
         "sync" => profile_load_sync(config),
         "async" => profile_load_async(config, false),
         "mmap" => profile_load_mmap(config),
+        "hf-native" => profile_load_hf_native(config),
         #[cfg(target_os = "linux")]
         "io-uring" => profile_load_io_uring(config),
         #[cfg(not(target_os = "linux"))]

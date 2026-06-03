@@ -101,6 +101,7 @@ class ExperimentMatrix:
         "held-out-validation": "held_out_validation",
         "full-anchor-matrix": "full_anchor_matrix",
         "targeted-anchors": "targeted_anchors",
+        "hf-native-baseline": "hf_native_baseline",
     }
 
     @classmethod
@@ -125,7 +126,8 @@ class ExperimentMatrix:
         if name == "targeted-anchors":
             return factory()
 
-        reps = reps_override if reps_override > 0 else (1 if name == "held-out-validation" else 5)
+        default_reps = 1 if name == "held-out-validation" else 5
+        reps = reps_override if reps_override > 0 else default_reps
         return factory(reps=reps)
 
     # ------------------------------------------------------------------
@@ -194,4 +196,28 @@ class ExperimentMatrix:
                 CellSpec(model="Qwen/Qwen3-4B", format="serverlessllm", backend="async", reps=5),
                 CellSpec(model="Qwen/Qwen3-4B", format="serverlessllm", backend="default", reps=5),
             ],
+        )
+
+    @classmethod
+    def hf_native_baseline(cls, reps: int = 5) -> ExperimentMatrix:
+        """Issue #24 / Suggestion G: external baseline using upstream safetensors crate.
+
+        Runs the hf-native case (std::fs::read + SafeTensors::deserialize) for
+        all 6 original paper models on SafeTensors format only. Provides a
+        reference point showing what performance the upstream crate achieves
+        without Tensora's planning, chunking, or backend selection.
+        """
+        return cls(
+            name="hf-native-baseline",
+            models=[
+                "Qwen/Qwen3-0.6B",
+                "HuggingFaceTB/SmolLM3-3B",
+                "Qwen/Qwen3-4B",
+                "Qwen/Qwen3-8B",
+                "Qwen/Qwen3-14B",
+                "Qwen/Qwen3-32B",
+            ],
+            formats=["safetensors"],
+            backends=["hf-native"],
+            reps=reps,
         )
