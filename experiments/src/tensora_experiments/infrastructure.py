@@ -19,7 +19,7 @@ app = modal.App()
 RUST_VERSION = "1.92.0"
 REPO_URL = "https://github.com/botirk38/tensora.git"
 REPO_BRANCH = "devin/1780487739-modal-experiment-harness"
-GIT_COMMIT = "778cb1e"
+GIT_COMMIT = "cf22b7d"
 WORKSPACE = "/workspace/tensora"
 PROFILE_BIN = f"{WORKSPACE}/target/release/profile"
 
