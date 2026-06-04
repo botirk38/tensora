@@ -54,7 +54,7 @@ Four patterns emerge from the Rust and integration matrices. \textbf{First, Safe
 
 \textbf{Fourth, integration overhead reorders but does not erase backend effects.} Python materialization makes absolute times much larger than Rust timings. vLLM adds engine initialization. Yet loader choice still changes cold initialization by tens of seconds at larger scales, which is the deployment-relevant outcome.
 
-\textbf{Fifth, ordering regimes transfer better than backend names.} Cross-environment validation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that small SafeTensors loads favor sync across all environments. The mid-to-large-scale winner changes with storage topology and kernel capability. This makes capability-gated adaptation more valuable, not less.
+\textbf{Fifth, ordering regimes transfer better than backend names.} Evaluation on H200 and A100 containers (where \texttt{io\_uring} is blocked by kernel security policy) confirms that small SafeTensors loads favor sync across all three configurations. The mid-to-large-scale winner changes with storage topology and kernel capability. This makes capability-gated adaptation more valuable, not less.
 
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
@@ -319,7 +319,7 @@ Qwen3-32B & io\_uring & async & sync \\
 \end{tabular}
 \end{table}
 
-Three findings from the cross-environment comparison: (1)~Sync dominates small SafeTensors models in all three environments; this is the most portable ordering. (2)~At large scale, the strongest backend depends on available kernel interfaces and storage topology: \texttt{io\_uring} on local NVMe (H100), async on network storage (H200), and sync on a different network-storage configuration (A100 at 32B). (3)~The adaptive selector degrades gracefully: when \texttt{io\_uring} is unavailable, it produces within-regime-competitive results on most rows, confirming that the capability-gated fallback mechanism works as designed.
+Three findings from the multi-configuration comparison: (1)~Sync dominates small SafeTensors models in all three environments; this is the most portable ordering. (2)~At large scale, the strongest backend depends on available kernel interfaces and storage topology: \texttt{io\_uring} on local NVMe (H100), async on network storage (H200), and sync on a different network-storage configuration (A100 at 32B). (3)~The adaptive selector degrades gracefully: when \texttt{io\_uring} is unavailable, it produces within-regime-competitive results on most rows, confirming that the capability-gated fallback mechanism works as designed.
 
 \subsection{Python Results}
 \label{sec:python-results}
@@ -435,7 +435,7 @@ Qwen3-32B & 169971 & 219117 & 88200 & 84905 \\
 \end{tabular}
 \end{table}
 
-The native path is counterintuitively slower on warm cache: 2.40$\times$ at 0.6B, 1.81$\times$ at 8B, and 1.29$\times$ at 32B. This indicates that native vLLM initialization is not I/O-bound; its bottleneck is CPU-intensive metadata processing and CUDA context setup that scales with model size regardless of cache state. The warm-cache regression relative to cold suggests the native path also performs redundant file-system work (e.g., stat, open, read) that the OS serves from cache but with Python-level overhead that exceeds the I/O wait time it replaces.
+The native path is counterintuitively slower on warm cache: 2.40$\times$ at 0.6B, 1.81$\times$ at 8B, and 1.29$\times$ at 32B. We attribute this to CPU-intensive metadata processing and CUDA context setup that scales with model size regardless of cache state, but we note that this is an inference from timing data rather than a measured CPU-time breakdown (our benchmark harness does not capture per-function profiling). A targeted CPU profiling study (e.g., \texttt{perf stat} during native initialization) could confirm or revise this explanation. The warm-cache regression also suggests the native path performs redundant file-system work (e.g., stat, open, read) that the OS serves from cache but with Python-level overhead that exceeds the I/O wait time it replaces.
 
 Tensora loaders, by contrast, are consistently faster or essentially unchanged on warm cache (ratios 0.85--0.97). Their performance is I/O-gated: when data is resident, the I/O wait vanishes and execution time decreases proportionally. This asymmetry between native and Tensora warm-cache behavior is a practical advantage: Tensora's initialization time is predictable regardless of cache state, whereas the native path adds uncertainty on restart after a previous load.
 

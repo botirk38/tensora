@@ -41,6 +41,12 @@ This explanation is consistent with three observations. First, async outperforms
 This finding illustrates why storage topology should be considered an additional policy input beyond format and model scale. On environments where network-attached storage has a hard bandwidth ceiling, the overhead of async coordination can exceed its parallelism benefit at very large transfer sizes. If the A100 environment were still available, targeted instrumentation (measuring per-backend bandwidth utilization and request latency distribution) could confirm or refine this hypothesis. Even without that instrumentation, the result motivates a useful design principle: an adaptive selector should not assume that async is unconditionally superior to sync at large scale; the answer depends on whether the storage path can actually serve concurrent requests faster.
 
 
+\subsection{Limitation: implementations versus APIs}
+
+The results compare four specific implementations (sync POSIX, Tokio async, io\_uring, and the adaptive default). These are not guaranteed to represent the best possible implementation of each API. A different sync backend with adaptive parallelism or a differently tuned io\_uring setup might shift the crossover points or change the ranking on individual rows. The regime claims should therefore be read as properties of these particular implementations under the reported conditions, not as theoretical bounds on what each API can achieve.
+
+This limitation does not invalidate the central claim---that checkpoint loading has identifiable regimes that shift with layout and scale---because that claim depends on the workload-shape explanation (contiguous vs.\ partitioned reads, small vs.\ large transfer size), not on any single backend being universally optimal. The implementation lens does, however, bound the practical recommendation to the observed conditions and motivates a replicability standard for future work: report backend parameters and implementation details alongside results.
+
 \subsection{Implications}
 
 For practitioners, log the features that determine loader choice: format, bytes, shard or partition count, backend availability, cache condition, security policy, and integration layer. Expose a default, but also expose explicit backend labels and override hooks.
