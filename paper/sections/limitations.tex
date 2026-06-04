@@ -29,6 +29,8 @@ These failures are part of the result. They show that a deployable policy needs 
 
 The current evaluation uses a model ladder drawn from a single checkpoint family (Qwen3, supplemented by SmolLM3-3B). This is a deliberate design choice: by holding the architecture family roughly constant, scale and format become the dominant variables. However, the selector's thresholds were derived from and evaluated against this same set. A plausible reviewer concern is whether the policy generalizes to checkpoints with different shard geometries. Validation on held-out models from different families (e.g., Llama-3.1-8B, Mistral-7B-Instruct-v0.3) would strengthen the external validity claim. Even imperfect transfer would be a publishable insight: it would identify which workload features need refinement.
 
-\subsection{Future work}
+\subsection{Falsification}
 
-The next step is not to claim a perfect heuristic. It is to expand calibration: more local-NVMe hosts, filesystem and mount-option sweeps, direct-I/O variants, object-store backends, additional checkpoint formats, and learned or profile-guided selectors. Held-out model validation across different checkpoint families would test whether the workload-shape abstraction generalizes beyond the Qwen geometry. The current evidence justifies the abstraction (workload-shaped loading) and identifies where a stronger selector should improve.
+The central claim would be weakened if one fixed explicit backend dominated both layouts and all scales, if sync remained fastest for the largest H100 SafeTensors checkpoints, or if sync became the strongest backend across the ServerlessLLM matrix. It would be refined, not falsified, if another host showed the same regime changes at different model sizes.
+
+The adaptive-policy claim would be weakened if \texttt{default} systematically lost to one explicit backend across the full matrix. The observed misses are narrower: medium-scale SafeTensors and selected partitioned rows. They motivate explicit overrides rather than a return to a global fixed backend.

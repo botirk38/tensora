@@ -3,10 +3,6 @@
 
 The evaluation proceeds in three layers: Rust backend attribution (Section~\ref{sec:rust-results}), Python binding overhead (Section~\ref{sec:python-results}), and vLLM integration (Section~\ref{sec:vllm-results}). Tables present core evidence; figures visualize regime crossovers. Section~\ref{sec:oracle-analysis} compares the adaptive default against the best per-row explicit backend to bound the selector's effectiveness.
 
-\subsection{Reading the Results}
-
-The section follows the same control flow as the system. Rust results isolate backend attribution. Oracle analysis bounds the adaptive default against the best explicit backend on each row. Cross-environment results test capability-gated fallback. Python and vLLM results then show how the same choices behave once library and serving overhead are included.
-
 \begin{table}[htbp]
 \caption{Regime map: strongest observed policy by layout, environment, and scale. Color encodes the winning policy in the corresponding matrix. The key visual fact is non-dominance: every backend color appears, and the pattern changes with layout and environment.}
 \label{tab:regime-map}
@@ -208,6 +204,10 @@ Default beats the best explicit backend in 3 of 12 cells and lands within roughl
 For ServerlessLLM, default beats the best explicit backend in 2 of 6 cells and is close on most remaining rows. The single notable miss is SmolLM3-3B (1.33$\times$), where async's grouped range execution fits the partition structure better than default's chosen path. The remaining ratios are near-parity ($\leq 1.03$).
 
 \textbf{Interpretation.} The misses are not hidden; they are the point at which the adaptive policy becomes an engineering policy rather than an oracle. They identify where the feature mapping is fragile and where explicit overrides (for example, force sync for SafeTensors SmolLM3-3B; force async for ServerlessLLM SmolLM3-3B) provide clear value. A deployable selector should therefore expose overrides instead of pretending every boundary can be learned from one static threshold.
+
+\paragraph{Threshold circularity.} The selector thresholds (Section~\ref{sec:selector-thresholds}) were derived from the same H100 matrix evaluated here. This is an overfitting risk: the thresholds may not transfer to new checkpoint families or storage stacks. Section~\ref{sec:limitations} discusses external generalization; for the purpose of this analysis, the oracle table should be read as measuring the gap between the adaptive policy and explicit backends under a shared bias, not as a transferable accuracy bound.
+
+\paragraph{Planning versus selection confound.} The \texttt{default} path includes read planning (coalescing, chunk sizing) that explicit backends do not share. Default's wins may therefore reflect planning more than backend selection. The tables report the combined effect, which is the deployment-relevant quantity, but the attribution is not exclusively a selection story. Disentangling planning from selection is future calibration work.
 
 \subsection{Cross-Environment Validation}
 \label{sec:cross-env}
