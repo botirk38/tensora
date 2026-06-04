@@ -19,6 +19,7 @@ app = modal.App()
 RUST_VERSION = "1.92.0"
 REPO_URL = "https://github.com/botirk38/tensora.git"
 REPO_BRANCH = "devin/1780487739-modal-experiment-harness"
+GIT_COMMIT = "778cb1e"
 WORKSPACE = "/workspace/tensora"
 PROFILE_BIN = f"{WORKSPACE}/target/release/profile"
 
@@ -36,7 +37,10 @@ image = (
         f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
         f"| sh -s -- -y --default-toolchain {RUST_VERSION}",
     )
-    .env({"PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"})
+    .env({
+        "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "GIT_COMMIT": GIT_COMMIT,
+    })
     .run_commands(
         f"git clone --depth 1 --branch {REPO_BRANCH} {REPO_URL} {WORKSPACE}",
         f"cd {WORKSPACE} && cargo build --release --bin profile",
