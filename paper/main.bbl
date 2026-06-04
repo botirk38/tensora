@@ -1,90 +1,100 @@
 \begin{thebibliography}{10}
 
-\bibitem{pagedattention}
-Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao Yu,
-  Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
-\newblock Efficient memory management for large language model serving with
-  {PagedAttention}.
-\newblock In {\em Proceedings of the 29th ACM Symposium on Operating Systems
-  Principles (SOSP 2023)}. ACM, 2023.
-
-\bibitem{orca}
-Gyeong-In Yu, Joo~Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun.
-\newblock Orca: A distributed serving system for transformer-based generative
-  models.
-\newblock In {\em 16th USENIX Symposium on Operating Systems Design and
-  Implementation (OSDI 22)}, pages 521--538. USENIX Association, 2022.
-
 \bibitem{sarathi_serve}
-Amey Agrawal, Nitin Kedia, Ashish Panwar, et~al.
+A.~Agrawal, N.~Kedia, A.~Panwar, et~al.
 \newblock Taming throughput-latency tradeoff in {LLM} inference with
   {S}arathi-{S}erve.
 \newblock In {\em Proceedings of the 18th USENIX Symposium on Operating Systems
   Design and Implementation (OSDI 2024)}. USENIX Association, 2024.
 
 \bibitem{deepspeed_inference_paper}
-Reza~Yazdani Aminabadi et~al.
+R.~Y. Aminabadi et~al.
 \newblock {D}eep{S}peed inference: Enabling efficient inference of transformer
   models at unprecedented scale.
 \newblock In {\em Proceedings of the International Conference for High
   Performance Computing, Networking, Storage and Analysis (SC 2022)}. IEEE/ACM,
   2022.
 
+\bibitem{hydraserve}
+A.~Authors.
+\newblock {H}ydra{S}erve: Minimizing cold start latency for serverless {LLM}
+  serving in public clouds.
+\newblock arXiv preprint arXiv:2502.15524, 2025.
+
+\bibitem{serverlessllm_repo}
+S.~Contributors.
+\newblock Serverlessllm.
+\newblock \url{https://github.com/ServerlessLLM/ServerlessLLM}, 2024.
+\newblock GitHub repository.
+
+\bibitem{safetensors_docs}
+H.~Face.
+\newblock Safetensors documentation.
+\newblock \url{https://huggingface.co/docs/safetensors}, 2024.
+\newblock Accessed: April 2026.
+
 \bibitem{FU:2024}
-Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov,
-  Yuvraj Patel, and Luo Mai.
+Y.~Fu, L.~Xue, Y.~Huang, A.-O. Brabete, D.~Ustiugov, Y.~Patel, and L.~Mai.
 \newblock Serverlessllm: Low-latency serverless inference for large language
   models.
 \newblock In {\em Proceedings of the 18th USENIX Symposium on Operating Systems
   Design and Implementation (OSDI 2024)}. USENIX Association, 2024.
 
-\bibitem{hydraserve}
-Anonymous Authors.
-\newblock {H}ydra{S}erve: Minimizing cold start latency for serverless {LLM}
-  serving in public clouds.
-\newblock arXiv preprint arXiv:2502.15524, 2025.
+\bibitem{accelerate_docs}
+{Hugging Face}.
+\newblock Accelerate: A library for easy mixed precision and distributed
+  training.
+\newblock \url{https://huggingface.co/docs/accelerate}, 2024.
+\newblock Checkpoint loading and model sharding utilities.
 
-\bibitem{silva2021snapshot}
-Paulo Silva and Thiago~Emmanuel Pereira.
-\newblock Performance evaluation of snapshot methods to warm the serverless
-  cold start, 2021.
+\bibitem{IOURING_DATABASE_GUIDELINES}
+M.~Jasny, M.~El-Hindi, T.~Ziegler, V.~Leis, and C.~Binnig.
+\newblock High-performance {DBMS}s with io\_uring: When and how to use it,
+  2025.
 
-\bibitem{safetensors_docs}
-Hugging Face.
-\newblock Safetensors documentation.
-\newblock \url{https://huggingface.co/docs/safetensors}, 2024.
-\newblock Accessed: April 2026.
-
-\bibitem{serverlessllm_repo}
-ServerlessLLM Contributors.
-\newblock Serverlessllm.
-\newblock \url{https://github.com/ServerlessLLM/ServerlessLLM}, 2024.
-\newblock GitHub repository.
-
-\bibitem{blitzscale}
-Zizhao Mo et~al.
-\newblock Blitzscale: Efficient large model serving with elastic {GPU} resource
-  sharing.
-\newblock In {\em Proceedings of the 2024 USENIX Annual Technical Conference
-  (ATC 2024)}. USENIX Association, 2024.
+\bibitem{pagedattention}
+W.~Kwon, Z.~Li, S.~Zhuang, Y.~Sheng, L.~Zheng, C.~H. Yu, J.~E. Gonzalez,
+  H.~Zhang, and I.~Stoica.
+\newblock Efficient memory management for large language model serving with
+  {PagedAttention}.
+\newblock In {\em Proceedings of the 29th ACM Symposium on Operating Systems
+  Principles (SOSP 2023)}. ACM, 2023.
 
 \bibitem{fast26_maio}
-Yubo Liu, Hongbo Li, Xiaojia Huang, Yongfeng Wang, Hanjun Guo, Hui Chen, Yuxin
-  Ren, and Ning Jia.
+Y.~Liu, H.~Li, X.~Huang, Y.~Wang, H.~Guo, H.~Chen, Y.~Ren, and N.~Jia.
 \newblock Accelerating model loading in {LLM} inference by programmable page
   cache.
 \newblock In {\em Proceedings of the 24th USENIX Conference on File and Storage
   Technologies (FAST 2026)}. USENIX Association, 2026.
 
+\bibitem{blitzscale}
+Z.~Mo et~al.
+\newblock Blitzscale: Efficient large model serving with elastic {GPU} resource
+  sharing.
+\newblock In {\em Proceedings of the 2024 USENIX Annual Technical Conference
+  (ATC 2024)}. USENIX Association, 2024.
+
 \bibitem{arxiv2512_checkpoint_io}
-Nicolas Pretet et~al.
+N.~Pretet et~al.
 \newblock Understanding {LLM} checkpoint/restore {I/O} strategies and patterns,
   2025.
 
-\bibitem{IOURING_DATABASE_GUIDELINES}
-Matthias Jasny, Muhammad El-Hindi, Tobias Ziegler, Viktor Leis, and Carsten
-  Binnig.
-\newblock High-performance {DBMS}s with io\_uring: When and how to use it,
-  2025.
+\bibitem{silva2021snapshot}
+P.~Silva and T.~E. Pereira.
+\newblock Performance evaluation of snapshot methods to warm the serverless
+  cold start, 2021.
+
+\bibitem{orca}
+G.-I. Yu, J.~S. Jeong, G.-W. Kim, S.~Kim, and B.-G. Chun.
+\newblock Orca: A distributed serving system for transformer-based generative
+  models.
+\newblock In {\em 16th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 22)}, pages 521--538. USENIX Association, 2022.
+
+\bibitem{sglang2024}
+L.~Zheng, L.~Yin, Z.~Xie, C.~Sun, J.~Huang, C.~H. Yu, S.~Cao, C.~Kozyrakis,
+  I.~Stoica, J.~E. Gonzalez, C.~Barrett, and Y.~Sheng.
+\newblock {SGLang}: Efficient execution of structured language model programs,
+  2024.
 
 \end{thebibliography}
