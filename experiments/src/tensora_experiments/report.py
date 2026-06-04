@@ -142,7 +142,7 @@ class Report:
                 )
 
             # Pairwise overlap check for adjacent-ranked backends
-            stats.sort(key=lambda s: s[1])  # sort by min
+            stats.sort(key=lambda s: s[2])  # sort by median
             for i in range(len(stats) - 1):
                 name_a, min_a, _, max_a = stats[i]
                 name_b, min_b, _, max_b = stats[i + 1]

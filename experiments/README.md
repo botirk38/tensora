@@ -14,17 +14,20 @@ uv sync
 Run experiments via Modal CLI from the **repo root**:
 
 ```bash
-# Issue #22 / Suggestion B: held-out model validation (16 runs)
+# Issue #22 / Suggestion B: held-out model validation (12 runs, 1 rep)
 modal run experiments/main.py --experiment held-out-validation
 
-# Issue #22 with 5 reps per cell (80 runs)
+# Issue #22 with 5 reps per cell (60 runs)
 modal run experiments/main.py --experiment held-out-validation --reps 5
 
-# Issue #23 / Suggestion C: full 5-rep matrix (240 runs)
+# Issue #23 / Suggestion C: full 5-rep matrix (180 runs, no io_uring on Modal)
 modal run experiments/main.py --experiment full-anchor-matrix
 
 # Issue #23 / Suggestion C: targeted close-call cells only (30 runs)
 modal run experiments/main.py --experiment targeted-anchors
+
+# Issue #24 / Suggestion G: hf-native external baseline (30 runs)
+modal run experiments/main.py --experiment hf-native-baseline
 ```
 
 ## Architecture
@@ -57,10 +60,10 @@ experiments/
 
 - `@app.cls` with `@modal.enter()` lifecycle hook for one-time environment validation
 - `gpu="H100!"` disables auto-upgrade for benchmark reproducibility
-- `modal.Volume` for persistent HuggingFace model cache across runs
-- `ephemeral_disk=65536` for local NVMe (64 GiB)
+- `modal.Volume` for persistent HuggingFace model cache across runs (reduces HF CDN failures)
+- `modal.Retries` with exponential backoff for transient HF CDN failures
+- `ephemeral_disk=524288` for local NVMe (512 GiB)
 - `.starmap()` for parallel fan-out across cells
-- `modal.Retries` for transient failure recovery
 - Proper image layering: system deps → Rust toolchain → binary build
 
 ## Output

@@ -21,15 +21,15 @@ fn total_file_bytes(dir: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        if !entry.file_type()?.is_file() {
+        let path = entry.path();
+        if !path.is_file() {
             continue;
         }
-        let path = entry.path();
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
         if name.ends_with(".safetensors") {
-            total += fs::metadata(path)?.len();
+            total += fs::metadata(&path)?.len();
         }
     }
     Ok(total)
