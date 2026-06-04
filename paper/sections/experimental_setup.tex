@@ -87,8 +87,4 @@ Where anchor ranges overlap between backends, we avoid forcing a strict ranking 
 
 Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) have close-call cells where the gap between the top two backends is less than 3\%. These cells are candidates for targeted five-repetition anchoring to determine whether the observed differences are robust. Specifically: SafeTensors Qwen3-14B (io\_uring vs.\ default, 2.7\% gap) and ServerlessLLM Qwen3-14B (io\_uring vs.\ default, 1.2\% gap) and ServerlessLLM Qwen3-4B (async vs.\ default, 1.4\% gap).
 
-\subsection{Falsification criteria}
 
-The central claim would be weakened if one fixed explicit backend dominated both layouts and all scales, if sync remained fastest for the largest H100 SafeTensors checkpoints, or if sync became the strongest backend across the ServerlessLLM matrix. It would be refined, not falsified, if another host showed the same regime changes at different model sizes.
-
-The adaptive-policy claim would be weakened if \texttt{default} systematically lost to one explicit backend across the full matrix. The observed misses are narrower: medium-scale SafeTensors and selected partitioned rows. They motivate explicit overrides rather than a return to a global fixed backend.

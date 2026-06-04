@@ -36,21 +36,6 @@ This explanation is consistent with three observations. First, async outperforms
 
 This finding illustrates why storage topology should be considered an additional policy input beyond format and model scale. On environments where network-attached storage has a hard bandwidth ceiling, the overhead of async coordination can exceed its parallelism benefit at very large transfer sizes. If the A100 environment were still available, targeted instrumentation (measuring per-backend bandwidth utilization and request latency distribution) could confirm or refine this hypothesis. Even without that instrumentation, the result motivates a useful design principle: an adaptive selector should not assume that async is unconditionally superior to sync at large scale; the answer depends on whether the storage path can actually serve concurrent requests faster.
 
-\subsection{Security context for capability-gated backend selection}
-\label{sec:security-discussion}
-
-The capability-gated fallback described in Section~\ref{sec:design} is not merely a deployment convenience. It reflects a deliberate security posture in production container environments. The \texttt{io\_uring} subsystem has been a recurring source of kernel vulnerabilities, including privilege escalation and use-after-free bugs~\cite{iouring_cve_2022_29582,iouring_cve_2023_2598}. In response, Google's production container infrastructure restricts \texttt{io\_uring} system calls via seccomp filters~\cite{google_iouring_restriction}. Docker's default seccomp profile similarly blocks \texttt{io\_uring\_setup} and \texttt{io\_uring\_enter}~\cite{docker_seccomp_default}. The Linux kernel itself added the \texttt{io\_uring\_disabled} sysctl in version 6.6 to allow system administrators to restrict the interface globally~\cite{lwn_iouring_sysctl}.
-
-This security context reframes the \texttt{EPERM} failures observed on H200 and A100 (Section~\ref{sec:cross-env}) as expected behavior under a security-hardened deployment, not as an accidental limitation. The capability-gated selector handles this correctly: it probes for \texttt{io\_uring} availability at startup, falls back to async or sync when the interface is blocked, and never attempts to circumvent the restriction.
-
-For deployment-sensitive environments, the security posture of the host is therefore an additional factor influencing backend availability, alongside format and scale. A checkpoint loader that hard-codes \texttt{io\_uring} as its primary path would either fail outright in restricted containers or require the operator to weaken the container's security profile. The capability-gated approach avoids this trade-off: it uses \texttt{io\_uring} when available and safe, and selects the next-best backend otherwise.
-
-\subsection{Checkpoint format and model supply chain security}
-\label{sec:format-security}
-
-SafeTensors was designed specifically to prevent arbitrary code execution during model loading~\cite{safetensors_security}. Traditional checkpoint formats based on Python's \texttt{pickle} protocol allow arbitrary code to run during deserialization, creating a well-documented attack vector in the model supply chain~\cite{pytorch_pickle_warning}. SafeTensors eliminates this class of vulnerability by restricting the file format to a flat header plus contiguous tensor data, with no executable content.
-
-This security property is orthogonal to the performance considerations evaluated in this paper, but it provides additional context for the choice of SafeTensors as a primary evaluation format. In deployment environments where models are loaded from shared registries or untrusted sources, the safe deserialization guarantee is a meaningful benefit beyond loading speed. The combination of a security-safe checkpoint format with a capability-gated backend selector addresses two distinct deployment concerns: avoiding code execution during deserialization (format level) and avoiding kernel attack surface during I/O submission (backend level).
 
 \subsection{Implications}
 

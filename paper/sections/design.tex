@@ -3,15 +3,13 @@
 
 Tensora is both the measurement vehicle and the policy framework for this paper. Its design goal is not to hide loading behind a single convenient API, but to make the workload shape, backend choice, and integration overhead explicit enough to measure and to select from.
 
+\subsection{Problem statement}
+
+Checkpoint loading is a policy selection problem. Given a read plan $R$ from format metadata, environment capabilities $C$ (available backends), and policy space $P = \{\text{sync}, \text{async}, \text{io\_uring}\}$, the objective is to minimize expected load time: select $p \in P$ that best fits workload features $W(R) = \{\text{total\_bytes}, \text{shard\_count}, \text{avg\_shard\_size}, \text{request\_type}\}$. This formulation makes the claim falsifiable: the paper does not require a single backend to win universally; it requires that no fixed $p$ dominates across the workload space.
+
 \subsection{Design principles}
 
-Tensora follows four principles.
-\begin{enumerate}
-  \item \textbf{One logical workload, many executions.} A format parser should produce the same tensor read plan regardless of backend, so timing differences reflect submission and planning policy rather than different work.
-  \item \textbf{Backend policy is explicit.} Sync, async, \texttt{io\_uring}, and \texttt{default} are separate labels in the harness. The adaptive path is not allowed to disappear into an opaque fast path.
-  \item \textbf{Measurement stays outside the loader.} Cache drops, timing loops, environment capture, and export formatting are harness responsibilities. Loader code should load checkpoints, not manufacture benchmark conditions.
-  \item \textbf{The policy must cross layers.} A selector that only works in a Rust microbenchmark is incomplete. Tensora carries the same core into Python bindings and a vLLM loader integration.
-\end{enumerate}
+A format parser should produce the same read plan regardless of backend, so timing differences reflect submission policy rather than work performed. Backend labels are explicit at the harness level: the adaptive path does not disappear into an opaque fast path. Measurement (cache drops, timing, capture) stays outside the loader. Finally, the policy must cross layers: a selector that only works in a Rust microbenchmark is incomplete.
 
 \subsection{Architecture}
 
@@ -64,7 +62,7 @@ The selector and analysis use features available before reading tensor payloads:
 \item \textbf{Shard or partition count}: number of files contributing to the load.
 \item \textbf{Average shard or partition size}: a coarse scale signal for fanout and queue-depth potential.
 \item \textbf{Request structure}: whole-file sequential reads versus indexed ranges.
-\item \textbf{Backend capability}: whether \texttt{io\_uring} can be initialized on the host. In production container environments, \texttt{io\_uring} is often restricted by security policy (Section~\ref{sec:security-discussion}); the selector treats this as a deployment constraint rather than an error.
+\item \textbf{Backend capability}: whether \texttt{io\_uring} can be initialized on the host. In production container environments, \texttt{io\_uring} is often restricted; the selector treats this as a deployment constraint rather than an error.
 \end{itemize}
 
 These features intentionally stop short of learning a per-file oracle. The policy should be explainable to an operator: small contiguous loads tend to favor low-overhead sync; large multi-shard loads can benefit from deeper submission; partitioned range loads need grouping and batching.

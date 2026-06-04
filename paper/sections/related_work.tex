@@ -31,8 +31,4 @@ LLM checkpoint loading spans both regimes. SafeTensors resembles contiguous bulk
 
 \subsection{Positioning}
 
-Tensora is a userspace backend-selection policy for checkpoint loading. It is not a disaggregated storage system, a kernel cache mechanism, a supply-chain verification framework, or a new serving scheduler. It does not change how checkpoints are stored, how pages are cached, or how inference is scheduled after weights are resident.
-
-The boundaries are deliberate. MAIO~\cite{fast26_maio} operates below the system-call interface, optimizing how the kernel serves pages; Tensora operates above it, optimizing how userspace issues reads. ServerlessLLM~\cite{FU:2024} optimizes \emph{where} and \emph{when} loading occurs across tiers; Tensora optimizes \emph{how} the required reads are submitted once a load is unavoidable. Serving engines such as vLLM~\cite{pagedattention} and SGLang~\cite{sglang2024} optimize inference after weights are resident; Tensora measures the loader-policy impact that precedes inference.
-
-The contribution is operational and falsifiable: backend choice depends jointly on layout, scale, and runtime capability; therefore a production loader should select from measured workload features and expose explicit overrides.
+Tensora is a userspace backend-selection policy for checkpoint loading, not a disaggregated storage system, kernel cache mechanism, or new serving scheduler. MAIO~\cite{fast26_maio} optimizes below the system-call interface; Tensora operates above it. ServerlessLLM~\cite{FU:2024} optimizes \emph{where} and \emph{when} loading occurs across tiers; Tensora optimizes \emph{how} reads are submitted once loading is unavoidable. The contribution is operational: backend choice depends jointly on layout, scale, and runtime capability; therefore a loader should select from measured workload features and expose explicit overrides.
