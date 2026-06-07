@@ -1,19 +1,15 @@
 \section{Tensora Design}
 \label{sec:design}
 
-Tensora is both the measurement vehicle and the policy framework for this paper. Its design goal is not to hide loading behind a single convenient API, but to make the workload shape, backend choice, and integration overhead explicit enough to measure and to select from.
-
-\subsection{Problem statement}
-
-Checkpoint loading is a policy selection problem. Given a read plan $R$ from format metadata, environment capabilities $C$ (available backends), and policy space $P = \{\text{sync}, \text{async}, \text{io\_uring}\}$, the objective is to minimize expected load time: select $p \in P$ that best fits workload features $W(R) = \{\text{total\_bytes}, \text{shard\_count}, \text{avg\_shard\_size}, \text{request\_type}\}$. This formulation makes the claim falsifiable: the paper does not require a single backend to win universally; it requires that no fixed $p$ dominates across the workload space.
+Tensora is the measurement framework for this paper. Its design goal is to make workload shape, backend choice, and integration overhead explicit enough to measure across I/O backends.
 
 \subsection{Design principles}
 
-A format parser should produce the same read plan regardless of backend, so timing differences reflect submission policy rather than work performed. Backend labels are explicit at the harness level: the adaptive path does not disappear into an opaque fast path. Measurement (cache drops, timing, capture) stays outside the loader. Finally, the policy must cross layers: a selector that only works in a Rust microbenchmark is incomplete.
+A format parser should produce the same read plan regardless of backend, so timing differences reflect submission mechanism rather than work performed. Backend labels are explicit at the harness level. Measurement (cache drops, timing, capture) stays outside the loader.
 
 \subsection{Architecture}
 
-Tensora separates format parsing, backend execution, policy selection, and evaluation (Figure~\ref{fig:tensora-arch}). The \textbf{format layer} parses checkpoint metadata and produces a request-local read plan: files, byte ranges, tensor names, and expected sizes. The \textbf{policy/backend layer} either executes an explicit backend selected by the caller or invokes the adaptive selector. The \textbf{evaluation layer} contains the Rust profiler, Python benchmarks, and vLLM experiments; it observes boundaries without being part of the production load path.
+Tensora separates format parsing, backend execution, and evaluation (Figure~\ref{fig:tensora-arch}). The \textbf{format layer} parses checkpoint metadata and produces a request-local read plan: files, byte ranges, tensor names, and expected sizes. The \textbf{backend layer} executes reads through an explicit backend (sync, async, or \texttt{io\_uring}) selected by the caller. The \textbf{evaluation layer} contains the Rust profiler and vLLM experiments; Python bindings bridge the integration path.
 
 \begin{figure}[t]
   \centering
@@ -24,21 +20,19 @@ Tensora separates format parsing, backend execution, policy selection, and evalu
     arr/.style={->, >=latex, thick},
   ]
     \node[box] (fmt) {Format layer\\metadata $\rightarrow$ read plan};
-    \node[box, right=1.1cm of fmt] (pol) {Policy\\explicit / \texttt{default}};
-    \node[box, right=1.1cm of pol] (be) {Backend\\sync / async / \texttt{io\_uring}};
+    \node[box, right=1.1cm of fmt] (be) {Backend\\sync / async / \texttt{io\_uring}};
     \node[box, right=1.1cm of be] (out) {Tensor buffers\\Rust / Python FFI};
-    \node[box, below=1.0cm of pol] (ev) {Evaluation harness\\timing + cache state};
-    \draw[arr] (fmt) -- (pol);
-    \draw[arr] (pol) -- (be);
+    \node[box, below=1.0cm of be] (ev) {Evaluation harness\\timing + cache state};
+    \draw[arr] (fmt) -- (be);
     \draw[arr] (be) -- (out);
-    \draw[arr, dashed] (ev) -- (pol);
+    \draw[arr, dashed] (ev) -- (be);
   \end{tikzpicture}%
   }
-  \caption{Tensora architecture. The hot path is format parsing $\rightarrow$ policy $\rightarrow$ backend execution $\rightarrow$ tensor buffers. The harness controls timing and cache state outside that path.}
+  \caption{Tensora architecture. The hot path is format parsing $\rightarrow$ backend execution $\rightarrow$ tensor buffers. The harness controls timing and cache state outside that path.}
   \label{fig:tensora-arch}
 \end{figure}
 
-At the SafeTensors layer, the default load path is \texttt{Model::load(path)} $\rightarrow$ workload statistics $\rightarrow$ \texttt{choose\_load\_backend(stats)} $\rightarrow$ \texttt{load\_sync}, \texttt{load\_async}, or \texttt{load\_io\_uring}. The Linux implementation checks \texttt{backend\_capabilities()} before selecting \texttt{io\_uring}. ServerlessLLM follows the same structure after \texttt{compile\_load\_plan(directory)} builds an index-derived partition plan.
+All backends receive the same read plan from the format layer and execute reads through the selected I/O submission method.
 
 \subsection{Common backend surface}
 
@@ -52,90 +46,6 @@ All eager backends implement the same conceptual operations:
 \end{itemize}
 
 This surface is deliberately small. SafeTensors mostly exercises whole-file and batch loading; ServerlessLLM exercises range batches. Backend implementations may chunk, group, coalesce, or tune queue depth internally, but they must satisfy the same logical tensor plan.
-
-\subsection{Workload features}
-
-The selector and analysis use features available before reading tensor payloads:
-
-\begin{itemize}
-\item \textbf{Total bytes}: aggregate checkpoint payload size.
-\item \textbf{Shard or partition count}: number of files contributing to the load.
-\item \textbf{Average shard or partition size}: a coarse scale signal for fanout and queue-depth potential.
-\item \textbf{Request structure}: whole-file sequential reads versus indexed ranges.
-\item \textbf{Backend capability}: whether \texttt{io\_uring} can be initialized on the host. In production container environments, \texttt{io\_uring} is often restricted; the selector treats this as a deployment constraint rather than an error.
-\end{itemize}
-
-These features intentionally stop short of learning a per-file oracle. The policy should be explainable to an operator: small contiguous loads tend to favor low-overhead sync; large multi-shard loads can benefit from deeper submission; partitioned range loads need grouping and batching.
-
-\subsection{Adaptive loading policy}
-
-The \texttt{default} path is an adaptive policy plus read planning, not a synonym for one explicit backend. It first extracts workload features, then applies a capability-gated selector, then lets the chosen backend plan execution. On Linux, \texttt{choose\_load\_backend\_with\_capabilities(stats, capabilities)} prevents \texttt{io\_uring} selection when ring creation is blocked or unsupported. This matters in the H200 and A100 environments, where container policy returns \texttt{EPERM}.
-
-For SafeTensors, the selector uses total bytes, shard count, and average shard size to separate small contiguous loads from large multi-shard loads. For ServerlessLLM, it uses partition and range structure; the H100 matrix shows that a sync-first rule from SafeTensors should not be imported into this layout. The policy is therefore format-aware by construction.
-
-The selector is intentionally not presented as an oracle. Section~\ref{sec:oracle-analysis} reports where it wins, where it is near parity, and where it misses. Those misses motivate explicit overrides. A deployable adaptive loader should expose both: a good default for stable regimes and manual labels for known boundary cases.
-
-\subsubsection{Decision logic and thresholds}
-\label{sec:selector-thresholds}
-
-Both format selectors compute a composite workload score from features available before reading tensor payloads:
-\begin{equation}
-\label{eq:workload-score}
-\text{score} = \log_2(\text{total\_bytes}) + 2 \cdot f(\text{count}) + \frac{\text{avg\_unit\_bytes}}{2^{30}}
-\end{equation}
-where \texttt{count} is the shard count (SafeTensors) or partition count (ServerlessLLM), \texttt{avg\_unit\_bytes} is the average shard or partition size, and $f$ maps the count into a discrete fanout bucket (Table~\ref{tab:fanout-buckets}). The $\log_2$ term captures overall scale, the fanout term captures parallelism potential, and the average-size term adds a coarse per-unit signal.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Fanout bucket mapping $f(\text{count})$. SafeTensors and ServerlessLLM use different bucket boundaries because their shard/partition counts have different typical ranges.}
-\label{tab:fanout-buckets}
-\begin{tabular}{lcc}
-\toprule
-Count range & SafeTensors $f$ & ServerlessLLM $f$ \\
-\midrule
-0 to 1 (ST) / 0 to 4 (SLLM) & 0.0 & 0.0 \\
-2 to 3 (ST) / 5 to 8 (SLLM) & 1.0 & 1.0 \\
-4 to 7 (ST) / 9 to 16 (SLLM) & 2.0 & 2.0 \\
-8 to 15 (ST) / 17 to 32 (SLLM) & 3.0 & 3.0 \\
-$\geq$16 (ST) / $\geq$33 (SLLM) & 4.0 & 4.0 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\textbf{SafeTensors decision rules.}
-\begin{enumerate}
-\item If $\text{score} \geq 48$ and \texttt{io\_uring} is available: select \texttt{io\_uring}.
-\item Else if $\text{score} \geq 40$, or $\text{total\_bytes} \geq 8\,\text{GiB}$, or (shard count $\geq 4$ and $\text{total\_bytes} \geq 4\,\text{GiB}$): select \texttt{async}.
-\item Otherwise: select \texttt{sync}.
-\end{enumerate}
-
-\textbf{ServerlessLLM decision rules.}
-\begin{enumerate}
-\item If $\text{score} \geq 25$ and \texttt{io\_uring} is available: select \texttt{io\_uring}.
-\item Otherwise: select \texttt{async}. Sync is never selected for this layout because the range-oriented request structure consistently penalizes blocking reads.
-\end{enumerate}
-
-On non-Linux platforms, SafeTensors uses a simpler fallback: async for checkpoints $\geq 8\,\text{GiB}$, sync otherwise. ServerlessLLM always selects async on non-Linux.
-
-These thresholds were derived empirically from the H100 training matrix (Section~\ref{sec:rust-results}). They are hardware-dependent and may require retuning across different storage stacks and environments. The score of 48 for SafeTensors corresponds approximately to the regime boundary where multi-shard checkpoints ($\geq$8B parameters, $\geq$16~GB, multiple shards) benefit from \texttt{io\_uring}'s batched submission. The lower ServerlessLLM threshold of 25 reflects the fact that partitioned range workloads benefit from non-sync backends at smaller scales than contiguous shard workloads.
-
-\begin{figure}[htbp]
-\centering
-\begin{tabular}{c}
-$\texttt{format metadata} \rightarrow \texttt{total\_bytes, count, avg\_unit\_bytes}$ \\
-$\downarrow$ \\
-$\text{score} = \log_2(\texttt{total\_bytes}) + 2 \cdot f(\texttt{count}) + \texttt{avg\_unit\_gb}$ \\
-$\downarrow$ \\
-$\texttt{capability gate: is } \texttt{io\_uring} \texttt{ available?}$ \\
-$\downarrow$ \\
-$\texttt{threshold check} \rightarrow \texttt{select backend}$ \\
-$\downarrow$ \\
-$\texttt{execute backend-specific planning} \rightarrow \texttt{tensor buffers}$ \\
-\end{tabular}
-\caption{Adaptive policy control flow with scoring. The selector computes a workload score from pre-load features, applies format-specific thresholds, and gates the selection by runtime capability before executing backend-specific planning.}
-\label{fig:policy-sketch}
-\end{figure}
 
 \subsection{Backend implementations}
 
@@ -170,6 +80,6 @@ The mmap-backed path remains useful for lazy selective access, especially throug
 
 \subsection{Formats and integrations}
 
-Tensora supports two layouts because they expose different regimes. \texttt{SafeTensors} presents whole-file or multi-shard contiguous loading. \texttt{ServerlessLLM} presents an indexed partition layout with range-oriented reads. Supporting both under one framework is what makes the layout-dependent policy claim measurable.
+Tensora supports two layouts because they expose different regimes. \texttt{SafeTensors} presents whole-file or multi-shard contiguous loading. \texttt{ServerlessLLM} presents an indexed partition layout with range-oriented reads. Supporting both under one framework is what makes the layout-dependent regime claim measurable.
 
-Python bindings are implemented with PyO3 and expose a small API: adaptive eager load, explicit sync and async eager load, and lazy \texttt{open\_*} handles. The async Python path uses a shared Tokio runtime rather than constructing one per call. The vLLM integration uses a custom loader path and follows vLLM's synchronous loader boundary, so the serving benchmark reflects the interface available to real integrations rather than an invented async serving path.
+Python bindings are implemented with PyO3 and expose a small API: sync and async eager load, and lazy \texttt{open\_*} handles. The async Python path uses a shared Tokio runtime rather than constructing one per call. The vLLM integration uses a custom loader path and follows vLLM's synchronous loader boundary, so the serving benchmark reflects the interface available to real integrations rather than an invented async serving path. The Python installation is the bridge layer through which vLLM accesses Tensora.

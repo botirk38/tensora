@@ -1,7 +1,7 @@
 \section{Discussion}
 \label{sec:discussion}
 
-The main result is not that one backend wins. The main result is that a checkpoint loader must treat layout and scale as policy inputs.
+The main result is not that one backend wins. The main result is that backend choice depends jointly on format, scale, environment, and observation layer.
 
 \subsection{Mechanism: why layout changes the answer}
 
@@ -11,44 +11,25 @@ ServerlessLLM-style partitioning changes the request geometry. The loader recons
 
 \subsection{Integration: why rankings move across layers}
 
-Rust, Python, and vLLM answer different questions. Rust isolates backend mechanics. Python measures a public library boundary with FFI, tensor conversion, and object construction. vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation setup. These costs can dilute a pure I/O advantage or reorder two close backends.
+Rust and vLLM answer different questions. Rust isolates backend mechanics. vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation setup; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
 
-The vLLM results do not reproduce Rust rankings row-for-row because vLLM adds approximately 32--35~s of fixed engine overhead across all loaders. For SafeTensors Qwen3-8B, the Rust times span 3.2--7.1~s (a 2.2$\times$ spread), while the vLLM cold times span 35.6--36.5~s (a 1.03$\times$ spread). The I/O component becomes a small fraction of total startup. Yet the regime structure survives: sync-type loaders win at small scale and io\_uring-type loaders win at large scale in both Rust and vLLM. The proportional advantage is smaller at the vLLM level, but the absolute savings (21~s at 8B, 82~s at 32B) are deployment-relevant.
+The vLLM results do not reproduce Rust rankings row-for-row because vLLM adds substantial initialization overhead that compresses proportional backend spreads. For SafeTensors Qwen3-8B, the Rust times span 3.2 to 7.1~s (a 2.2$\times$ spread), while the vLLM cold times span 35.9 to 36.5~s (a 1.02$\times$ spread). The I/O component becomes a small fraction of total startup. Yet the regime structure survives: sync-type loaders win at small scale and io\_uring-type loaders win at large scale in both Rust and vLLM. The proportional advantage is smaller at the vLLM level, but the absolute savings (21~s at 8B, 82~s at 32B) are deployment-relevant.
 
-This is not a flaw in the methodology; it is the deployment reality. A systems paper about loading should show both mechanism and propagation. Tensora's gains matter because they remain visible in vLLM cold initialization even after fixed engine costs are included.
+This is not a flaw in the methodology; it is the deployment reality. A systems paper about loading should show both mechanism and propagation. Backend effects matter because they remain visible in vLLM cold initialization even after fixed engine costs are included.
 
-Warm-cache behavior adds a second dimension. vLLM's native initialization is slower on warm cache than cold, indicating its bottleneck is CPU processing, not I/O. Tensora loaders, being I/O-gated, are faster on warm cache. This asymmetry means Tensora provides more predictable restart times regardless of cache state---a practical benefit beyond raw cold-start numbers.
-
-\subsection{Policy: what \texttt{default} should promise}
-
-An adaptive default should promise three bounded properties. First, it should avoid clearly wrong global choices: sync for all partitioned loads, or \texttt{io\_uring} for every tiny contiguous load. Second, it should degrade gracefully when a backend is unavailable, as in containers that block \texttt{io\_uring}. Third, it should expose explicit overrides for known boundary cases.
-
-It should not promise oracle optimality. Table~\ref{tab:oracle} shows misses where the current feature set is too coarse. Those misses are useful because they identify where the next policy should add signals: finer shard geometry, storage topology, or learned per-environment calibration. The correct engineering response is transparency plus overrides, not hiding the selector behind a single API name.
+Warm-cache behavior adds a second dimension. vLLM's native initialization is slower on warm cache than cold (0.6B: 23659~ms cold vs 56874~ms warm), indicating its bottleneck is CPU processing, not I/O. Tensora's I/O-gated loaders are faster on warm cache (ts\_safetensors\_sync at 0.6B: 20417~ms cold vs 18223~ms warm). This asymmetry means backend-aware loading provides more predictable restart times regardless of cache state.
 
 \subsection{What transfers}
 
-Absolute milliseconds are machine-specific. Ordering regimes transfer more plausibly. In this study, small SafeTensors loads favor sync across H100, H200, and A100. The large-scale winner does not transfer by name: H100 favors \texttt{io\_uring}, H200 favors async when \texttt{io\_uring} is blocked, and A100 shows a non-monotonic recovery at the largest SafeTensors row. A replication should therefore ask whether workload-shape changes persist, not whether every number matches.
+Absolute milliseconds are machine-specific. Ordering regimes transfer more plausibly. In this study, small SafeTensors loads favor sync on H100, H200, and A100 (with Modal H100 as the gVisor exception where async leads at small scale). The large-scale winner does not transfer by name: H100 favors \texttt{io\_uring}, H200 favors async when \texttt{io\_uring} is blocked, and A100 shows a non-monotonic recovery at the largest SafeTensors row. A replication should therefore ask whether regime structure (backend ordering as a function of format and scale) persists, not whether every number matches.
 
 \subsection{A100 SafeTensors at 32B: why sync recovers}
 \label{sec:a100-anomaly}
 
-The A100 SafeTensors result at 32B presents a distinctive reversal: sync (46,923~ms) outperforms async (60,807~ms) by $1.30\times$, while the adaptive default (43,817~ms) is the fastest path. This contrasts sharply with H200 at the same scale, where async dominates sync by $3.41\times$.
-
-A plausible explanation involves the interaction between storage-link saturation and async scheduling overhead. The A100 environment uses AMD EPYC 7543 processors with network-attached storage whose bandwidth and latency characteristics differ from the H200's Intel Xeon 8568Y+ with its own network-attached storage. At 65~GB, the checkpoint transfer may saturate the available storage bandwidth on the A100 network path. When the storage link is the bottleneck, async's Tokio task scheduling (per-file grouping, dynamic batching, and runtime coordination) adds overhead without a corresponding concurrency benefit, because the link cannot serve additional parallel requests faster than it can serve sequential ones. Sync's simpler thread-parallel POSIX reads saturate the same link with lower scheduling cost.
-
-This explanation is consistent with three observations. First, async outperforms sync at smaller A100 SafeTensors scales (4B, 8B), where the transfer size does not saturate the link and concurrency still yields benefit. Second, the reversal does not appear on H200, where the storage path apparently sustains higher effective bandwidth at 32B scale. Third, the adaptive default outperforms both explicit backends at A100 32B because its read planning (chunking, coalescing) optimizes transfer efficiency rather than relying solely on concurrency.
-
-This finding illustrates why storage topology should be considered an additional policy input beyond format and model scale. On environments where network-attached storage has a hard bandwidth ceiling, the overhead of async coordination can exceed its parallelism benefit at very large transfer sizes. If the A100 environment were still available, targeted instrumentation (measuring per-backend bandwidth utilization and request latency distribution) could confirm or refine this hypothesis. Even without that instrumentation, the result motivates a useful design principle: an adaptive selector should not assume that async is unconditionally superior to sync at large scale; the answer depends on whether the storage path can actually serve concurrent requests faster.
-
-
-\subsection{Limitation: implementations versus APIs}
-
-The results compare four specific implementations (sync POSIX, Tokio async, io\_uring, and the adaptive default). These are not guaranteed to represent the best possible implementation of each API. A different sync backend with adaptive parallelism or a differently tuned io\_uring setup might shift the crossover points or change the ranking on individual rows. The regime claims should therefore be read as properties of these particular implementations under the reported conditions, not as theoretical bounds on what each API can achieve.
-
-This limitation does not invalidate the central claim---that checkpoint loading has identifiable regimes that shift with layout and scale---because that claim depends on the workload-shape explanation (contiguous vs.\ partitioned reads, small vs.\ large transfer size), not on any single backend being universally optimal. The implementation lens does, however, bound the practical recommendation to the observed conditions and motivates a replicability standard for future work: report backend parameters and implementation details alongside results.
+The A100 SafeTensors result at 32B presents a distinctive reversal: sync (46,923~ms) outperforms async (60,807~ms) by $1.30\times$. This contrasts with H200 at the same scale, where async dominates sync by $3.41\times$. One plausible explanation is storage-link saturation: at 65~GB, the checkpoint transfer may saturate the A100's network-attached storage bandwidth, causing async's Tokio scheduling overhead to exceed its concurrency benefit. The recovery does not appear on H200, where the storage path sustains higher effective bandwidth. This finding illustrates why storage topology should inform backend choice.
 
 \subsection{Implications}
 
-For practitioners, log the features that determine loader choice: format, bytes, shard or partition count, backend availability, cache condition, security policy, and integration layer. Expose a default, but also expose explicit backend labels and override hooks.
+For practitioners, evaluate backend choice relative to format and scale rather than adopting a fixed submission policy. Expose explicit backend labels for known regime boundaries.
 
-For researchers, report loading results as layered constructs. A Rust microbenchmark, a Python API benchmark, and a serving-engine startup benchmark are all valuable; none subsumes the others. A paper that reports only one layer risks explaining the wrong phenomenon.
+For researchers, report loading results as layered constructs. A Rust microbenchmark and a serving-engine startup benchmark are both valuable; neither subsumes the other. A paper that reports only one layer risks explaining the wrong phenomenon.

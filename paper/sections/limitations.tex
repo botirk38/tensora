@@ -1,34 +1,12 @@
 \section{Limitations}
 \label{sec:limitations}
 
-The paper makes a bounded systems claim: backend policy should depend on workload shape. It does not prove a universal selector, universal thresholds, or universal superiority of any I/O API.
+The paper makes a bounded systems claim: backend choice should depend on workload shape. It does not prove a universal selector, universal thresholds, or universal superiority of any I/O API.
 
-\subsection{External validity}
+The primary matrices come from one H100 host with local NVMe and working \texttt{io\_uring}. H200 and A100 provide useful but different validation: network-storage containers where \texttt{io\_uring} is blocked. They test regime transfer, but they are not three identical replicas of the same hardware/storage stack. The model ladder covers six public checkpoints from 0.6B to 32B parameters and two layouts. It does not cover GGUF, quantized-only deployments, object stores, distributed filesystems, RAID variants, direct-I/O configurations, Windows/macOS backends, or multi-node distributed loading. ``Load time'' also means different things at different layers: Rust timings approximate backend-attributed disk-to-tensor work; vLLM timings add Python integration overhead, engine initialization, and CUDA setup. A Rust result should not be quoted as a serving result.
 
-The primary matrices come from one H100 host with local NVMe and working \texttt{io\_uring}. H200 and A100 provide useful but different validation: network-storage containers where \texttt{io\_uring} is blocked. They test fallback behavior and regime transfer, but they are not three identical replicas of the same hardware/storage stack.
+The results compare three specific implementations (sync POSIX, Tokio async, and \texttt{io\_uring}), not the best possible implementation of each API. A different sync backend with adaptive parallelism or a differently tuned \texttt{io\_uring} setup might shift the crossover points. This does not invalidate the central claim, that checkpoint loading has identifiable regimes that shift with layout and scale, because that claim depends on the workload-shape explanation (contiguous vs.\ partitioned reads), not on any single backend being universally optimal.
 
-The model ladder covers six public checkpoints from 0.6B to 32B parameters and two layouts. It does not cover GGUF, quantized-only deployments, object stores, distributed filesystems, RAID variants, direct-I/O configurations, Windows/macOS backends, or multi-node distributed loading.
+Half of the H100 Rust matrix (18 of 36 cells) is backed by five-repetition anchor sets; the remaining cells are representative cold-cache runs. Repeating the full H100 matrix for complete variance estimation would strengthen the statistical base; the Modal repeated anchor matrix (five repetitions across all six models and both formats) provides the closest available proxy. The paper's main claims rest on separable regime distinctions (SafeTensors sync-to-\texttt{io\_uring} crossover, ServerlessLLM sync-never-wins), confirmed by non-overlapping anchor ranges. Close-call rankings are explicitly flagged as not statistically separable. No explicit backend dominates across layout, scale, and environment. Held-out validation on Mistral-7B-Instruct confirms regime transfer but also shows that effect sizes vary with shard geometry; broader held-out coverage would further test generalization.
 
-\subsection{Construct validity}
-
-``Load time'' means different things at different layers. Rust timings approximate backend-attributed disk-to-tensor work. Python timings add interpreter and binding costs. vLLM timings add engine initialization, CUDA setup, memory pools, and generation state. A Rust result should not be quoted as a serving result, and a vLLM result should not be used to rank pure I/O APIs without qualification.
-
-\subsection{Statistical limits}
-
-Half of the H100 Rust matrix (24 of 48 cells) is backed by five-repetition anchor sets; the remaining cells are representative cold-cache runs. Appendix~\ref{app:anchor-stats} shows which anchored rankings are statistically separable (non-overlapping ranges) and which overlap. The paper's main claims rest on separable regime distinctions (SafeTensors sync-to-io\_uring crossover, ServerlessLLM sync-never-wins), which are confirmed by non-overlapping anchor ranges. Close-call rankings (e.g., default vs.\ sync at SafeTensors 0.6B and 8B; async vs.\ default vs.\ io\_uring at all ServerlessLLM scales) are explicitly flagged as not statistically separable. Differences below roughly 5\% at unanchored scales should be read cautiously unless supported by cross-row consistency.
-
-Three close-call cells (SmolLM3-3B, Qwen3-4B, Qwen3-14B) where the top two backends are within 3\% receive targeted five-repetition anchoring on Modal H100; all three show overlapping ranges, confirming that these differences are noise-dominated (Appendix~\ref{sec:modal-anchors}).
-
-\subsection{Selector boundedness}
-
-The adaptive default is not an oracle. On H100 SafeTensors it trails explicit sync by 2.79$\times$ for SmolLM3-3B and 1.69$\times$ for Qwen3-4B, and trails explicit \texttt{io\_uring} by 1.21$\times$ for Qwen3-8B. On H100 ServerlessLLM it trails explicit async by 1.33$\times$ for SmolLM3-3B. On A100, it misses the mid-range async regime for SafeTensors.
-
-These failures are part of the result. They show that a deployable policy needs explicit overrides and likely per-environment calibration. They do not rescue a fixed global backend: no explicit backend dominates across layout, scale, and environment.
-
-\subsection{External generalization}
-
-The primary model ladder is drawn from a single checkpoint family (Qwen3, supplemented by SmolLM3-3B). This is a deliberate design choice: by holding the architecture family roughly constant, scale and format become the dominant variables. Held-out validation on two models not used in threshold derivation---Qwen3-8B (re-tested on Modal H100) and Mistral-7B-Instruct-v0.3 (a different architecture with 3~shards of $\sim$9.7\,GB each)---confirms that the structural regime claims transfer (Section~\ref{sec:held-out}): sync is never fastest for ServerlessLLM, and non-sync backends dominate SafeTensors at 8B scale when \texttt{io\_uring} is blocked. The effect sizes are geometry-dependent (Mistral's $1.11\times$ sync-to-async gap on ServerlessLLM is narrower than Qwen3-8B's $2.06\times$), suggesting that shard count and shard size modulate the advantage of concurrent submission. Further held-out validation on architectures with substantially different tensor layouts (e.g., mixture-of-experts checkpoints) would test whether the workload-shape abstraction extends beyond dense transformer families.
-
-\subsection{Future work}
-
-The next step is not to claim a perfect heuristic. It is to expand calibration: more local-NVMe hosts, filesystem and mount-option sweeps, direct-I/O variants, object-store backends, additional checkpoint formats, and learned or profile-guided selectors. The held-out validation confirms regime transfer to Mistral-7B but also shows that effect sizes vary with shard geometry; broader held-out coverage (e.g., mixture-of-experts, quantized formats) would further test whether the workload-shape abstraction generalizes. The current evidence justifies the abstraction (workload-shaped loading) and identifies where a stronger selector should improve.
+The Python integration layer is not independently benchmarked in this study. The Rust-to-vLLM stack provides end-to-end evidence that backend effects propagate through the serving stack, but the Python-level contribution is not separately quantified.
