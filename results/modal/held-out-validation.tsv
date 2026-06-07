@@ -4,10 +4,10 @@ Qwen/Qwen3-8B	safetensors	async	3884.04	399	0
 Qwen/Qwen3-8B	safetensors	default	5592.48	399	0
 Qwen/Qwen3-8B	serverlessllm	sync	10661.97	399	16381470720
 Qwen/Qwen3-8B	serverlessllm	async	5183.54	399	16381470720
-Qwen/Qwen3-8B	serverlessllm	default	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/680da79d48c19d19cf82ab5e/d5896122818183507065a14a89ab73d7c90784031154ad074896049c30f607d7?Expires=1780500275&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY4MGRhNzlkNDhjMTlkMTljZjgyYWI1ZS9kNTg5NjEyMjgxODE4MzUwNzA2NWExNGE4OWFiNzNkN2M5MDc4NDAzMTE1NGFkMDc0ODk2MDQ5YzMwZjYwN2Q3KiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDUwMDI3NX19fV19&Signature=MEUCIDxDGfsdHD4f4usg2Cmj3NxhMGnHburD9MCVxWQJ4nRHAiEAw6-pR4NLbNk75jXuQxSDTHjVZ7w71YuvxF3SDwjhiyU_&Key-Pair-Id=K1LYXO563TGWFU&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00005.safetensors%3B+filename%3D%22model-00001-of-00005.safetensors%22%3B&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260603%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260603T142435Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=b13c1f0ae51f2bb9eaa7a92cbe71be67d9c6bfce76350657139680704a3002bc: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	serverlessllm	default	12907.06	399	16381470720
 mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	6889.43	582	0
-mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00003-of-00003.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
-mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00002-of-00003.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	8595.58	582	0
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	10054.13	582	0
 mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	24194.84	582	28992094208
 mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	21887.66	582	28992094208
 mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	22462.50	582	28992094208

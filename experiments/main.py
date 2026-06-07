@@ -17,6 +17,7 @@ def run(
     experiment: str = "held-out-validation",
     reps: int = 0,
     output_dir: str = "results/modal",
+    retry_tsv: str = "",
 ) -> None:
     """Execute a named experiment on Modal H100 infrastructure.
 
@@ -24,8 +25,12 @@ def run(
         experiment: One of "held-out-validation", "full-anchor-matrix", "targeted-anchors".
         reps: Override repetition count (0 = use experiment default).
         output_dir: Directory for TSV output files.
+        retry_tsv: Path to a TSV file with ERROR rows to retry. Overrides --experiment.
     """
-    matrix = ExperimentMatrix.from_name(experiment, reps_override=reps)
+    if retry_tsv:
+        matrix = ExperimentMatrix.retry_errors(retry_tsv)
+    else:
+        matrix = ExperimentMatrix.from_name(experiment, reps_override=reps)
 
     print(matrix.summary())
     print()

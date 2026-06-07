@@ -199,6 +199,38 @@ class ExperimentMatrix:
         )
 
     @classmethod
+    def retry_errors(cls, tsv_path: str) -> ExperimentMatrix:
+        """Build an ExperimentMatrix from ERROR rows in an existing TSV file.
+
+        Parses the TSV, finds all rows containing ERROR, and creates explicit
+        CellSpec entries to re-run exactly those cells.
+        """
+        from pathlib import Path
+
+        path = Path(tsv_path)
+        if not path.exists():
+            msg = f"TSV file not found: {tsv_path}"
+            raise FileNotFoundError(msg)
+
+        cells: list[CellSpec] = []
+        with path.open() as f:
+            header = f.readline().strip().split("\t")
+            has_rep = "rep" in header
+            for line in f:
+                if "ERROR" not in line:
+                    continue
+                parts = line.strip().split("\t")
+                model = parts[0]
+                fmt = parts[1]
+                backend = parts[2]
+                cells.append(CellSpec(model=model, format=fmt, backend=backend, reps=1))
+
+        return cls(
+            name=f"retry-{path.stem}",
+            explicit_cells=cells,
+        )
+
+    @classmethod
     def hf_native_baseline(cls, reps: int = 5) -> ExperimentMatrix:
         """Issue #24 / Suggestion G: external baseline using upstream safetensors crate.
 

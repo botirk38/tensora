@@ -124,7 +124,88 @@ Qwen3-32B & sync & 39\,241 & 37\,785 to 40\,691 & 2.4 & $\checkmark$ \\
 \end{tabular}
 \end{table}
 
-\textbf{Key observations from anchor analysis.} The anchors confirm the paper's main structural claims with non-overlapping ranges: (1)~SafeTensors io\_uring dominates sync at 8B and 32B, (2)~sync dominates io\_uring at 0.6B, and (3)~sync is the slowest ServerlessLLM backend at all anchored scales. Within ServerlessLLM, the ordering among async, io\_uring, and default is not robustly separable at any individual scale; the consistent finding is that all three outperform sync, not that any one of the three dominates. Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) contain close-call cells where targeted anchoring would clarify borderline rankings (Section~\ref{sec:baselines-reporting}).
+\textbf{Key observations from anchor analysis.} The anchors confirm the paper's main structural claims with non-overlapping ranges: (1)~SafeTensors io\_uring dominates sync at 8B and 32B, (2)~sync dominates io\_uring at 0.6B, and (3)~sync is the slowest ServerlessLLM backend at all anchored scales. Within ServerlessLLM, the ordering among async, io\_uring, and default is not robustly separable at any individual scale; the consistent finding is that all three outperform sync, not that any one of the three dominates.
+
+\section{Modal anchor statistics}
+\label{sec:modal-anchors}
+
+A five-repetition matrix was collected on Modal H100 containers (gVisor, \texttt{io\_uring} blocked). This matrix covers all six models across sync, async, and default backends, plus targeted anchoring of three close-call cells. Table~\ref{tab:modal-safetensors-anchors} and Table~\ref{tab:modal-serverlessllm-anchors} summarize the SafeTensors and ServerlessLLM results.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Modal H100 SafeTensors anchor repetitions: median (ms) with range across five cold-cache runs. Separability ($\checkmark$) means a backend's range does not overlap with any adjacent backend.}
+\label{tab:modal-safetensors-anchors}
+\begin{tabular}{llrrrr}
+\toprule
+Model & Backend & Median & Range & CV\% & $N$ \\
+\midrule
+Qwen3-0.6B & async & 558 & 518--635 & 8.2 & 5 \\
+Qwen3-0.6B & default & 650 & 604--716 & 6.7 & 5 \\
+Qwen3-0.6B & sync & 713 & 675--724 & 3.0 & 5 \\
+\midrule
+SmolLM3-3B & default & 2\,313 & 2\,122--3\,588 & 23.1 & 5 \\
+SmolLM3-3B & async & 2\,339 & 2\,120--2\,547 & 6.6 & 5 \\
+SmolLM3-3B & sync & 2\,602 & 1\,647--2\,832 & 19.5 & 5 \\
+\midrule
+Qwen3-4B & default & 2\,838 & 2\,564--2\,951 & 5.4 & 5 \\
+Qwen3-4B & async & 2\,908 & 2\,764--3\,131 & 5.4 & 5 \\
+Qwen3-4B & sync & 3\,182 & 1\,813--3\,232 & 21.2 & 5 \\
+\midrule
+Qwen3-8B & async & 5\,378 & 3\,576--6\,267 & 22.2 & 5 \\
+Qwen3-8B & default & 5\,564 & 5\,000--6\,400 & 11.1 & 5 \\
+Qwen3-8B & sync & 6\,496 & 3\,781--6\,502 & 20.2 & 5 \\
+\midrule
+Qwen3-14B & async & 9\,910 & 6\,681--10\,748 & 21.7 & 5 \\
+Qwen3-14B & default & 10\,516 & 6\,520--21\,394 & 47.6 & 5 \\
+Qwen3-14B & sync & 10\,913 & 6\,647--11\,189 & 19.2 & 5 \\
+\midrule
+Qwen3-32B & async & 20\,871 & 14\,418--23\,550 & 21.7 & 5 \\
+Qwen3-32B & default & 22\,284 & 14\,689--50\,334 & 56.5 & 5 \\
+Qwen3-32B & sync & 23\,314 & 15\,191--24\,039 & 17.1 & 5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Modal H100 ServerlessLLM anchor repetitions: median (ms) with range across five cold-cache runs.}
+\label{tab:modal-serverlessllm-anchors}
+\begin{tabular}{llrrrr}
+\toprule
+Model & Backend & Median & Range & CV\% & $N$ \\
+\midrule
+Qwen3-0.6B & async & 1\,171 & 1\,118--1\,206 & 3.3 & 5 \\
+Qwen3-0.6B & default & 1\,196 & 1\,135--1\,223 & 3.4 & 5 \\
+Qwen3-0.6B & sync & 1\,303 & 1\,068--1\,402 & 9.9 & 5 \\
+\midrule
+SmolLM3-3B & async & 4\,569 & 4\,263--4\,684 & 3.5 & 5 \\
+SmolLM3-3B & default & 4\,673 & 4\,398--4\,907 & 4.0 & 5 \\
+SmolLM3-3B & sync & 4\,741 & 4\,272--5\,221 & 7.1 & 5 \\
+\midrule
+Qwen3-4B & default & 6\,179 & 4\,688--6\,694 & 13.6 & 5 \\
+Qwen3-4B & async & 6\,233 & 5\,494--7\,058 & 9.4 & 5 \\
+Qwen3-4B & sync & 6\,563 & 5\,138--7\,079 & 11.9 & 5 \\
+\midrule
+Qwen3-8B & default & 11\,819 & 10\,221--12\,017 & 6.6 & 5 \\
+Qwen3-8B & async & 12\,808 & 10\,835--13\,579 & 8.4 & 5 \\
+Qwen3-8B & sync & 13\,382 & 11\,369--13\,872 & 8.4 & 5 \\
+\midrule
+Qwen3-14B & default & 22\,480 & 19\,498--24\,596 & 10.7 & 5 \\
+Qwen3-14B & sync & 22\,816 & 21\,697--24\,871 & 5.4 & 5 \\
+Qwen3-14B & async & 23\,069 & 22\,043--23\,327 & 2.4 & 5 \\
+\midrule
+Qwen3-32B & default & 50\,149 & 45\,845--82\,265 & 27.6 & 5 \\
+Qwen3-32B & async & 51\,720 & 47\,340--56\,205 & 6.1 & 5 \\
+Qwen3-32B & sync & 53\,971 & 28\,707--71\,612 & 38.4 & 5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key observations.} (1)~Sync is the slowest or near-slowest ServerlessLLM backend at all Modal scales, replicating the primary H100 finding. (2)~SafeTensors at 0.6B shows a clean separation: async (558\,ms) $<$ default (650\,ms) $<$ sync (713\,ms)---without \texttt{io\_uring}, async becomes the small-scale winner rather than sync. (3)~Most mid-to-large SafeTensors and ServerlessLLM cells show overlapping ranges among non-sync backends, consistent with the H100 observation that close-call rankings are noise-dominated. (4)~CDN-induced variance (Qwen3-32B default CV=57\%) inflates ranges on Modal relative to local-NVMe H100; regime structure is preserved, but individual-cell precision is lower.
+
+\textbf{Targeted close-call anchors.} Three close-call cells receive dedicated five-repetition anchoring on Modal H100 (Section~\ref{sec:baselines-reporting}). SafeTensors Qwen3-14B: sync [6\,644--19\,466\,ms] vs.\ default [4\,539--28\,174\,ms]---\textbf{OVERLAP}. ServerlessLLM Qwen3-14B: sync [23\,790--94\,807\,ms] vs.\ default [21\,764--35\,035\,ms]---\textbf{OVERLAP}. ServerlessLLM Qwen3-4B: async [3\,612--6\,309\,ms] vs.\ default [3\,587--12\,955\,ms]---\textbf{OVERLAP}. All three confirm that the differences are not statistically separable.
 
 \section{Artifact layout}
 \label{app:artifact-layout}
