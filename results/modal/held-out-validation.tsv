@@ -1,0 +1,13 @@
+model	format	backend	time_ms	tensors	bytes
+Qwen/Qwen3-8B	safetensors	sync	11329.96	399	0
+Qwen/Qwen3-8B	safetensors	async	3884.04	399	0
+Qwen/Qwen3-8B	safetensors	default	5592.48	399	0
+Qwen/Qwen3-8B	serverlessllm	sync	10661.97	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	5183.54	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	12907.06	399	16381470720
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	6889.43	582	0
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	8595.58	582	0
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	10054.13	582	0
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	24194.84	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	21887.66	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	22462.50	582	28992094208

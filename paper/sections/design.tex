@@ -148,7 +148,7 @@ The \textbf{\texttt{io\_uring}} backend uses persistent rings, batched submissio
 \begin{table}[htbp]
 \centering
 \small
-\caption{Key design choices in the evaluated \texttt{io\_uring} backend.}
+\caption{Key design choices and parameters in the evaluated \texttt{io\_uring} backend.}
 \label{tab:impl_io_uring_fork}
 \begin{tabular}{p{0.24\textwidth}p{0.68\textwidth}}
 \toprule
@@ -156,7 +156,11 @@ Aspect & Design \\
 \midrule
 Ring lifetime & Persistent rings with lazy initialization \\
 Submission & Batched SQEs and explicit in-flight management \\
-Planning & Dynamic ring sizing, chunk sizing, coalescing, and depth limits \\
+Completion & Interrupt-driven (default), kernel-polled (SQPOLL with 2\,s idle timeout, fallback without) \\
+SQ depth & Dynamic per-load: 32 (single file $\leq$512\,MB), 64 ($\leq$4\,GB or small multi-file), 96--128 (large), 256 (very large); clamped to [32, 256] \\
+CQ depth & 2$\times$ SQ depth; clamped to [32, 512] \\
+Flags & \texttt{SINGLE\_ISSUER}, \texttt{COOP\_TASKRUN}, \texttt{SUBMIT\_ALL} (all loads); \texttt{SQPOLL} with fallback to IRQ if unavailable \\
+Chunk sizing & Dynamic: 2\,MB--512\,MB per request, governed by alignment, coalescing, and in-flight limits \\
 Fallback & Capability checks exclude \texttt{io\_uring} when initialization fails \\
 \bottomrule
 \end{tabular}

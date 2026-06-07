@@ -28,22 +28,23 @@ RQ1 and RQ2 use the Rust matrices, RQ3 uses Python benchmarks, RQ4 uses vLLM, an
 
 \subsection{Platforms}
 
-Measurements were collected on three Linux environments (Table~\ref{tab:platforms}). H100 is the primary local-NVMe site. H200 and A100 are network-storage container environments where \texttt{io\_uring} ring initialization fails with \texttt{EPERM}; they test fallback behavior rather than reproducing the exact H100 hardware path.
+Measurements were collected on four Linux environments (Table~\ref{tab:platforms}). H100 is the primary local-NVMe site. H200 and A100 are network-storage container environments where \texttt{io\_uring} ring initialization fails with \texttt{EPERM}; they test fallback behavior rather than reproducing the exact H100 hardware path. Modal H100 is a gVisor-sandboxed container environment (Section~\ref{sec:modal-env}) used for held-out model validation, full-matrix anchoring, and external baseline measurements; \texttt{io\_uring} is unavailable (\texttt{ENOSYS}) and models are fetched from the HuggingFace CDN on each cold run.
 
 \begin{table}[htbp]
-\caption{Experimental platforms. H100 provides local NVMe and working \texttt{io\_uring}; H200 and A100 provide restricted container environments with network-attached storage and blocked \texttt{io\_uring}.}
+\caption{Experimental platforms. H100 provides local NVMe and working \texttt{io\_uring}; H200, A100, and Modal H100 provide restricted environments with blocked \texttt{io\_uring}.}
 \label{tab:platforms}
 \centering
-\begin{tabular}{llll}
+\small
+\begin{tabular}{lllll}
 \toprule
- & \textbf{H100} & \textbf{H200} & \textbf{A100} \\
+ & \textbf{H100} & \textbf{H200} & \textbf{A100} & \textbf{Modal H100} \\
 \midrule
-GPU & NVIDIA H100 & NVIDIA H200 & NVIDIA A100 80GB \\
-CPU & x86\_64 multi-core & Intel Xeon 8568Y+ & AMD EPYC 7543 \\
-RAM & $\sim$180\,GB & $\sim$2\,TB & $\sim$1\,TB \\
-Storage & Local NVMe & Network-attached & Network-attached \\
-\texttt{io\_uring} & Available & Blocked (EPERM) & Blocked (EPERM) \\
-Kernel & 6.x (Ubuntu 24.04) & 6.8.0-83 (Ubuntu 22.04) & 6.5.0-45 (Ubuntu 22.04) \\
+GPU & NVIDIA H100 & NVIDIA H200 & NVIDIA A100 80GB & NVIDIA H100 \\
+CPU & x86\_64 multi-core & Intel Xeon 8568Y+ & AMD EPYC 7543 & x86\_64 multi-core \\
+RAM & $\sim$180\,GB & $\sim$2\,TB & $\sim$1\,TB & 32\,GB \\
+Storage & Local NVMe & Network-attached & Network-attached & Ephemeral NVMe \\
+\texttt{io\_uring} & Available & Blocked (EPERM) & Blocked (EPERM) & Blocked (ENOSYS) \\
+Kernel & 6.x (Ubuntu 24.04) & 6.8.0-83 (Ubuntu 22.04) & 6.5.0-45 (Ubuntu 22.04) & gVisor \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -85,6 +86,17 @@ The Rust matrices compare Tensora backends against one another because the purpo
 
 Where anchor ranges overlap between backends, we avoid forcing a strict ranking and instead state that the difference is not statistically separable at the resolution of five cold-cache repetitions. Separability is assessed by range overlap: if the ranges of two backends overlap, neither can be declared confidently faster. This conservative criterion is appropriate for cold-cache measurements, which have higher variance than warm-cache runs due to cache-state sensitivity. The main claims of the paper rely on large effect sizes and consistent regime patterns (e.g., sync versus \texttt{io\_uring} at SafeTensors 8B+, sync's consistent failure on ServerlessLLM), not on close-call single-cell comparisons.
 
-Three unanchored model sizes (SmolLM3-3B, Qwen3-4B, Qwen3-14B) have close-call cells where the gap between the top two backends is less than 3\%. These cells are candidates for targeted five-repetition anchoring to determine whether the observed differences are robust. Specifically: SafeTensors Qwen3-14B (io\_uring vs.\ default, 2.7\% gap) and ServerlessLLM Qwen3-14B (io\_uring vs.\ default, 1.2\% gap) and ServerlessLLM Qwen3-4B (async vs.\ default, 1.4\% gap).
+Three close-call cells where the gap between the top two backends is less than 3\% receive targeted five-repetition anchoring on Modal H100 (Section~\ref{sec:modal-anchors}): SafeTensors Qwen3-14B (sync vs.\ default), ServerlessLLM Qwen3-14B (sync vs.\ default), and ServerlessLLM Qwen3-4B (async vs.\ default). All three show overlapping ranges, confirming that these differences are not statistically separable.
 
+\textbf{External baseline.} In addition to internal backend comparisons, a reference baseline (\texttt{hf-native}) wraps the upstream SafeTensors crate's loading path (\texttt{std::fs::read} + \texttt{SafeTensors::deserialize}) with no Tensora planning, chunking, or backend selection. This represents what a user obtains from the SafeTensors library alone and provides an external reference point for assessing Tensora's practical value (Section~\ref{sec:hf-native-results}).
 
+\subsection{Falsification criteria}
+
+The central claim would be weakened if one fixed explicit backend dominated both layouts and all scales, if sync remained fastest for the largest H100 SafeTensors checkpoints, or if sync became the strongest backend across the ServerlessLLM matrix. It would be refined, not falsified, if another host showed the same regime changes at different model sizes.
+
+The adaptive-policy claim would be weakened if \texttt{default} systematically lost to one explicit backend across the full matrix. The observed misses are narrower: medium-scale SafeTensors and selected partitioned rows. They motivate explicit overrides rather than a return to a global fixed backend.
+
+\subsection{Modal H100 environment}
+\label{sec:modal-env}
+
+A fourth environment uses Modal's serverless GPU infrastructure for three experiments: held-out model validation (Section~\ref{sec:held-out}), full-matrix anchoring with targeted close-call analysis (Section~\ref{sec:modal-anchors}), and \texttt{hf-native} external baseline measurement (Section~\ref{sec:hf-native-results}). Each Modal container provisions an H100 GPU with 32\,GB RAM and 512\,GB ephemeral NVMe. The container runs gVisor (a userspace kernel), which blocks \texttt{io\_uring} with \texttt{ENOSYS}; only sync, async, and default backends are evaluated. Models are downloaded from the HuggingFace CDN on each cold run, and page-cache eviction uses \texttt{posix\_fadvise(DONTNEED)} rather than \texttt{drop\_caches}. These methodological differences mean that absolute timings are not directly comparable to the primary H100 results; the Modal experiments test regime transfer and provide statistical support, not identical millisecond reproduction.
