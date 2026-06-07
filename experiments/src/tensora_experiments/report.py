@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from itertools import pairwise
+from pathlib import Path
 from statistics import median
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from tensora_experiments.result import CellResult
+from tensora_experiments.result import CellResult
 
 
 @dataclass(slots=True)
@@ -94,8 +92,11 @@ class Report:
         ]
         if self.failures:
             lines.append("  Failed cells:")
-            for f in self.failures:
-                lines.append(f"    {f.model} / {f.format} / {f.backend} rep={f.rep}: {f.error}")
+            for failure in self.failures:
+                lines.append(
+                    f"    {failure.model} / {failure.format} / "
+                    f"{failure.backend} rep={failure.rep}: {failure.error}"
+                )
         return "\n".join(lines)
 
     def preview(self, anchor: bool = False, max_rows: int = 12) -> str:
@@ -141,15 +142,10 @@ class Report:
                     f"n={len(times)}"
                 )
 
-            # Pairwise overlap check for adjacent-ranked backends
             stats.sort(key=lambda s: s[2])  # sort by median
-            for i in range(len(stats) - 1):
-                name_a, min_a, _, max_a = stats[i]
-                name_b, min_b, _, max_b = stats[i + 1]
+            for (name_a, min_a, _, max_a), (name_b, min_b, _, max_b) in pairwise(stats):
                 overlaps = min_a <= max_b and min_b <= max_a
-                if overlaps:
-                    lines.append(f"  → {name_a} vs {name_b}: ranges OVERLAP")
-                else:
-                    lines.append(f"  → {name_a} vs {name_b}: SEPARABLE")
+                verdict = "ranges OVERLAP" if overlaps else "SEPARABLE"
+                lines.append(f"  → {name_a} vs {name_b}: {verdict}")
 
         return "\n".join(lines)

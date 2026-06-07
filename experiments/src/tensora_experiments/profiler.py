@@ -42,6 +42,8 @@ class Profiler:
         - run_cell: executes a single profiling cell and returns parsed results.
     """
 
+    _capabilities: str
+
     @modal.enter()
     def validate_environment(self) -> None:
         """Run once per container: verify binary and log capabilities."""

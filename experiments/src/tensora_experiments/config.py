@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import product
 from typing import ClassVar
@@ -58,6 +59,11 @@ class ExperimentMatrix:
             return sum(c.reps for c in self.explicit_cells)
         return self.total_cells * self.reps
 
+    @property
+    def anchor_mode(self) -> bool:
+        """Whether this experiment uses anchor schema (rep column in TSV)."""
+        return self.reps > 1 or bool(self.explicit_cells)
+
     def cells(self) -> list[CellSpec]:
         """Generate all CellSpec instances."""
         if self.explicit_cells:
@@ -97,12 +103,22 @@ class ExperimentMatrix:
     # Registry: resolve experiment name to configuration
     # ------------------------------------------------------------------
 
-    REGISTRY: ClassVar[dict[str, str]] = {
-        "held-out-validation": "held_out_validation",
-        "full-anchor-matrix": "full_anchor_matrix",
-        "targeted-anchors": "targeted_anchors",
-        "hf-native-baseline": "hf_native_baseline",
-    }
+    @classmethod
+    def _registry(cls) -> dict[str, Callable[..., ExperimentMatrix]]:
+        """Map experiment names to their factory callables."""
+        return {
+            "held-out-validation": cls.held_out_validation,
+            "full-anchor-matrix": cls.full_anchor_matrix,
+            "targeted-anchors": cls.targeted_anchors,
+            "hf-native-baseline": cls.hf_native_baseline,
+        }
+
+    EXPERIMENT_NAMES: ClassVar[list[str]] = [
+        "held-out-validation",
+        "full-anchor-matrix",
+        "targeted-anchors",
+        "hf-native-baseline",
+    ]
 
     @classmethod
     def from_name(cls, name: str, reps_override: int = 0) -> ExperimentMatrix:
@@ -115,13 +131,12 @@ class ExperimentMatrix:
         Raises:
             ValueError: If name is not in the registry.
         """
-        if name not in cls.REGISTRY:
-            valid = list(cls.REGISTRY.keys())
-            msg = f"Unknown experiment: {name!r}. Valid: {valid}"
+        registry = cls._registry()
+        if name not in registry:
+            msg = f"Unknown experiment: {name!r}. Valid: {cls.EXPERIMENT_NAMES}"
             raise ValueError(msg)
 
-        method_name = cls.REGISTRY[name]
-        factory = getattr(cls, method_name)
+        factory = registry[name]
 
         if name == "targeted-anchors":
             return factory()
@@ -214,8 +229,7 @@ class ExperimentMatrix:
 
         cells: list[CellSpec] = []
         with path.open() as f:
-            header = f.readline().strip().split("\t")
-            has_rep = "rep" in header
+            _header = f.readline()  # skip header row
             for line in f:
                 if "ERROR" not in line:
                     continue

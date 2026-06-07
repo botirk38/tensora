@@ -37,10 +37,12 @@ image = (
         f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
         f"| sh -s -- -y --default-toolchain {RUST_VERSION}",
     )
-    .env({
-        "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "GIT_COMMIT": GIT_COMMIT,
-    })
+    .env(
+        {
+            "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "GIT_COMMIT": GIT_COMMIT,
+        }
+    )
     .run_commands(
         f"git clone --depth 1 --branch {REPO_BRANCH} {REPO_URL} {WORKSPACE}",
         f"cd {WORKSPACE} && cargo build --release --bin profile",

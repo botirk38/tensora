@@ -50,13 +50,12 @@ def run(
     print()
     print(report.summary())
 
-    anchor_mode = matrix.reps > 1 or bool(matrix.explicit_cells)
-    out_path = report.write_tsv(Path(output_dir), anchor=anchor_mode)
+    out_path = report.write_tsv(Path(output_dir), anchor=matrix.anchor_mode)
     print(f"\nResults written to: {out_path}")
 
-    if anchor_mode:
+    if matrix.anchor_mode:
         print()
         print(report.separability_analysis())
 
     print()
-    print(report.preview(anchor=anchor_mode))
+    print(report.preview(anchor=matrix.anchor_mode))
