@@ -1,7 +1,7 @@
 \section{Discussion}
 \label{sec:discussion}
 
-The main result is not that one backend wins. The main result is that \emph{checkpoint format} determines which backend wins, and this determination is consistent across model scales.
+Checkpoint format determines which I/O backend wins, and this determination is consistent across model scales.
 
 \subsection{Mechanism: why format changes the answer}
 
@@ -13,11 +13,11 @@ ServerlessLLM-style partitioning changes the request geometry. The loader recons
 
 Rust and vLLM answer different questions. Rust isolates backend mechanics (Section~\ref{sec:rust-results}). vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation state; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
 
-Table~\ref{tab:vllm-load} shows this concretely. At 0.6\,B, where loading dominates initialization, \texttt{ts\_safetensors\_sync} achieves 32.7\,s vs.\ 56.0\,s for vLLM's native loader (1.7$\times$ faster). At $\geq$8\,B, native is competitive because engine overhead (model-graph construction, KV-cache allocation, FlashInfer autotuning) dominates the total initialization budget. This is not a failure of the I/O optimization; it delineates the regime where loading improvements have the most impact: cold-start scenarios for smaller models or multi-model serving where startup latency compounds across concurrent model loads.
+At 0.6\,B, \texttt{ts\_safetensors\_async} achieves 11.8\,s vs.\ 39.6\,s for native (3.4$\times$ faster, Table~\ref{tab:vllm-load}). At $\geq$4\,B, native is competitive because engine overhead dominates the initialization budget. This delineates the regime where loading improvements have the most impact: cold-start scenarios for smaller models or multi-model serving where startup latency compounds.
 
 \subsection{External baseline context}
 
-The hf-native baseline provides context for the absolute performance of Tensora's backends. The upstream \texttt{safetensors} crate uses a simple \texttt{std::fs::read}-based loading path without backend-aware scheduling. Tensora's async backend consistently outperforms hf-native at mid-to-large scales, demonstrating that explicit backend selection provides practical value over the default upstream path.
+The upstream \texttt{safetensors} crate uses \texttt{std::fs::read} without backend-aware scheduling. Tensora async outperforms it by 1.6--13.8$\times$ across scales.
 
 \subsection{Implications}
 

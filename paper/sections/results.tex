@@ -1,7 +1,7 @@
 \section{Results}
 \label{sec:results}
 
-The evaluation proceeds in two layers: Rust backend attribution (Section~\ref{sec:rust-results}) and vLLM integration (Section~\ref{sec:vllm-results}). Tables present medians from five cold-cache repetitions; ranges are reported for separability analysis.
+Section~\ref{sec:rust-results} isolates backend performance at the Rust I/O level; Section~\ref{sec:vllm-results} measures end-to-end vLLM initialization. All tables report medians from five cold-cache repetitions.
 
 \begin{table}[htbp]
 \caption{Regime map: strongest observed backend by layout and scale on Modal H100 (median of 5 reps). The key visual fact is format dependence: async dominates SafeTensors at mid-to-large scale, and sync never wins on ServerlessLLM.}
@@ -18,7 +18,7 @@ ServerlessLLM & \asyncwin & \asyncwin & \asyncwin & \asyncwin & \asyncwin \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:regime-map} is the visual summary. Async is the strongest backend across both formats and all scales. However, the \emph{margin} differs by format: SafeTensors shows a growing advantage (from 1.13$\times$ at 0.6B to 2.40$\times$ at 32B), while ServerlessLLM margins are narrower at small scale (1.02--1.06$\times$) but substantial at large scale (1.46$\times$ at 32B).
+Async is the strongest backend across both formats and all scales. The \emph{margin} differs by format: SafeTensors shows a growing advantage (1.13$\times$ at 0.6B to 2.40$\times$ at 32B); ServerlessLLM margins are narrower at small scale (1.02--1.06$\times$) but reach 1.46$\times$ at 32B.
 
 \begin{table}[htbp]
 \caption{Effect-size summary for representative regime claims. Ratios are computed as sync median divided by async median.}
@@ -39,12 +39,12 @@ ServerlessLLM amplifies async advantage at scale & Qwen3-32B ServerlessLLM & asy
 
 \subsection{Headline findings}
 
-Two patterns emerge from the Rust matrices. First, SafeTensors loading consistently favours async over sync, with the advantage growing from 1.13$\times$ at 0.6B to 2.40$\times$ at 32B. Second, ServerlessLLM-style partitioning similarly favours async at every scale; sync never wins when the read geometry is range-dominated. The format, not the backend name, explains the reversal.
+SafeTensors loading favours async over sync at every scale, with the advantage growing from 1.13$\times$ at 0.6B to 2.40$\times$ at 32B. ServerlessLLM-style partitioning similarly favours async at every scale; sync never wins when the read geometry is range-dominated. The format, not the backend name, explains the reversal.
 
 \subsection{Rust Backend Results}
 \label{sec:rust-results}
 
-The Rust harness is the authoritative backend-attribution layer because it measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs. All cells report medians from five cold-cache repetitions.
+The Rust harness measures checkpoint loading directly, without Python tensor conversion or serving-engine initialization costs.
 
 \subsubsection{SafeTensors Results}
 
@@ -68,7 +68,7 @@ Qwen3-32B & 47\,201 & 19\,676 \\
 \end{tabular}
 \end{table}
 
-The progression is clear. At the small end (0.6B), async is 1.13$\times$ faster than sync (560~ms vs 633~ms). At Qwen3-8B, async leads by 1.43$\times$ (6\,101~ms vs 8\,694~ms). At the largest scale (32B), async is 2.40$\times$ faster (19\,676~ms vs 47\,201~ms). The advantage grows monotonically with model size, consistent with async's ability to overlap I/O through Tokio's concurrent scheduling.
+At 0.6B, async is 1.13$\times$ faster than sync (560~ms vs 633~ms). At 8B, async leads by 1.43$\times$ (6\,101~ms vs 8\,694~ms). At 32B, async is 2.40$\times$ faster (19\,676~ms vs 47\,201~ms). The advantage grows monotonically with model size.
 
 
 
@@ -98,13 +98,11 @@ The progression is clear. At the small end (0.6B), async is 1.13$\times$ faster 
     \label{fig:safetensors-crossover}
 \end{figure}
 
-Figure~\ref{fig:safetensors-crossover} visualises the growing async advantage. The gap between sync and async widens progressively from 0.6B through 32B.
-
-Separability analysis confirms the key claims. At Qwen3-8B, async's range [6\,022--6\,233~ms] does not overlap sync's [8\,242--26\,760~ms], confirming a clean separation. At Qwen3-0.6B, async [519--610~ms] and sync [583--5\,963~ms] have overlapping ranges; the small-scale ranking is not statistically separable, though sync's first-run outlier (5\,963~ms, likely a cold-start artifact) inflates its range.
+Separability: at 8B, async's range [6\,022--6\,233~ms] does not overlap sync's [8\,242--26\,760~ms]. At 0.6B, ranges overlap ([519--610~ms] vs [583--5\,963~ms]); the small-scale ranking is not statistically separable.
 
 \subsubsection{ServerlessLLM-style Partitioned-layout Results}
 
-The ServerlessLLM layout produces similar directional results but with different margins, shown in Table~\ref{tab:rust-serverlessllm}.
+Table~\ref{tab:rust-serverlessllm} shows the ServerlessLLM results.
 
 \begin{table}[htbp]
 \caption{Rust cold-cache ServerlessLLM results on Modal H100 (median ms, 5 reps). Sync never wins; async leads at every scale.}
@@ -124,7 +122,7 @@ Qwen3-32B & 73\,936 & 50\,675 \\
 \end{tabular}
 \end{table}
 
-Sync is slower than async on every ServerlessLLM row. At small scale (0.6B), the margin is minimal (1.02$\times$); at 32B, async is 1.46$\times$ faster (50\,675~ms vs 73\,936~ms). The range-dominated access pattern of ServerlessLLM partitioning rewards async's concurrent scheduling at every scale, confirming that format geometry drives backend advantage.
+Sync is slower than async on every row. At 0.6B the margin is minimal (1.02$\times$); at 32B async is 1.46$\times$ faster (50\,675~ms vs 73\,936~ms).
 
 
 
@@ -154,13 +152,11 @@ Sync is slower than async on every ServerlessLLM row. At small scale (0.6B), the
     \label{fig:serverlessllm-crossover}
 \end{figure}
 
-Figure~\ref{fig:serverlessllm-crossover} shows that the ServerlessLLM workload shape (many range reads across partition files) rewards async scheduling at every scale.
-
-Separability analysis reveals that at small scale, ranges overlap substantially (0.6B: async [1\,340--1\,752~ms] vs sync [1\,348--1\,925~ms]). At Qwen3-8B, the separation is clean: async [13\,073--14\,644~ms] is below sync [17\,116--21\,778~ms]. The structural fact that sync loses on every ServerlessLLM row is the robust finding; at small-scale cells the margin is not always statistically separable.
+Separability: at 0.6B, ranges overlap (async [1\,340--1\,752~ms] vs sync [1\,348--1\,925~ms]). At 8B, separation is clean: async [13\,073--14\,644~ms] vs sync [17\,116--21\,778~ms].
 
 \subsection{Cross-Format Comparison}
 
-The key finding is that format changes the \emph{magnitude} of backend advantage. Table~\ref{tab:cross-format} compares the async-over-sync speedup across formats.
+Format changes the \emph{magnitude} of backend advantage.
 
 \begin{table}[htbp]
 \caption{Async speedup over sync (median ratio) by format and scale. SafeTensors shows a growing advantage; ServerlessLLM shows a narrower but consistent async lead.}
@@ -180,12 +176,12 @@ Qwen3-32B & 2.40$\times$ & 1.46$\times$ \\
 \end{tabular}
 \end{table}
 
-Two observations. First, the async advantage is present on \emph{both} formats at all scales, but grows faster on SafeTensors (reaching 2.40$\times$ at 32B vs 1.46$\times$ for ServerlessLLM). Second, the absolute load times are consistently higher for ServerlessLLM than for SafeTensors at the same model scale, reflecting the higher per-request overhead of range-oriented access. The format determines both the baseline cost and how much backend choice can improve it.
+Async advantage is present on both formats at all scales but grows faster on SafeTensors (2.40$\times$ at 32B vs 1.46$\times$ for ServerlessLLM). Absolute load times are consistently higher for ServerlessLLM, reflecting range-oriented access overhead.
 
 \subsection{External Baseline: hf-native}
 \label{sec:hf-native}
 
-To contextualise Tensora's performance, we compare against the stock SafeTensors loader used by Hugging Face Transformers (``hf-native''), which loads shards via Python-level file I/O. Table~\ref{tab:hf-native} compares hf-native medians with Tensora's async backend.
+Table~\ref{tab:hf-native} compares the stock Hugging Face Transformers SafeTensors loader (``hf-native'', Python-level file I/O) with Tensora's async backend.
 
 \begin{table}[htbp]
 \caption{External baseline: hf-native vs Tensora async on SafeTensors (median ms, 5 reps). Tensora's async backend outperforms hf-native at all scales.}
@@ -205,19 +201,16 @@ Qwen3-32B & 38\,247 & 19\,676 & 1.9$\times$ \\
 \end{tabular}
 \end{table}
 
-Tensora's async backend is 1.6--13.8$\times$ faster than hf-native across all scales. The large speedup at 0.6B (13.8$\times$) reflects hf-native's per-shard Python overhead dominating at small data volumes; at 32B (1.9$\times$), the advantage narrows as raw I/O bandwidth becomes the bottleneck. These results confirm that Tensora's Rust-based approach provides meaningful improvement over the standard Python loading path, independent of backend choice.
+Tensora async is 1.6--13.8$\times$ faster than hf-native. The 13.8$\times$ speedup at 0.6B reflects hf-native's per-shard Python overhead dominating at small data volumes; at 32B (1.9$\times$), raw I/O bandwidth becomes the bottleneck.
 
 \subsection{vLLM End-to-End Initialization}
 \label{sec:vllm-results}
 
 Table~\ref{tab:vllm-load} reports vLLM \texttt{load\_only} initialization time
-(engine start through weight loading, KV-cache allocation, and autotuning)
-on Modal H100 with five loaders: vLLM's stock \texttt{native} SafeTensors
-loader and four Tensora-backed loaders spanning both formats and the sync/async
-backends.
+on Modal H100 with five loaders.
 
 \begin{table}[htbp]
-\caption{vLLM initialization time by loader (seconds, 1 rep, Modal H100).
+\caption{vLLM initialization time by loader (median seconds, 5 reps, Modal H100).
   ``native'' is vLLM's built-in SafeTensors loader.
   ServerlessLLM loaders include a one-time format conversion on first run.}
 \label{tab:vllm-load}
@@ -226,26 +219,26 @@ backends.
 \toprule
 Model & native & \rotatebox{60}{ts\_st\_sync} & \rotatebox{60}{ts\_st\_async} & \rotatebox{60}{ts\_sllm\_sync} & \rotatebox{60}{ts\_sllm\_async} \\
 \midrule
-Qwen3-0.6B & 56.0 & \textbf{32.7} & 50.6 & 43.4 & 45.5 \\
-Qwen3-4B & 52.7 & 59.9 & 54.7 & 63.6 & \textbf{26.4} \\
-Qwen3-8B & \textbf{19.7} & 34.9 & 41.1 & 44.0 & 74.9 \\
-Qwen3-14B & \textbf{25.5} & 45.4 & 47.1 & 239.3 & 75.0 \\
-Qwen3-32B & \textbf{46.8} & 84.5 & 140.8 & 156.1 & 139.3 \\
+Qwen3-0.6B & 39.6 & 40.6 & \textbf{11.8} & 13.6 & 13.4 \\
+Qwen3-4B & \textbf{16.7} & 20.6 & 17.2 & 28.7 & 26.9 \\
+Qwen3-8B & \textbf{22.4} & 30.9 & 25.3 & 44.2 & 44.5 \\
+Qwen3-14B & \textbf{42.8} & 47.6 & 37.6 & 71.7 & 65.7 \\
+Qwen3-32B & \textbf{44.2} & 142.0 & 75.6 & 146.7 & 147.9 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At the Rust I/O level, Tensora's async backend is 1.13--2.40$\times$ faster
-than sync (Table~\ref{tab:rust-safetensors}). Inside vLLM, however, the native
-loader is competitive or faster at $\geq$8\,B because vLLM's internal
-weight-loading pipeline is tightly coupled to its engine initialization:
-model-graph construction, KV-cache allocation, and FlashInfer autotuning
-run in-process and amortize the loading step.
-For the smallest model (0.6\,B), \texttt{ts\_safetensors\_sync} achieves
-the lowest init time (32.7\,s vs.\ 56.0\,s native), suggesting that
-Tensora's advantage is most visible when loading constitutes a larger
-fraction of total startup.
+At 0.6\,B, \texttt{ts\_safetensors\_async} achieves 11.8\,s vs.\ 39.6\,s
+for native (3.4$\times$ speedup). At $\geq$4\,B, native is competitive
+or faster: engine overhead (model-graph construction, KV-cache allocation,
+FlashInfer autotuning) dominates the initialization budget. At 32\,B,
+native (44.2\,s) outperforms all Tensora paths (best: 75.6\,s).
+
+Native shows low run-to-run CV (3.7\% at 32B). Tensora loaders show
+higher variance at some scales (ts\_safetensors\_sync CV 92\% at 32B
+due to a 607\,s outlier). Rankings are stable after excluding
+first-run outliers.
 
 \subsection{Layer summary}
 
-Four principles emerge. (1) Backend ranking depends on checkpoint format: async outperforms sync on both SafeTensors and ServerlessLLM at the raw I/O level, with the advantage growing with model scale. (2) The magnitude of advantage differs by format: SafeTensors shows larger speedups (up to 2.40$\times$) because its contiguous read pattern benefits more from async's concurrent scheduling at scale. (3) Tensora's async backend is 1.6--13.8$\times$ faster than the hf-native baseline, confirming that the framework provides practical improvement over stock Python-level loading. (4) At the vLLM serving level, raw loading gains are partially absorbed by engine overhead (graph construction, KV-cache, autotuning); the advantage is most visible for smaller models where loading dominates initialization.
+(1) Async outperforms sync on both formats at the raw I/O level, with the advantage growing with model scale. (2) SafeTensors shows larger speedups (up to 2.40$\times$) than ServerlessLLM (up to 1.46$\times$). (3) Tensora async is 1.6--13.8$\times$ faster than hf-native. (4) At the vLLM level, engine overhead absorbs raw loading gains at $\geq$4\,B; the advantage is largest for smaller models.
