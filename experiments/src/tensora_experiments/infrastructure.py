@@ -19,7 +19,7 @@ app = modal.App()
 RUST_VERSION = "1.92.0"
 REPO_URL = "https://github.com/botirk38/tensora.git"
 REPO_BRANCH = "devin/1780968167-paper-revamp-modal"
-GIT_COMMIT = "0e7829b"
+GIT_COMMIT = "7da8936"
 WORKSPACE = "/workspace/tensora"
 PROFILE_BIN = f"{WORKSPACE}/target/release/profile"
 
