@@ -14,6 +14,7 @@ import modal
 
 from tensora_experiments.infrastructure import (
     EPHEMERAL_DISK_MIB,
+    GIT_COMMIT,
     GPU,
     HF_CACHE_MOUNT,
     MEMORY_MIB,
@@ -49,6 +50,7 @@ vllm_image = (
         {
             "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "HF_HUB_DISABLE_XET": "1",
+            "GIT_COMMIT": GIT_COMMIT,
         }
     )
     .run_commands(

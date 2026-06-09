@@ -52,6 +52,7 @@ def get_llm_kwargs(model_id: str) -> dict:
         "tensor_parallel_size": 1,
         "max_model_len": 16384,
         "enforce_eager": True,
+        "dtype": "bfloat16",
     }
 
     if "8B" in model_id or "8b" in model_id:
