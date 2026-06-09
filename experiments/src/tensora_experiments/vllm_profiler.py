@@ -7,6 +7,7 @@ time-to-first-token (TTFT) on Modal H100 hardware.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import modal
@@ -154,9 +155,9 @@ class VllmProfiler:
             check=False,
             cwd=f"{WORKSPACE}/bindings/python",
             env={
-                "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin"
-                ":/usr/sbin:/usr/bin:/sbin:/bin",
-                "HOME": "/root",
+                **os.environ,
+                "PATH": "/root/.cargo/bin:"
+                + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
                 "HF_HOME": HF_CACHE_MOUNT,
                 "HF_HUB_DISABLE_XET": "1",
                 "VLLM_LOGGING_LEVEL": "CRITICAL",
