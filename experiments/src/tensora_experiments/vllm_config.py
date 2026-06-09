@@ -79,6 +79,7 @@ class VllmExperimentMatrix:
     EXPERIMENT_NAMES: ClassVar[list[str]] = [
         "vllm-load-only",
         "vllm-ttft",
+        "vllm-decode",
         "vllm-full",
     ]
 
@@ -87,6 +88,7 @@ class VllmExperimentMatrix:
         registry = {
             "vllm-load-only": cls.vllm_load_only,
             "vllm-ttft": cls.vllm_ttft,
+            "vllm-decode": cls.vllm_decode,
             "vllm-full": cls.vllm_full,
         }
         if name not in registry:
@@ -141,12 +143,23 @@ class VllmExperimentMatrix:
         )
 
     @classmethod
+    def vllm_decode(cls, reps: int = 1) -> VllmExperimentMatrix:
+        """vLLM steady-state decode: backend effect on decode throughput."""
+        return cls(
+            name="vllm-decode",
+            models=cls._VLLM_MODELS,
+            loaders=cls._MODAL_LOADERS,
+            benchmark_kinds=["steady_state_decode"],
+            reps=reps,
+        )
+
+    @classmethod
     def vllm_full(cls, reps: int = 1) -> VllmExperimentMatrix:
-        """vLLM full: both load_only and TTFT."""
+        """vLLM full: load_only, TTFT, and steady-state decode."""
         return cls(
             name="vllm-full",
             models=cls._VLLM_MODELS,
             loaders=cls._MODAL_LOADERS,
-            benchmark_kinds=["load_only", "ttft"],
+            benchmark_kinds=["load_only", "ttft", "steady_state_decode"],
             reps=reps,
         )

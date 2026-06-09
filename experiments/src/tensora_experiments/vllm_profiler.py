@@ -217,6 +217,9 @@ class VllmProfiler:
                 init_ms=parsed.get("init_ms", 0.0),
                 ttft_ms=parsed.get("ttft_ms", 0.0),
                 first_token_ms=parsed.get("first_token_ms", 0.0),
+                decode_avg_ms=parsed.get("decode_avg_ms", 0.0),
+                decode_min_ms=parsed.get("decode_min_ms", 0.0),
+                decode_max_ms=parsed.get("decode_max_ms", 0.0),
             )
         ]
 

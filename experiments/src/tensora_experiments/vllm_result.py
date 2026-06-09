@@ -12,11 +12,14 @@ class VllmCellResult:
     Attributes:
         model: HuggingFace model ID.
         loader: Loader name (e.g. "native", "ts_safetensors_sync").
-        benchmark_kind: "load_only" or "ttft".
+        benchmark_kind: "load_only", "ttft", or "steady_state_decode".
         rep: Repetition number (1-indexed).
         init_ms: vLLM initialization time in milliseconds.
         ttft_ms: Time to first token (init + generation) in milliseconds.
         first_token_ms: Generation-only time for first token.
+        decode_avg_ms: Average decode latency per batch (steady_state_decode).
+        decode_min_ms: Minimum decode latency (steady_state_decode).
+        decode_max_ms: Maximum decode latency (steady_state_decode).
         error: Error message if the cell failed, None on success.
     """
 
@@ -27,6 +30,9 @@ class VllmCellResult:
     init_ms: float
     ttft_ms: float = 0.0
     first_token_ms: float = 0.0
+    decode_avg_ms: float = 0.0
+    decode_min_ms: float = 0.0
+    decode_max_ms: float = 0.0
     error: str | None = None
 
     @property
@@ -42,11 +48,12 @@ class VllmCellResult:
         if self.error:
             return (
                 f"{self.model}\t{self.loader}\t{self.benchmark_kind}\t{self.rep}\t"
-                f"ERROR\t0\t0\t{self.error}"
+                f"ERROR\t0\t0\t0\t0\t0\t{self.error}"
             )
         return (
             f"{self.model}\t{self.loader}\t{self.benchmark_kind}\t{self.rep}\t"
-            f"{self.init_ms:.2f}\t{self.ttft_ms:.2f}\t{self.first_token_ms:.2f}"
+            f"{self.init_ms:.2f}\t{self.ttft_ms:.2f}\t{self.first_token_ms:.2f}\t"
+            f"{self.decode_avg_ms:.2f}\t{self.decode_min_ms:.2f}\t{self.decode_max_ms:.2f}"
         )
 
     @classmethod
