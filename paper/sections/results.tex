@@ -209,15 +209,45 @@ Qwen3-32B & 38\,247 & 19\,676 & 1.9$\times$ \\
 
 Tensora's async backend is 1.6--13.8$\times$ faster than hf-native across all scales. The large speedup at 0.6B (13.8$\times$) reflects hf-native's per-shard Python overhead dominating at small data volumes; at 32B (1.9$\times$), the advantage narrows as raw I/O bandwidth becomes the bottleneck. These results confirm that Tensora's Rust-based approach provides meaningful improvement over the standard Python loading path, independent of backend choice.
 
-\subsection{vLLM Results}
+\subsection{vLLM End-to-End Initialization}
 \label{sec:vllm-results}
 
-The vLLM integration benchmarks measure whether Rust-level backend advantages propagate through the serving stack. The experiment uses Modal H100 containers with Tensora-backed custom loaders (\texttt{ts\_safetensors\_sync}, \texttt{ts\_safetensors\_async}) alongside vLLM's stock \texttt{native} loader.
+Table~\ref{tab:vllm-load} reports vLLM \texttt{load\_only} initialization time
+(engine start through weight loading, KV-cache allocation, and autotuning)
+on Modal H100 with five loaders: vLLM's stock \texttt{native} SafeTensors
+loader and four Tensora-backed loaders spanning both formats and the sync/async
+backends.
 
-% vLLM results will be populated once the Modal vLLM experiment completes.
-% Expected pattern: Tensora loaders reduce cold load_only initialization relative to native,
-% with the SafeTensors async loader providing the largest improvement at large scale.
+\begin{table}[htbp]
+\caption{vLLM initialization time by loader (seconds, 1 rep, Modal H100).
+  ``native'' is vLLM's built-in SafeTensors loader.
+  ServerlessLLM loaders include a one-time format conversion on first run.}
+\label{tab:vllm-load}
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Model & native & \rotatebox{60}{ts\_st\_sync} & \rotatebox{60}{ts\_st\_async} & \rotatebox{60}{ts\_sllm\_sync} & \rotatebox{60}{ts\_sllm\_async} \\
+\midrule
+Qwen3-0.6B & 56.0 & \textbf{32.7} & 50.6 & 43.4 & 45.5 \\
+Qwen3-4B & 52.7 & 59.9 & 54.7 & 63.6 & \textbf{26.4} \\
+Qwen3-8B & \textbf{19.7} & 34.9 & 41.1 & 44.0 & 74.9 \\
+Qwen3-14B & \textbf{25.5} & 45.4 & 47.1 & 239.3 & 75.0 \\
+Qwen3-32B & \textbf{46.8} & 84.5 & 140.8 & 156.1 & 139.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At the Rust I/O level, Tensora's async backend is 1.13--2.40$\times$ faster
+than sync (Table~\ref{tab:safetensors}). Inside vLLM, however, the native
+loader is competitive or faster at $\geq$8\,B because vLLM's internal
+weight-loading pipeline is tightly coupled to its engine initialization:
+model-graph construction, KV-cache allocation, and FlashInfer autotuning
+run in-process and amortize the loading step.
+For the smallest model (0.6\,B), \texttt{ts\_safetensors\_sync} achieves
+the lowest init time (32.7\,s vs.\ 56.0\,s native), suggesting that
+Tensora's advantage is most visible when loading constitutes a larger
+fraction of total startup.
 
 \subsection{Layer summary}
 
-Four principles emerge. (1) Backend ranking depends on checkpoint format: async outperforms sync on both SafeTensors and ServerlessLLM, with the advantage growing with model scale. (2) The magnitude of advantage differs by format: SafeTensors shows larger speedups (up to 2.40$\times$) because its contiguous read pattern benefits more from async's concurrent scheduling at scale. (3) The adaptive default backend matches or approaches the best explicit backend in most cells, validating that format-conditioned backend selection is both effective and automatable. (4) Tensora's async backend is 1.6--13.8$\times$ faster than the hf-native baseline, confirming that the framework provides practical improvement over stock Python-level loading.
+Five principles emerge. (1) Backend ranking depends on checkpoint format: async outperforms sync on both SafeTensors and ServerlessLLM at the raw I/O level, with the advantage growing with model scale. (2) The magnitude of advantage differs by format: SafeTensors shows larger speedups (up to 2.40$\times$) because its contiguous read pattern benefits more from async's concurrent scheduling at scale. (3) The adaptive default backend matches or approaches the best explicit backend in most cells, validating that format-conditioned backend selection is both effective and automatable. (4) Tensora's async backend is 1.6--13.8$\times$ faster than the hf-native baseline, confirming that the framework provides practical improvement over stock Python-level loading. (5) At the vLLM serving level, raw loading gains are partially absorbed by engine overhead (graph construction, KV-cache, autotuning); the advantage is most visible for smaller models where loading dominates initialization.

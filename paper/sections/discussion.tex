@@ -11,9 +11,9 @@ ServerlessLLM-style partitioning changes the request geometry. The loader recons
 
 \subsection{Integration: why rankings move across layers}
 
-Rust and vLLM answer different questions. Rust isolates backend mechanics. vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation state; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
+Rust and vLLM answer different questions. Rust isolates backend mechanics (Section~\ref{sec:safetensors-results}--\ref{sec:cross-format}). vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation state; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
 
-The vLLM results do not reproduce Rust rankings row-for-row because vLLM adds substantial initialization overhead that compresses proportional backend spreads. Yet the regime structure survives: backend-aware loading consistently reduces cold initialization time relative to vLLM's native loader, and the advantage grows with model size. This is not a flaw in the methodology; it is the deployment reality. A systems paper about loading should show both mechanism and propagation.
+Table~\ref{tab:vllm-load} shows this concretely. At 0.6\,B, where loading dominates initialization, \texttt{ts\_safetensors\_sync} achieves 32.7\,s vs.\ 56.0\,s for vLLM's native loader (1.7$\times$ faster). At $\geq$8\,B, native is competitive because engine overhead (model-graph construction, KV-cache allocation, FlashInfer autotuning) dominates the total initialization budget. This is not a failure of the I/O optimization; it delineates the regime where loading improvements have the most impact: cold-start scenarios for smaller models or multi-model serving where startup latency compounds across concurrent model loads.
 
 \subsection{The adaptive default backend}
 

@@ -163,6 +163,9 @@ class VllmProfiler:
                 "HF_HOME": HF_CACHE_MOUNT,
                 "HF_HUB_DISABLE_XET": "1",
                 "VLLM_LOGGING_LEVEL": "CRITICAL",
+                "VLLM_USE_DEEP_GEMM": "0",
+                "VLLM_MOE_USE_DEEP_GEMM": "0",
+                "VLLM_DEEP_GEMM_WARMUP": "skip",
                 "TOKENIZERS_PARALLELISM": "false",
             },
         )
