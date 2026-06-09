@@ -45,7 +45,12 @@ class VllmReport:
 
         Columns: model, loader, benchmark_kind, rep, init_ms, ttft_ms, first_token_ms
         """
-        header = "model\tloader\tbenchmark_kind\trep\tinit_ms\tttft_ms\tfirst_token_ms\tdecode_avg_ms\tdecode_min_ms\tdecode_max_ms"
+        cols = [
+            "model", "loader", "benchmark_kind", "rep",
+            "init_ms", "ttft_ms", "first_token_ms",
+            "decode_avg_ms", "decode_min_ms", "decode_max_ms",
+        ]
+        header = "\t".join(cols)
         rows = [header] + [r.to_tsv_row() for r in self.results]
         return "\n".join(rows) + "\n"
 
