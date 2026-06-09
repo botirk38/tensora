@@ -50,11 +50,10 @@ Python & 3.12 \\
 
 \subsection{Backends, layouts, and model ladder}
 
-The Rust layer evaluates two explicit I/O backends plus an adaptive selector:
+The Rust layer evaluates two explicit I/O backends:
 \begin{itemize}
 \item \textbf{sync}: blocking POSIX reads with dynamic chunking and host-side parallelism,
-\item \textbf{async}: Tokio-based loading with dynamic batching and per-file grouping,
-\item \textbf{default}: adaptive selector that chooses a backend based on checkpoint layout, model scale, and platform capability.
+\item \textbf{async}: Tokio-based loading with dynamic batching and per-file grouping.
 \end{itemize}
 
 The two layouts are \textbf{SafeTensors}, a whole-file or multi-shard contiguous layout, and \textbf{ServerlessLLM-style partitioning}\footnote{This paper evaluates a partitioned range layout inspired by the ServerlessLLM checkpoint format~\cite{serverlessllm_repo}. The conversion procedure produces index files and partition files matching ServerlessLLM's structure, but the benchmarks measure Tensora's own read-planning and backend layers against this layout, not the ServerlessLLM system's tiered loading pipeline (Section~\ref{sec:related_work}).}, an indexed layout accessed through grouped range reads. Memory-mapped APIs are exposed for lazy Python access but are not treated as eager cold-load backends in the Rust matrix.

@@ -9,7 +9,7 @@ A format parser should produce the same read plan regardless of backend, so timi
 
 \subsection{Architecture}
 
-Tensora separates format parsing, backend execution, and evaluation (Figure~\ref{fig:tensora-arch}). The \textbf{format layer} parses checkpoint metadata and produces a request-local read plan: files, byte ranges, tensor names, and expected sizes. The \textbf{backend layer} executes reads through an explicit backend (sync, async, or the adaptive default) selected by the caller. The \textbf{evaluation layer} contains the Rust profiler and vLLM experiments; Python bindings bridge the integration path.
+Tensora separates format parsing, backend execution, and evaluation (Figure~\ref{fig:tensora-arch}). The \textbf{format layer} parses checkpoint metadata and produces a request-local read plan: files, byte ranges, tensor names, and expected sizes. The \textbf{backend layer} executes reads through an explicit backend (sync or async) selected by the caller. The \textbf{evaluation layer} contains the Rust profiler and vLLM experiments; Python bindings bridge the integration path.
 
 \begin{figure}[t]
   \centering
@@ -20,7 +20,7 @@ Tensora separates format parsing, backend execution, and evaluation (Figure~\ref
     arr/.style={->, >=latex, thick},
   ]
     \node[box] (fmt) {Format layer\\metadata $\rightarrow$ read plan};
-    \node[box, right=1.1cm of fmt] (be) {Backend\\sync / async / default};
+    \node[box, right=1.1cm of fmt] (be) {Backend\\sync / async};
     \node[box, right=1.1cm of be] (out) {Tensor buffers\\Rust / Python FFI};
     \node[box, below=1.0cm of be] (ev) {Evaluation harness\\timing + cache state};
     \draw[arr] (fmt) -- (be);
@@ -52,8 +52,6 @@ This surface is deliberately small. SafeTensors mostly exercises whole-file and 
 The \textbf{sync} backend uses blocking POSIX reads with practical host-side parallelism for large files. It is not a strawman serial baseline; its performance on small SafeTensors loads reflects real low-overhead bulk I/O where orchestration cost is minimal.
 
 The \textbf{async} backend is built on Tokio. It groups work per file, batches dynamically, and avoids unnecessary task fanout. Its concurrent scheduling model amortizes per-request overhead when many operations are in flight, which becomes advantageous for larger SafeTensors workloads and for ServerlessLLM's range-dominated access pattern.
-
-The \textbf{default} backend is an adaptive selector that chooses between sync and async (or \texttt{io\_uring} when available) based on checkpoint layout, model scale, and platform capability. It is designed to match or approach the best explicit backend at each point in the format$\times$scale space without requiring manual backend selection.
 
 On platforms where \texttt{io\_uring} is available (bare-metal Linux with kernel $\geq$ 5.6), Tensora also exposes an \textbf{\texttt{io\_uring}} backend with persistent rings, batched submissions, and workload-dependent chunk planning. This backend is unavailable on Modal's gVisor containers (\texttt{ENOSYS}) and is therefore not part of the primary evaluation.
 

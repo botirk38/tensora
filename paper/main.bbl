@@ -75,6 +75,12 @@ ServerlessLLM Contributors.
 \newblock \url{https://huggingface.co/docs/accelerate}, 2024.
 \newblock Checkpoint loading and model sharding utilities.
 
+\bibitem{tensorstore_docs}
+{Google}.
+\newblock Tensorstore: High-performance multi-dimensional array storage.
+\newblock \url{https://google.github.io/tensorstore/}, 2024.
+\newblock Accessed: April 2026.
+
 \bibitem{blitzscale}
 Zizhao Mo et~al.
 \newblock Blitzscale: Efficient large model serving with elastic {GPU} resource

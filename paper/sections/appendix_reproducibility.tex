@@ -174,7 +174,7 @@ Mistral-7B & ServerlessLLM & 22\,832 & 17\,886 & 18\,610 \\
 \end{tabular}
 \end{table}
 
-Two regime findings transfer. First, \textbf{async outperforms sync on ServerlessLLM} for both models: by 1.28$\times$ on Mistral-7B (17\,886~ms vs 22\,832~ms). The structural claim that partitioned layouts favour non-sync backends holds across checkpoint families. Second, Qwen3-8B SafeTensors confirms the main-matrix finding: async (5\,412~ms) outperforms sync (6\,064~ms) by 1.12$\times$, and the default backend (5\,376~ms) matches async closely.
+Two regime findings transfer. First, \textbf{async outperforms sync on ServerlessLLM} for both models: by 1.28$\times$ on Mistral-7B (17\,886~ms vs 22\,832~ms). The structural claim that partitioned layouts favour non-sync backends holds across checkpoint families. Second, Qwen3-8B SafeTensors confirms the main-matrix finding: async (5\,412~ms) outperforms sync (6\,064~ms) by 1.12$\times$.
 
 Mistral-7B's ServerlessLLM spread (1.28$\times$) is narrower than Qwen3-8B's main-matrix ratio (1.38$\times$), consistent with Mistral's different shard geometry (3 shards of $\sim$9.7\,GB each vs Qwen3-8B's 5 shards of $\sim$3.3\,GB), which reduces the concurrency advantage that async exploits. The regime structure transfers; the effect size is geometry-dependent.
 
