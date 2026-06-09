@@ -25,27 +25,20 @@ mod linux {
         batch::{coalesce_requests, group_requests_by_file},
         buffer_slice::BufferSlice,
         byte::OwnedBytes,
-        file_chunk_plan, get_buffer_pool, range_batch_plan,
+        file_chunk_plan, range_batch_plan,
     };
+    use super::super::odirect::{AlignedBuffer, open_prefer_direct, read_direct, round_up_to_block};
+    use super::super::get_buffer_pool;
     use super::IndexedLoadResult;
-    use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::thread;
 
-    #[inline]
-    const fn div_ceil(a: usize, b: usize) -> usize {
-        a.div_ceil(b)
-    }
-
     pub fn load(path: &Path) -> IoResult<OwnedBytes> {
         use super::super::MAX_SINGLE_READ;
-        use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read,
-        };
 
-        let mut file = File::open(path)?;
+        let (mut file, direct) = open_prefer_direct(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
 
@@ -57,135 +50,128 @@ mod linux {
             return load_chunked(path, file_chunk_plan(len, BackendKind::Sync).chunk_count);
         }
 
-        if can_use_direct_read(len, len) {
-            match open_direct_read(path) {
-                Ok(mut direct_file) => {
-                    let mut buf = alloc_aligned_buf(len)?;
-                    buf.set_len(len);
-                    direct_file.read_exact(buf.as_mut_slice())?;
-                    return Ok(OwnedBytes::Aligned(buf));
-                }
-                Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
-                Err(err) => return Err(err),
-            }
+        if direct {
+            let aligned_len = round_up_to_block(len);
+            let mut buf = AlignedBuffer::new(aligned_len)?;
+            buf.set_len(aligned_len);
+            read_direct(&mut file, buf.as_mut_slice(), len)?;
+            buf.set_len(len);
+            Ok(OwnedBytes::Aligned(buf))
+        } else {
+            let mut buf = get_buffer_pool().get(len);
+            file.read_exact(&mut buf[..])?;
+            Ok(OwnedBytes::Pooled(buf))
         }
-
-        let mut buf = get_buffer_pool().get(len);
-        file.read_exact(&mut buf[..])?;
-        Ok(OwnedBytes::Pooled(buf))
     }
 
     fn load_chunked(path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
-        use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, can_use_direct_read, open_direct_read,
-        };
-
         if chunks == 0 {
             return Err(std::io::Error::other("chunks must be > 0"));
         }
 
-        let file = File::open(path)?;
+        let (file, direct) = open_prefer_direct(path)?;
         let file_size = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         let plan = file_chunk_plan(file_size, BackendKind::Sync);
         let chunks = chunks.min(plan.chunk_count).max(1);
-        let chunk_size = plan.chunk_size.min(div_ceil(file_size, chunks).max(1));
+        let raw_chunk = plan.chunk_size.min(file_size.div_ceil(chunks).max(1));
+        let chunk_size = if direct { round_up_to_block(raw_chunk) } else { raw_chunk };
+        drop(file);
 
-        if can_use_direct_read(file_size, chunk_size) {
-            match open_direct_read(path) {
-                Ok(_) => {
-                    drop(file);
-                    let mut final_buf = alloc_aligned_buf(file_size)?;
-                    final_buf.set_len(file_size);
+        if direct {
+            let aligned_total = round_up_to_block(file_size);
+            let mut final_buf = AlignedBuffer::new(aligned_total)?;
+            final_buf.set_len(aligned_total);
 
-                    let handles: Vec<_> = (0..chunks)
-                        .map(|i| {
-                            let start = i * chunk_size;
-                            let end = std::cmp::min(start + chunk_size, file_size);
-                            if start >= end {
-                                return None;
-                            }
-                            let chunk_slice = final_buf.as_mut_slice().get_mut(start..end)?;
-                            let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
-                            let path_clone = path.to_path_buf();
-                            Some(thread::spawn(move || {
-                                let mut f = open_direct_read(path_clone.as_path())?;
-                                f.seek(SeekFrom::Start(start as u64))?;
-                                let s = unsafe { buffer_slice.as_mut_slice() };
-                                f.read_exact(s)?;
-                                IoResult::Ok(())
-                            }))
-                        })
-                        .collect();
-
-                    for h in handles.into_iter().flatten() {
-                        h.join()
-                            .map_err(|_| std::io::Error::other("thread panicked"))??;
+            let handles: Vec<_> = (0..chunks)
+                .map(|i| {
+                    let start = i * chunk_size;
+                    let end = std::cmp::min(start + chunk_size, file_size);
+                    if start >= end {
+                        return None;
                     }
-                    return Ok(OwnedBytes::Aligned(final_buf));
-                }
-                Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
-                Err(err) => return Err(err),
+                    let read_len = round_up_to_block(end - start);
+                    let buf_end = std::cmp::min(start + read_len, aligned_total);
+                    let chunk_slice = final_buf.as_mut_slice().get_mut(start..buf_end)?;
+                    let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
+                    let path_clone = path.to_path_buf();
+                    let actual_len = end - start;
+                    Some(thread::spawn(move || {
+                        let (mut f, _) = open_prefer_direct(path_clone.as_path())?;
+                        f.seek(SeekFrom::Start(start as u64))?;
+                        let s = unsafe { buffer_slice.as_mut_slice() };
+                        read_direct(&mut f, s, actual_len)?;
+                        IoResult::Ok(())
+                    }))
+                })
+                .collect();
+
+            for h in handles.into_iter().flatten() {
+                h.join()
+                    .map_err(|_| std::io::Error::other("thread panicked"))??;
             }
-        }
+            final_buf.set_len(file_size);
+            Ok(OwnedBytes::Aligned(final_buf))
+        } else {
+            let mut final_buf = get_buffer_pool().get(file_size);
+            let handles: Vec<_> = (0..chunks)
+                .map(|i| {
+                    let start = i * chunk_size;
+                    let end = std::cmp::min(start + chunk_size, file_size);
+                    if start >= end {
+                        return None;
+                    }
+                    let chunk_slice = final_buf.as_mut_slice().get_mut(start..end)?;
+                    let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
+                    let path_clone = path.to_path_buf();
+                    Some(thread::spawn(move || {
+                        let mut f = std::fs::File::open(path_clone)?;
+                        f.seek(SeekFrom::Start(start as u64))?;
+                        let s = unsafe { buffer_slice.as_mut_slice() };
+                        f.read_exact(s)?;
+                        IoResult::Ok(())
+                    }))
+                })
+                .collect();
 
-        let mut final_buf = get_buffer_pool().get(file_size);
-        let handles: Vec<_> = (0..chunks)
-            .map(|i| {
-                let start = i * chunk_size;
-                let end = std::cmp::min(start + chunk_size, file_size);
-                if start >= end {
-                    return None;
-                }
-                let chunk_slice = final_buf.as_mut_slice().get_mut(start..end)?;
-                let mut buffer_slice = unsafe { BufferSlice::from_slice(chunk_slice) };
-                let path_clone = path.to_path_buf();
-                Some(thread::spawn(move || {
-                    let mut f = File::open(path_clone)?;
-                    f.seek(SeekFrom::Start(start as u64))?;
-                    let s = unsafe { buffer_slice.as_mut_slice() };
-                    f.read_exact(s)?;
-                    IoResult::Ok(())
-                }))
-            })
-            .collect();
-
-        for h in handles.into_iter().flatten() {
-            h.join()
-                .map_err(|_| std::io::Error::other("thread panicked"))??;
+            for h in handles.into_iter().flatten() {
+                h.join()
+                    .map_err(|_| std::io::Error::other("thread panicked"))??;
+            }
+            final_buf.truncate(file_size);
+            Ok(OwnedBytes::Pooled(final_buf))
         }
-        final_buf.truncate(file_size);
-        Ok(OwnedBytes::Pooled(final_buf))
     }
 
     pub fn load_range(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
-        use super::super::odirect::{
-            alloc_aligned as alloc_aligned_buf, is_block_aligned, open_direct_read,
-        };
-
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
 
-        if is_block_aligned(offset, len) {
-            match open_direct_read(path) {
-                Ok(mut file) => {
-                    let mut buf = alloc_aligned_buf(len)?;
-                    buf.set_len(len);
-                    file.seek(SeekFrom::Start(offset))?;
-                    file.read_exact(buf.as_mut_slice())?;
-                    return Ok(OwnedBytes::Aligned(buf));
-                }
-                Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
-                Err(err) => return Err(err),
-            }
-        }
+        let (mut file, direct) = open_prefer_direct(path)?;
 
-        let mut file = File::open(path)?;
-        file.seek(SeekFrom::Start(offset))?;
-        let mut buf = get_buffer_pool().get(len);
-        file.read_exact(&mut buf[..])?;
-        Ok(OwnedBytes::Pooled(buf))
+        if direct {
+            let aligned_offset = offset & !(super::super::odirect::BLOCK_SIZE_U64 - 1);
+            let head_skip = (offset - aligned_offset) as usize;
+            let aligned_len = round_up_to_block(head_skip + len);
+
+            file.seek(SeekFrom::Start(aligned_offset))?;
+            let mut buf = AlignedBuffer::new(aligned_len)?;
+            buf.set_len(aligned_len);
+            read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
+
+            if head_skip == 0 {
+                buf.set_len(len);
+                return Ok(OwnedBytes::Aligned(buf));
+            }
+            let slice = &buf.as_slice()[head_skip..head_skip + len];
+            Ok(OwnedBytes::Shared(Arc::from(slice)))
+        } else {
+            file.seek(SeekFrom::Start(offset))?;
+            let mut buf = get_buffer_pool().get(len);
+            file.read_exact(&mut buf[..])?;
+            Ok(OwnedBytes::Pooled(buf))
+        }
     }
 
     pub fn load_range_batch(

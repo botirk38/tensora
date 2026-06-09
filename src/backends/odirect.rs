@@ -13,17 +13,21 @@ use std::ptr::NonNull;
 pub const BLOCK_SIZE: usize = 4096;
 pub const BLOCK_SIZE_U64: u64 = 4096;
 
+#[cfg(test)]
 #[inline]
 pub const fn is_block_aligned(offset: u64, len: usize) -> bool {
     (offset & (BLOCK_SIZE_U64 - 1)) == 0 && len.is_multiple_of(BLOCK_SIZE)
 }
 
 #[inline]
-pub const fn can_use_direct_read(file_size: usize, chunk_size: usize) -> bool {
-    file_size > 0
-        && is_block_aligned(0, file_size)
-        && chunk_size.is_multiple_of(BLOCK_SIZE)
-        && file_size.is_multiple_of(chunk_size)
+pub const fn round_up_to_block(n: usize) -> usize {
+    (n + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
+}
+
+#[allow(dead_code)]
+#[inline]
+pub const fn round_up_to_block_u64(n: u64) -> u64 {
+    (n + BLOCK_SIZE_U64 - 1) & !(BLOCK_SIZE_U64 - 1)
 }
 
 pub struct AlignedBuffer {
@@ -103,17 +107,42 @@ impl std::fmt::Debug for AlignedBuffer {
 
 unsafe impl Send for AlignedBuffer {}
 
+/// Try O_DIRECT, fall back to regular open if the filesystem doesn't support it.
 #[inline]
-pub fn alloc_aligned(capacity: usize) -> IoResult<AlignedBuffer> {
-    AlignedBuffer::new(capacity)
-}
-
-#[inline]
-pub fn open_direct_read(path: &Path) -> IoResult<std::fs::File> {
-    StdOpenOptions::new()
+pub fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
+    match StdOpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECT)
         .open(path)
+    {
+        Ok(f) => Ok((f, true)),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+            let f = std::fs::File::open(path)?;
+            Ok((f, false))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Read exactly `actual_len` bytes into an aligned buffer of `aligned_len`.
+///
+/// O_DIRECT reads at EOF may return short (kernel reads aligned blocks, but
+/// the file may be shorter than `aligned_len`). This loops until `actual_len`
+/// bytes are read, which is all we actually need.
+pub fn read_direct(file: &mut std::fs::File, buf: &mut [u8], actual_len: usize) -> IoResult<()> {
+    use std::io::Read;
+    let mut pos = 0;
+    while pos < actual_len {
+        let n = file.read(&mut buf[pos..])?;
+        if n == 0 {
+            return Err(IoError::new(
+                ErrorKind::UnexpectedEof,
+                format!("O_DIRECT short read: got {pos} of {actual_len} bytes"),
+            ));
+        }
+        pos += n;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -139,21 +168,20 @@ mod tests {
     }
 
     #[test]
-    fn can_use_direct_read_zero_file() {
-        assert!(!can_use_direct_read(0, BLOCK_SIZE));
+    fn round_up_to_block_aligned() {
+        assert_eq!(round_up_to_block(BLOCK_SIZE), BLOCK_SIZE);
+        assert_eq!(round_up_to_block(BLOCK_SIZE * 4), BLOCK_SIZE * 4);
     }
 
     #[test]
-    fn can_use_direct_read_aligned() {
-        assert!(can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE));
-        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE));
-        assert!(can_use_direct_read(BLOCK_SIZE * 4, BLOCK_SIZE * 2));
+    fn round_up_to_block_unaligned() {
+        assert_eq!(round_up_to_block(1), BLOCK_SIZE);
+        assert_eq!(round_up_to_block(BLOCK_SIZE + 1), BLOCK_SIZE * 2);
     }
 
     #[test]
-    fn can_use_direct_read_unaligned() {
-        assert!(!can_use_direct_read(BLOCK_SIZE + 1, BLOCK_SIZE));
-        assert!(!can_use_direct_read(BLOCK_SIZE, BLOCK_SIZE + 1));
+    fn round_up_to_block_zero() {
+        assert_eq!(round_up_to_block(0), 0);
     }
 
     #[test]
@@ -186,8 +214,8 @@ mod tests {
     }
 
     #[test]
-    fn alloc_aligned_works() {
-        let buf = alloc_aligned(BLOCK_SIZE).unwrap();
+    fn aligned_buffer_new_works() {
+        let buf = AlignedBuffer::new(BLOCK_SIZE).unwrap();
         assert_eq!(buf.capacity(), BLOCK_SIZE);
         assert_eq!(buf.len(), 0);
     }

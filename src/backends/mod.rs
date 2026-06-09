@@ -288,7 +288,7 @@ pub use std::io::Result as IoResult;
 pub fn backend_capabilities() -> BackendCapabilities {
     BackendCapabilities::new(
         sync_io::availability(),
-        async_io::availability(),
+        async_io::TokioReader::availability(),
         mmap::availability(),
         io_uring_availability(),
     )
