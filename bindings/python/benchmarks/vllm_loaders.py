@@ -88,7 +88,7 @@ def register_tensora_loader() -> None:
             backend = extra.get("backend")
             if fmt not in {"safetensors", "serverlessllm"}:
                 raise ValueError(f"unsupported tensora format: {fmt}")
-            if backend not in {"default", "sync", "io_uring"}:
+            if backend not in {"default", "sync", "async", "io_uring"}:
                 raise ValueError(f"unsupported tensora backend: {backend}")
 
             original_load_format = self.load_config.load_format

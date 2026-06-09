@@ -1,95 +1,83 @@
 \section{Experimental Setup}
 \label{sec:experimental_setup}
 
-The evaluation is designed to separate mechanism from deployment impact. A Rust benchmark isolates backend execution. A vLLM benchmark measures the serving-engine boundary; its results include Python integration overhead through Tensora's Python bindings. The same timing number should not be interpreted the same way across all layers.
+The evaluation is designed to measure how checkpoint format and model scale affect I/O backend performance. A Rust benchmark isolates backend execution; a vLLM benchmark measures serving-engine initialization; an external baseline compares against upstream loading.
 
 \subsection{Measurement layers}
 
 \begin{enumerate}
 \item \textbf{Rust backend attribution.} Measures checkpoint reading, format handling, and tensor assembly through a selected backend. It excludes Python interpreter costs and serving-engine GPU initialization. This layer answers which submission mechanism is fastest for a fixed logical read plan.
-\item \textbf{vLLM integration.} Measures loading inside a serving engine, including CUDA context setup, memory pools, runtime configuration, model initialization, and time-to-first-token when requested. This layer answers whether loader choice matters in an end-to-end serving context.
+\item \textbf{vLLM integration.} Measures loading inside a serving engine, including CUDA context setup, memory pools, runtime configuration, and model initialization. This layer answers whether loader choice matters in an end-to-end serving context.
 \end{enumerate}
 
-These layers are deliberately not collapsed. A Rust result provides backend evidence; a vLLM result provides deployment evidence. The limitations section states where claims cannot move across layers.
+These layers are deliberately not collapsed. A Rust result provides backend evidence; a vLLM result provides deployment evidence.
 
 \subsection{Research questions}
 
-The study answers four questions.
+The study answers three questions.
 \begin{itemize}
-\item \textbf{RQ1: Backend attribution.} How much does backend choice affect checkpoint loading for real LLM checkpoints?
-\item \textbf{RQ2: Layout dependence.} Does changing checkpoint layout change the backend ranking?
-\item \textbf{RQ3: Serving impact.} Do loader effects survive inside vLLM initialization and TTFT?
-\item \textbf{RQ4: Environment transfer.} Does backend ordering transfer across hardware environments with different storage and kernel configurations?
+\item \textbf{RQ1: Format dependence.} Does changing checkpoint format change which I/O backend is fastest?
+\item \textbf{RQ2: Scale interaction.} How does model scale interact with format--backend combinations?
+\item \textbf{RQ3: Integration transfer.} Does backend advantage survive inside vLLM initialization, and does Tensora outperform the upstream baseline?
 \end{itemize}
 
-RQ1 and RQ2 use the Rust matrices, RQ3 uses vLLM, and RQ4 uses cross-environment comparisons.
+RQ1 and RQ2 use the Rust matrices. RQ3 uses the vLLM integration benchmarks and the hf-native baseline.
 
-\subsection{Platforms}
+\subsection{Platform}
 
-Measurements were collected on four Linux environments (Table~\ref{tab:platforms}). H100 is the primary local-NVMe site. H200 and A100 are network-storage container environments where \texttt{io\_uring} ring initialization fails with \texttt{EPERM}; they test fallback behavior rather than reproducing the exact H100 hardware path. Modal H100 is a gVisor-sandboxed container environment (Section~\ref{sec:modal-env}) used for held-out model validation and full-matrix anchoring; \texttt{io\_uring} is unavailable (\texttt{ENOSYS}) and models are fetched from the HuggingFace CDN on each cold run.
+All primary measurements were collected on Modal H100 containers (Table~\ref{tab:platform}). Each container provisions an NVIDIA H100 GPU with 32\,GB RAM and 512\,GB ephemeral NVMe. The container runs gVisor (a userspace kernel), which blocks \texttt{io\_uring} with \texttt{ENOSYS}; only sync and async backends are available. Models are downloaded from the HuggingFace CDN on each cold run, and page-cache eviction uses \texttt{posix\_fadvise(DONTNEED)}.
 
 \begin{table}[htbp]
-\caption{Experimental platforms. H100 provides local NVMe and working \texttt{io\_uring}; H200, A100, and Modal H100 provide restricted environments with blocked \texttt{io\_uring}.}
-\label{tab:platforms}
+\caption{Experimental platform. Modal H100 provides ephemeral NVMe and gVisor-sandboxed execution. \texttt{io\_uring} is unavailable.}
+\label{tab:platform}
 \centering
 \small
-\begin{tabular}{lllll}
+\begin{tabular}{ll}
 \toprule
- & \textbf{H100} & \textbf{H200} & \textbf{A100} & \textbf{Modal H100} \\
+\textbf{Property} & \textbf{Value} \\
 \midrule
-GPU & NVIDIA H100 & NVIDIA H200 & NVIDIA A100 80GB & NVIDIA H100 \\
-CPU & x86\_64 multi-core & Intel Xeon 8568Y+ & AMD EPYC 7543 & x86\_64 multi-core \\
-RAM & $\sim$180\,GB & $\sim$2\,TB & $\sim$1\,TB & 32\,GB \\
-Storage & Local NVMe & Network-attached & Network-attached & Ephemeral NVMe \\
-\texttt{io\_uring} & Available & Blocked (EPERM) & Blocked (EPERM) & Blocked (ENOSYS) \\
-Kernel & 6.x (Ubuntu 24.04) & 6.8.0-83 (Ubuntu 22.04) & 6.5.0-45 (Ubuntu 22.04) & gVisor \\
+GPU & NVIDIA H100 \\
+CPU & x86\_64 multi-core \\
+RAM & 32\,GB \\
+Storage & 512\,GB ephemeral NVMe \\
+\texttt{io\_uring} & Blocked (ENOSYS, gVisor) \\
+Kernel & gVisor (Modal) \\
+Rust & 1.92 \\
+Python & 3.12 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The final software stack used Python 3.12 and Rust 1.94. The optional vLLM dependency is pinned through \texttt{bindings/python/uv.lock} (resolved \texttt{vllm} 0.11.0). Exports record kernel and package details so that absolute timings can be interpreted with the host context.
-
 \subsection{Backends, layouts, and model ladder}
 
-The Rust layer evaluates three I/O backends:
+The Rust layer evaluates two explicit I/O backends plus an adaptive selector:
 \begin{itemize}
 \item \textbf{sync}: blocking POSIX reads with dynamic chunking and host-side parallelism,
 \item \textbf{async}: Tokio-based loading with dynamic batching and per-file grouping,
-\item \textbf{io\_uring}: Linux \texttt{io-uring} with persistent rings and workload-driven planning.
+\item \textbf{default}: adaptive selector that chooses a backend based on checkpoint layout, model scale, and platform capability.
 \end{itemize}
 
 The two layouts are \textbf{SafeTensors}, a whole-file or multi-shard contiguous layout, and \textbf{ServerlessLLM-style partitioning}\footnote{This paper evaluates a partitioned range layout inspired by the ServerlessLLM checkpoint format~\cite{serverlessllm_repo}. The conversion procedure produces index files and partition files matching ServerlessLLM's structure, but the benchmarks measure Tensora's own read-planning and backend layers against this layout, not the ServerlessLLM system's tiered loading pipeline (Section~\ref{sec:related_work}).}, an indexed layout accessed through grouped range reads. Memory-mapped APIs are exposed for lazy Python access but are not treated as eager cold-load backends in the Rust matrix.
 
-The model ladder contains six public checkpoints: \texttt{Qwen/Qwen3-0.6B}, \texttt{HuggingFaceTB/SmolLM3-3B}, \texttt{Qwen/Qwen3-4B}, \texttt{Qwen/Qwen3-8B}, \texttt{Qwen/Qwen3-14B}, and \texttt{Qwen/Qwen3-32B}. This ladder spans small, medium, and large checkpoints and includes a non-Qwen model to reduce overfitting to one family. A single model size could justify only a constant backend choice; the ladder is what exposes crossovers.
+The model ladder contains six public checkpoints: \texttt{Qwen/Qwen3-0.6B}, \texttt{HuggingFaceTB/SmolLM3-3B}, \texttt{Qwen/Qwen3-4B}, \texttt{Qwen/Qwen3-8B}, \texttt{Qwen/Qwen3-14B}, and \texttt{Qwen/Qwen3-32B}. This ladder spans small, medium, and large checkpoints and includes a non-Qwen model to reduce overfitting to one family.
+
+\subsection{External baseline}
+
+The \textbf{hf-native} baseline uses the upstream Hugging Face \texttt{safetensors} crate's \texttt{std::fs::read}-based loading path. This represents the default loading strategy available to any SafeTensors consumer without Tensora's backend-aware read planning. By comparing Tensora's backends against this baseline, we isolate the value of explicit backend selection over the standard upstream path.
 
 \subsection{Cache state and comparability}
 
-Cold-cache behavior is the primary condition for Rust eager-load measurements. A cold-cache run performs:
-\begin{enumerate}
-\item \texttt{sync},
-\item \texttt{echo 3 > /proc/sys/vm/drop\_caches},
-\item benchmark invocation.
-\end{enumerate}
-Warm-cache conditions skip the cache drop and reuse page-cache state from prior reads. On restricted containers where direct cache dropping is unavailable, the repository-supported page-cache eviction path is recorded as a methodological deviation.
+Cold-cache behavior is the primary condition for all Rust eager-load measurements. A cold-cache run performs page-cache eviction via \texttt{posix\_fadvise(DONTNEED)} followed by the benchmark invocation.
 
 Each backend receives the same logical tensor read plan for a given model and layout. Differences in wall time come from submission strategy, parallelism, chunking, coalescing, and buffer management.
 
-\subsection{Baselines and reporting}
+\subsection{Statistical methodology}
 \label{sec:baselines-reporting}
 
-The Rust matrices compare Tensora backends against one another because the purpose is backend attribution under identical format handling. The vLLM matrix includes a deployment-style baseline: \texttt{native} is vLLM's stock loading path, while loaders prefixed \texttt{ts\_} use Tensora-backed integrations through the same harness.
+All cells in the primary Rust matrix are backed by five cold-cache repetitions (180 runs across 36~cells). Medians and ranges are reported for all cells.
 
-\textbf{Statistical methodology.} The H100 Rust evaluation uses a two-tier reporting approach. The main results tables (Tables~\ref{tab:rust-safetensors}, \ref{tab:rust-serverlessllm}) present representative cold-cache runs for readability. In parallel, 18 of 36 matrix cells (Qwen3-0.6B, Qwen3-8B, and Qwen3-32B across all three backends and both formats) are backed by five-repetition anchor sets with median and range reported in Appendix~\ref{app:anchor-stats}.
-
-Where anchor ranges overlap between backends, we avoid forcing a strict ranking and instead state that the difference is not statistically separable at the resolution of five cold-cache repetitions. Separability is assessed by range overlap: if the ranges of two backends overlap, neither can be declared confidently faster. This conservative criterion is appropriate for cold-cache measurements, which have higher variance than warm-cache runs due to cache-state sensitivity. The main claims of the paper rely on large effect sizes and consistent regime patterns (e.g., sync versus \texttt{io\_uring} at SafeTensors 8B+, sync's consistent failure on ServerlessLLM), not on close-call single-cell comparisons.
-
-The Modal full anchor matrix (Section~\ref{sec:modal-anchors}) provides five-repetition support for all six models across both formats; sync and async ranges overlap at several mid-to-large cells, confirming that close differences in that size range are not statistically separable.
+Where anchor ranges overlap between backends, we avoid forcing a strict ranking and instead state that the difference is not statistically separable at the resolution of five cold-cache repetitions. Separability is assessed by range overlap: if the ranges of two backends overlap, neither can be declared confidently faster. The main claims rely on large effect sizes and consistent regime patterns (e.g., async advantage on SafeTensors, sync-never-wins on ServerlessLLM), not on close-call single-cell comparisons.
 
 \subsection{Falsification criteria}
 
-The central claim would be weakened if one fixed explicit backend dominated both layouts and all scales, if sync remained fastest for the largest H100 SafeTensors checkpoints, or if sync became the strongest backend across the ServerlessLLM matrix. It would be refined, not falsified, if another host showed the same regime changes at different model sizes.
-
-\subsection{Modal H100 environment}
-\label{sec:modal-env}
-
-A fourth environment uses Modal's serverless GPU infrastructure for two experiments: held-out model validation (Appendix~\ref{app:held-out}) and full-matrix anchoring and close-call analysis (Section~\ref{sec:modal-anchors}). Each Modal container provisions an H100 GPU with 32\,GB RAM and 512\,GB ephemeral NVMe. The container runs gVisor (a userspace kernel), which blocks \texttt{io\_uring} with \texttt{ENOSYS}; only sync and async backends are evaluated. Models are downloaded from the HuggingFace CDN on each cold run, and page-cache eviction uses \texttt{posix\_fadvise(DONTNEED)} rather than \texttt{drop\_caches}. These methodological differences mean that absolute timings are not directly comparable to the primary H100 results; the Modal experiments test regime transfer and provide statistical support, not identical millisecond reproduction.
+The central claim would be weakened if a single fixed backend dominated both layouts and all scales, if sync outperformed async at the largest SafeTensors checkpoint, or if sync became the strongest backend across the ServerlessLLM matrix.

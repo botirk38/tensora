@@ -1,13 +1,61 @@
-model	format	backend	time_ms	tensors	bytes
-Qwen/Qwen3-8B	safetensors	sync	11329.96	399	0
-Qwen/Qwen3-8B	safetensors	async	3884.04	399	0
-Qwen/Qwen3-8B	safetensors	default	5592.48	399	0
-Qwen/Qwen3-8B	serverlessllm	sync	10661.97	399	16381470720
-Qwen/Qwen3-8B	serverlessllm	async	5183.54	399	16381470720
-Qwen/Qwen3-8B	serverlessllm	default	12907.06	399	16381470720
-mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	6889.43	582	0
-mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	8595.58	582	0
-mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	10054.13	582	0
-mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	24194.84	582	28992094208
-mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	21887.66	582	28992094208
-mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	22462.50	582	28992094208
+model	format	backend	rep	time_ms	tensors	bytes
+Qwen/Qwen3-8B	safetensors	sync	1	10323.51	399	16381516776
+Qwen/Qwen3-8B	safetensors	sync	2	6238.61	399	16381516776
+Qwen/Qwen3-8B	safetensors	sync	3	5890.24	399	16381516776
+Qwen/Qwen3-8B	safetensors	sync	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-8B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	sync	5	5656.75	399	16381516776
+Qwen/Qwen3-8B	safetensors	async	1	5586.81	399	16381516776
+Qwen/Qwen3-8B	safetensors	async	2	5526.77	399	16381516776
+Qwen/Qwen3-8B	safetensors	async	3	5411.77	399	16381516776
+Qwen/Qwen3-8B	safetensors	async	4	5332.05	399	16381516776
+Qwen/Qwen3-8B	safetensors	async	5	5348.53	399	16381516776
+Qwen/Qwen3-8B	safetensors	default	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-8B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	safetensors	default	2	5325.34	399	16381516776
+Qwen/Qwen3-8B	safetensors	default	3	5396.92	399	16381516776
+Qwen/Qwen3-8B	safetensors	default	4	5374.63	399	16381516776
+Qwen/Qwen3-8B	safetensors	default	5	5377.95	399	16381516776
+Qwen/Qwen3-8B	serverlessllm	sync	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/Qwen/Qwen3-8B/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+Qwen/Qwen3-8B	serverlessllm	sync	2	11812.11	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	3	8267.27	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	4	13552.98	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	sync	5	13459.14	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	1	12914.59	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	2	14620.09	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	3	13252.23	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	4	8193.67	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	async	5	10685.49	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	1	15007.24	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	2	11817.43	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	3	12031.55	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	4	7625.26	399	16381470720
+Qwen/Qwen3-8B	serverlessllm	default	5	10585.38	399	16381470720
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	1	766472.17	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00001-of-00003.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	3	790264.10	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	4	722785.67	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	sync	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00001-of-00003.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	1	518958.63	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	2	350260.20	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	3	791161.61	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	4	363076.37	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	async	5	324156.21	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	1	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://cas-bridge.xethub.hf.co/xet-bridge-us/664dc170474f2283fa5c8659/a146bf2346fb8e75aa23a8f414848106261b88369093086e1f56e1fd081bffea?Expires=1780974674&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jYXMtYnJpZGdlLnhldGh1Yi5oZi5jby94ZXQtYnJpZGdlLXVzLzY2NGRjMTcwNDc0ZjIyODNmYTVjODY1OS9hMTQ2YmYyMzQ2ZmI4ZTc1YWEyM2E4ZjQxNDg0ODEwNjI2MWI4ODM2OTA5MzA4NmUxZjU2ZTFmZDA4MWJmZmVhKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4MDk3NDY3NH19fV19&Signature=MEQCIDh0RoN2TanMyyBDioPvMew9IidbCS%7E-bqqgEHNGIHgtAiBYzUmSJeRLqG5NwbN5DshBVpyLuV0auif%7E85z4XxUvfA__&Key-Pair-Id=K1LYXO563TGWFU&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27model-00001-of-00003.safetensors%3B+filename%3D%22model-00001-of-00003.safetensors%22%3B&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=cas%2F20260609%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260609T021114Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=52709f9599fe08f2b54c06da2730df199da2be5e777be7928f560cbb6e723df9: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00001-of-00003.safetensors: Connection Failed: tls connection init failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	3	314690.53	582	28992159440
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	4	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/mistralai/Mistral-7B-Instruct-v0.3/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	safetensors	default	5	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/model-00002-of-00003.safetensors: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	1	23348.45	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/mistralai/Mistral-7B-Instruct-v0.3/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	3	23235.50	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	4	19682.69	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	sync	5	22427.59	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	1	17407.72	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	2	19458.32	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	3	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/mistralai/Mistral-7B-Instruct-v0.3/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	4	18364.02	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	async	5	17017.36	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	1	19508.15	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	2	ERROR	0	0	Error: ProfileError("Hugging Face Hub: request error: https://huggingface.co/api/models/mistralai/Mistral-7B-Instruct-v0.3/revision/main: Connection Failed: native_tls connect failed: Connection reset by peer (os error 104)")
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	3	21914.44	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	4	17232.90	582	28992094208
+mistralai/Mistral-7B-Instruct-v0.3	serverlessllm	default	5	17712.72	582	28992094208

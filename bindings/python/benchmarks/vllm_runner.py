@@ -24,9 +24,11 @@ LOADERS = [
     "native",
     "ts_safetensors_default",
     "ts_safetensors_sync",
+    "ts_safetensors_async",
     "ts_safetensors_io_uring",
     "ts_serverlessllm_default",
     "ts_serverlessllm_sync",
+    "ts_serverlessllm_async",
     "ts_serverlessllm_io_uring",
 ]
 
@@ -34,9 +36,11 @@ LOADER_CONFIG = {
     "native": None,
     "ts_safetensors_default": {"format": "safetensors", "backend": "default"},
     "ts_safetensors_sync": {"format": "safetensors", "backend": "sync"},
+    "ts_safetensors_async": {"format": "safetensors", "backend": "async"},
     "ts_safetensors_io_uring": {"format": "safetensors", "backend": "io_uring"},
     "ts_serverlessllm_default": {"format": "serverlessllm", "backend": "default"},
     "ts_serverlessllm_sync": {"format": "serverlessllm", "backend": "sync"},
+    "ts_serverlessllm_async": {"format": "serverlessllm", "backend": "async"},
     "ts_serverlessllm_io_uring": {"format": "serverlessllm", "backend": "io_uring"},
 }
 
