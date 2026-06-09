@@ -20,7 +20,7 @@ class BuildConfig:
     rust_version: str = "1.92.0"
     repo_url: str = "https://github.com/botirk38/tensora.git"
     repo_branch: str = "devin/1780968167-paper-revamp-modal"
-    git_commit: str = "328143c"
+    git_commit: str = "81e577a"
     workspace: str = "/workspace/tensora"
 
     @property
