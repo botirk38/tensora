@@ -79,6 +79,7 @@ def register_tensora_loader() -> None:
             self.local_expert_ids: set[int] | None = None
             self.counter_before_loading_weights = 0.0
             self.counter_after_loading_weights = 0.0
+            self.enable_weights_track = None
 
         def _get_weights_iterator(
             self, source: DefaultModelLoader.Source
