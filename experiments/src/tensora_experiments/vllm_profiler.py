@@ -1,7 +1,7 @@
-"""Domain entity: VllmProfiler — Modal cls for vLLM integration benchmarks on H100.
+"""vLLM Profiler — Modal class for vLLM integration benchmarks on H100.
 
-Measures how I/O backend choice affects vLLM initialization (load_only) and
-time-to-first-token (TTFT) on Modal H100 hardware.
+Measures how I/O backend choice affects vLLM initialization (load_only),
+time-to-first-token (TTFT), and steady-state decode throughput.
 """
 
 from __future__ import annotations
@@ -12,97 +12,52 @@ import subprocess
 
 import modal
 
+from tensora_experiments.enums import BenchmarkKind, VllmLoader
 from tensora_experiments.infrastructure import (
-    EPHEMERAL_DISK_MIB,
-    GIT_COMMIT,
-    GPU,
+    BUILD,
+    COMPUTE,
     HF_CACHE_MOUNT,
-    MEMORY_MIB,
-    REPO_BRANCH,
-    REPO_URL,
-    RUST_VERSION,
-    TIMEOUT_S,
-    WORKSPACE,
     app,
     hf_volume,
+    vllm_image,
 )
-from tensora_experiments.vllm_result import VllmCellResult
+from tensora_experiments.result import VllmResult
 
-# ---------------------------------------------------------------------------
-# Container image: CUDA + Rust + tensora maturin build + vLLM
-# ---------------------------------------------------------------------------
-
-vllm_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install(
-        "build-essential",
-        "pkg-config",
-        "libssl-dev",
-        "git",
-        "curl",
-        "ca-certificates",
-    )
-    .run_commands(
-        f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
-        f"| sh -s -- -y --default-toolchain {RUST_VERSION}",
-    )
-    .env(
-        {
-            "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HF_HUB_DISABLE_XET": "1",
-            "GIT_COMMIT": GIT_COMMIT,
-        }
-    )
-    .run_commands(
-        f"git clone --depth 1 --branch {REPO_BRANCH} {REPO_URL} {WORKSPACE}",
-    )
-    .pip_install("uv")
-    .run_commands(
-        f"cd {WORKSPACE}/bindings/python && "
-        "uv sync --group torch && "
-        "uv run maturin develop --release",
-    )
-    .run_commands(
-        f"cd {WORKSPACE}/bindings/python && "
-        "uv pip install 'vllm>=0.8,<1.0'",
-    )
-)
-
-# ---------------------------------------------------------------------------
-# vLLM loader configurations
-# ---------------------------------------------------------------------------
-
-VLLM_LOADERS: dict[str, dict | None] = {
-    "native": None,
-    "ts_safetensors_sync": {"format": "safetensors", "backend": "sync"},
-    "ts_safetensors_async": {"format": "safetensors", "backend": "async"},
-    "ts_serverlessllm_sync": {"format": "serverlessllm", "backend": "sync"},
-    "ts_serverlessllm_async": {"format": "serverlessllm", "backend": "async"},
+_VLLM_ENV: dict[str, str] = {
+    "HF_HOME": HF_CACHE_MOUNT,
+    "HF_HUB_DISABLE_XET": "1",
+    "VLLM_LOGGING_LEVEL": "CRITICAL",
+    "VLLM_USE_DEEP_GEMM": "0",
+    "VLLM_MOE_USE_DEEP_GEMM": "0",
+    "VLLM_DEEP_GEMM_WARMUP": "skip",
+    "TOKENIZERS_PARALLELISM": "false",
 }
 
 
 @app.cls(
     image=vllm_image,
-    gpu=GPU,
-    ephemeral_disk=EPHEMERAL_DISK_MIB,
-    memory=MEMORY_MIB,
-    timeout=TIMEOUT_S,
-    retries=modal.Retries(max_retries=2, backoff_coefficient=2.0, initial_delay=5.0),
+    gpu=COMPUTE.gpu,
+    ephemeral_disk=COMPUTE.ephemeral_disk_mib,
+    memory=COMPUTE.memory_mib,
+    timeout=COMPUTE.timeout_s,
+    retries=modal.Retries(
+        max_retries=COMPUTE.max_retries,
+        backoff_coefficient=COMPUTE.backoff_coefficient,
+        initial_delay=COMPUTE.initial_delay_s,
+    ),
     volumes={HF_CACHE_MOUNT: hf_volume},
 )
 class VllmProfiler:
-    """Stateful vLLM benchmark executor on Modal H100 hardware.
+    """Stateful vLLM benchmark executor on Modal H100 hardware."""
 
-    Runs vLLM initialization and inference benchmarks using the
-    vllm_runner.py script from the tensora bindings.
-    """
+    _env_info: str
 
     @modal.enter()
     def validate_environment(self) -> None:
-        """Verify tensora and vLLM are importable."""
+        python_bin = f"{BUILD.workspace}/bindings/python/.venv/bin/python"
         result = subprocess.run(
             [
-                f"{WORKSPACE}/bindings/python/.venv/bin/python",
+                python_bin,
                 "-c",
                 "import tensora; import vllm; print(f'tensora OK, vLLM {vllm.__version__}')",
             ],
@@ -122,19 +77,12 @@ class VllmProfiler:
         loader: str,
         benchmark_kind: str,
         rep_offset: int = 0,
-    ) -> list[VllmCellResult]:
-        """Execute one vLLM benchmark cell.
+    ) -> list[VllmResult]:
+        """Execute one vLLM benchmark cell."""
+        loader_enum = VllmLoader(loader)
+        kind_enum = BenchmarkKind(benchmark_kind)
 
-        Args:
-            model_id: HuggingFace model ID.
-            loader: One of VLLM_LOADERS keys.
-            benchmark_kind: "load_only" or "ttft".
-            rep_offset: Base offset for rep numbering.
-
-        Returns:
-            List of VllmCellResult (one element for this single run).
-        """
-        python_bin = f"{WORKSPACE}/bindings/python/.venv/bin/python"
+        python_bin = f"{BUILD.workspace}/bindings/python/.venv/bin/python"
         cmd = [
             python_bin,
             "-m",
@@ -149,70 +97,57 @@ class VllmProfiler:
 
         print(f"[vllm-profiler] Executing: {' '.join(cmd)}")
 
+        env = {
+            **os.environ,
+            "PATH": ("/root/.cargo/bin:" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")),
+            **_VLLM_ENV,
+        }
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=COMPUTE.subprocess_timeout_s,
             check=False,
-            cwd=f"{WORKSPACE}/bindings/python",
-            env={
-                **os.environ,
-                "PATH": "/root/.cargo/bin:"
-                + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-                "HF_HOME": HF_CACHE_MOUNT,
-                "HF_HUB_DISABLE_XET": "1",
-                "VLLM_LOGGING_LEVEL": "CRITICAL",
-                "VLLM_USE_DEEP_GEMM": "0",
-                "VLLM_MOE_USE_DEEP_GEMM": "0",
-                "VLLM_DEEP_GEMM_WARMUP": "skip",
-                "TOKENIZERS_PARALLELISM": "false",
-            },
+            cwd=f"{BUILD.workspace}/bindings/python",
+            env=env,
         )
 
-        print(result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
+        print(
+            result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout,
+        )
         if result.stderr:
             print(f"[vllm-profiler:stderr] {result.stderr[-1000:]}")
 
         if result.returncode != 0:
             error_msg = result.stderr.strip()[-500:] or f"exit code {result.returncode}"
             return [
-                VllmCellResult.error_result(
+                VllmResult.error_result(
                     model=model_id,
-                    loader=loader,
-                    benchmark_kind=benchmark_kind,
+                    loader=loader_enum,
+                    benchmark_kind=kind_enum,
                     rep=rep_offset + 1,
                     error=error_msg,
                 )
             ]
 
-        # Parse JSON output from vllm_runner
-        parsed = None
-        for line in reversed(result.stdout.strip().split("\n")):
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    parsed = json.loads(line)
-                    break
-                except json.JSONDecodeError:
-                    continue
-
+        parsed = _parse_json_output(result.stdout)
         if parsed is None:
             return [
-                VllmCellResult.error_result(
+                VllmResult.error_result(
                     model=model_id,
-                    loader=loader,
-                    benchmark_kind=benchmark_kind,
+                    loader=loader_enum,
+                    benchmark_kind=kind_enum,
                     rep=rep_offset + 1,
-                    error=f"no JSON parsed from output: {result.stdout[:200]}",
+                    error=(f"no JSON parsed from output: {result.stdout[:200]}"),
                 )
             ]
 
         return [
-            VllmCellResult(
+            VllmResult(
                 model=model_id,
-                loader=loader,
-                benchmark_kind=benchmark_kind,
+                loader=loader_enum,
+                benchmark_kind=kind_enum,
                 rep=rep_offset + 1,
                 init_ms=parsed.get("init_ms", 0.0),
                 ttft_ms=parsed.get("ttft_ms", 0.0),
@@ -225,5 +160,16 @@ class VllmProfiler:
 
     @modal.method()
     def capabilities(self) -> str:
-        """Return environment info string."""
         return self._env_info
+
+
+def _parse_json_output(stdout: str) -> dict | None:
+    """Extract the last JSON object from process stdout."""
+    for line in reversed(stdout.strip().split("\n")):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return None

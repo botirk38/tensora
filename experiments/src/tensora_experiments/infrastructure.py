@@ -1,67 +1,109 @@
-"""Modal infrastructure declarations: app, image, volumes, and resource constants.
+"""Modal infrastructure: app, images, volumes, and compute configuration.
 
-This module owns all Modal resource objects. Other modules import from here
+All Modal resource objects live here. Other modules import from here
 rather than constructing Modal primitives themselves.
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 import modal
 
-# ---------------------------------------------------------------------------
-# App singleton
-# ---------------------------------------------------------------------------
+# ── Build configuration ───────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class BuildConfig:
+    """Immutable build parameters for Modal container images."""
+
+    rust_version: str = "1.92.0"
+    repo_url: str = "https://github.com/botirk38/tensora.git"
+    repo_branch: str = "devin/1780968167-paper-revamp-modal"
+    git_commit: str = "328143c"
+    workspace: str = "/workspace/tensora"
+
+    @property
+    def profile_bin(self) -> str:
+        return f"{self.workspace}/target/release/profile"
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeConfig:
+    """Immutable compute resource constants for Modal containers."""
+
+    gpu: str = "H100!"
+    ephemeral_disk_mib: int = 524_288  # 512 GiB
+    memory_mib: int = 32_768  # 32 GiB
+    timeout_s: int = 3600  # 1 h max per container
+    subprocess_timeout_s: int = 7200  # 2 h max per subprocess
+    max_retries: int = 2
+    backoff_coefficient: float = 2.0
+    initial_delay_s: float = 5.0
+
+
+BUILD = BuildConfig()
+COMPUTE = ComputeConfig()
+
+# ── App singleton ─────────────────────────────────────────────────────
 
 app = modal.App()
 
-# ---------------------------------------------------------------------------
-# Container image: Debian + Rust 1.92 + tensora profile binary
-# ---------------------------------------------------------------------------
-
-RUST_VERSION = "1.92.0"
-REPO_URL = "https://github.com/botirk38/tensora.git"
-REPO_BRANCH = "devin/1780968167-paper-revamp-modal"
-GIT_COMMIT = "7da8936"
-WORKSPACE = "/workspace/tensora"
-PROFILE_BIN = f"{WORKSPACE}/target/release/profile"
-
-image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install(
-        "build-essential",
-        "pkg-config",
-        "libssl-dev",
-        "git",
-        "curl",
-        "ca-certificates",
-    )
-    .run_commands(
-        f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
-        f"| sh -s -- -y --default-toolchain {RUST_VERSION}",
-    )
-    .env(
-        {
-            "PATH": "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "GIT_COMMIT": GIT_COMMIT,
-        }
-    )
-    .run_commands(
-        f"git clone --depth 1 --branch {REPO_BRANCH} {REPO_URL} {WORKSPACE}",
-        f"cd {WORKSPACE} && cargo build --release --bin profile",
-    )
-)
-
-# ---------------------------------------------------------------------------
-# Persistent volume: HuggingFace model weight cache
-# ---------------------------------------------------------------------------
+# ── Persistent volume: HuggingFace model cache ────────────────────────
 
 hf_volume = modal.Volume.from_name("tensora-hf-cache", create_if_missing=True)
 HF_CACHE_MOUNT = "/root/.cache/huggingface"
 
-# ---------------------------------------------------------------------------
-# Compute resource constants
-# H100! disables auto-upgrade to H200 for benchmark reproducibility.
-# ---------------------------------------------------------------------------
+# ── Rust profiler image ───────────────────────────────────────────────
 
-GPU = "H100!"
-EPHEMERAL_DISK_MIB = 524_288  # 512 GiB — minimum for H100 on Modal
-MEMORY_MIB = 32_768  # 32 GiB system RAM
-TIMEOUT_S = 3600  # 1 hour max per container lifetime
+_PATH_ENV = "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_APT_PACKAGES = [
+    "build-essential",
+    "pkg-config",
+    "libssl-dev",
+    "git",
+    "curl",
+    "ca-certificates",
+]
+
+rust_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install(*_APT_PACKAGES)
+    .run_commands(
+        f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
+        f"| sh -s -- -y --default-toolchain {BUILD.rust_version}",
+    )
+    .env({"PATH": _PATH_ENV, "GIT_COMMIT": BUILD.git_commit})
+    .run_commands(
+        f"git clone --depth 1 --branch {BUILD.repo_branch} {BUILD.repo_url} {BUILD.workspace}",
+        f"cd {BUILD.workspace} && cargo build --release --bin profile",
+    )
+)
+
+# ── vLLM profiler image ──────────────────────────────────────────────
+
+vllm_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install(*_APT_PACKAGES)
+    .run_commands(
+        f"curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
+        f"| sh -s -- -y --default-toolchain {BUILD.rust_version}",
+    )
+    .env(
+        {
+            "PATH": _PATH_ENV,
+            "HF_HUB_DISABLE_XET": "1",
+            "GIT_COMMIT": BUILD.git_commit,
+        }
+    )
+    .run_commands(
+        f"git clone --depth 1 --branch {BUILD.repo_branch} {BUILD.repo_url} {BUILD.workspace}",
+    )
+    .pip_install("uv")
+    .run_commands(
+        f"cd {BUILD.workspace}/bindings/python && "
+        "uv sync --group torch && "
+        "uv run maturin develop --release",
+        f"cd {BUILD.workspace}/bindings/python && uv pip install 'vllm>=0.8,<1.0'",
+    )
+)

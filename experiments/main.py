@@ -1,80 +1,85 @@
 """CLI entrypoint for running Tensora experiments on Modal.
 
 Usage:
-    modal run experiments/main.py --experiment held-out-validation
     modal run experiments/main.py --experiment full-anchor-matrix
-    modal run experiments/main.py --experiment targeted-anchors
-    modal run experiments/main.py --experiment held-out-validation --reps 5
-    modal run experiments/main.py --experiment vllm-load-only
-    modal run experiments/main.py --experiment vllm-full --reps 3
+    modal run experiments/main.py --experiment vllm-full --reps 5
+    modal run experiments/main.py --experiment hf-native-baseline --reps 3
 """
 
 from pathlib import Path
 
-from tensora_experiments import ExperimentMatrix, Profiler, Report, app
-from tensora_experiments.vllm_config import VllmExperimentMatrix
+from tensora_experiments.analysis import separability_analysis
+from tensora_experiments.infrastructure import app
+from tensora_experiments.matrix import RustMatrix, VllmMatrix
+from tensora_experiments.profiler import RustProfiler
+from tensora_experiments.report import Report
+from tensora_experiments.result import RustResult, VllmResult
 from tensora_experiments.vllm_profiler import VllmProfiler
-from tensora_experiments.vllm_report import VllmReport
+
+_ALL_EXPERIMENTS = RustMatrix.EXPERIMENT_NAMES + VllmMatrix.EXPERIMENT_NAMES
 
 
 @app.local_entrypoint()
 def run(
-    experiment: str = "held-out-validation",
+    experiment: str = "full-anchor-matrix",
     reps: int = 0,
     output_dir: str = "results/modal",
-    retry_tsv: str = "",
 ) -> None:
     """Execute a named experiment on Modal H100 infrastructure.
 
     Args:
-        experiment: Experiment name (Rust profiling or vLLM benchmark).
+        experiment: Experiment name (Rust or vLLM).
         reps: Override repetition count (0 = use experiment default).
         output_dir: Directory for TSV output files.
-        retry_tsv: Path to a TSV file with ERROR rows to retry. Overrides --experiment.
     """
-    # Route vLLM experiments to the vLLM profiler
-    if experiment.startswith("vllm-"):
+    if experiment in VllmMatrix.EXPERIMENT_NAMES:
         _run_vllm(experiment, reps, output_dir)
-        return
-
-    # Rust profiling experiments
-    if retry_tsv:
-        matrix = ExperimentMatrix.retry_errors(retry_tsv)
+    elif experiment in RustMatrix.EXPERIMENT_NAMES:
+        _run_rust(experiment, reps, output_dir)
     else:
-        matrix = ExperimentMatrix.from_name(experiment, reps_override=reps)
+        valid = ", ".join(_ALL_EXPERIMENTS)
+        msg = f"Unknown experiment: {experiment!r}. Valid: {valid}"
+        raise SystemExit(msg)
+
+
+def _run_rust(experiment: str, reps: int, output_dir: str) -> None:
+    effective_reps = reps if reps > 0 else 5
+    matrix = RustMatrix.from_name(experiment, reps=effective_reps)
 
     print(matrix.summary())
     print()
 
-    profiler = Profiler()
+    profiler = RustProfiler()
 
     print("--- Verifying H100 backend capabilities ---")
     print(profiler.capabilities.remote())
     print()
 
     print(f"--- Executing {matrix.total_runs} runs ---")
-    report = Report(name=matrix.name)
+    report: Report[RustResult] = Report(name=matrix.name)
 
-    for result_batch in profiler.run_cell.starmap(matrix.to_starmap_args()):
+    for result_batch in profiler.run_cell.starmap(
+        matrix.to_starmap_args(),
+    ):
         report.extend(result_batch)
 
     print()
     print(report.summary())
 
-    out_path = report.write_tsv(Path(output_dir), anchor=matrix.anchor_mode)
+    out_path = report.write_tsv(Path(output_dir))
     print(f"\nResults written to: {out_path}")
 
-    if matrix.anchor_mode:
+    if effective_reps > 1:
         print()
-        print(report.separability_analysis())
+        print(separability_analysis(report.successes))
 
     print()
-    print(report.preview(anchor=matrix.anchor_mode))
+    print(report.preview())
 
 
 def _run_vllm(experiment: str, reps: int, output_dir: str) -> None:
-    """Execute a vLLM benchmark experiment."""
-    matrix = VllmExperimentMatrix.from_name(experiment, reps_override=reps)
+    effective_reps = reps if reps > 0 else 1
+    matrix = VllmMatrix.from_name(experiment, reps=effective_reps)
 
     print(matrix.summary())
     print()
@@ -86,9 +91,11 @@ def _run_vllm(experiment: str, reps: int, output_dir: str) -> None:
     print()
 
     print(f"--- Executing {matrix.total_runs} vLLM runs ---")
-    report = VllmReport(name=matrix.name)
+    report: Report[VllmResult] = Report(name=matrix.name)
 
-    for result_batch in profiler.run_cell.starmap(matrix.to_starmap_args()):
+    for result_batch in profiler.run_cell.starmap(
+        matrix.to_starmap_args(),
+    ):
         report.extend(result_batch)
 
     print()
