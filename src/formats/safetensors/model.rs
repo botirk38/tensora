@@ -6,6 +6,16 @@
 use crate::backends;
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
+use crate::storage::MmapRequest;
+use crate::storage::buffer::{MmapRegion, OwnedBytes};
+use crate::storage::mmap::MmapStorage as MmapEngine;
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{FileReadRequest, MappableStorage, ReadableStorage};
+#[cfg(target_os = "linux")]
+use crate::storage::availability::{StorageCapabilities, StorageKind};
+#[cfg(target_os = "linux")]
+use crate::storage::io_uring::IoUringStorage;
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};
@@ -33,7 +43,7 @@ struct OwnedShard {
 }
 
 impl OwnedShard {
-    fn from_owned(buffer: backends::byte::OwnedBytes) -> ReaderResult<Self> {
+    fn from_owned(buffer: OwnedBytes) -> ReaderResult<Self> {
         let bytes: Arc<[u8]> = buffer.into_shared();
         // `read_metadata` returns (header_json_len, metadata); the actual
         // tensor data begins at header_json_len + 8 (the 8-byte length prefix).
@@ -44,7 +54,7 @@ impl OwnedShard {
     }
 
     fn from_bytes(bytes: Vec<u8>) -> ReaderResult<Self> {
-        Self::from_owned(backends::byte::OwnedBytes::Shared(bytes.into()))
+        Self::from_owned(OwnedBytes::from_vec(bytes))
     }
 
     fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
@@ -60,17 +70,17 @@ impl OwnedShard {
 /// Stores the parsed [`Metadata`] plus the original [`Mmap`] handle.
 /// Tensor data is sliced directly from the mmap on demand — no `transmute`.
 ///
-/// [`Mmap`]: backends::mmap::Mmap
+/// [`MmapRegion`]: crate::storage::buffer::MmapRegion
 #[derive(Debug, Clone)]
 struct MmapShard {
     metadata: Metadata,
     /// Offset within `mmap` at which tensor data begins.
     data_start: usize,
-    mmap: backends::mmap::Mmap,
+    mmap: MmapRegion,
 }
 
 impl MmapShard {
-    fn from_mmap(mmap: backends::mmap::Mmap) -> ReaderResult<Self> {
+    fn from_mmap(mmap: MmapRegion) -> ReaderResult<Self> {
         // `read_metadata` returns (header_json_len, metadata); the actual
         // tensor data begins at header_json_len + 8 (the 8-byte length prefix).
         let (header_json_len, metadata) = SafeTensors::read_metadata(mmap.as_slice())?;
@@ -138,7 +148,7 @@ impl OwnedSingleModel {
         Ok(Self::from_shard(OwnedShard::from_bytes(bytes)?))
     }
 
-    fn from_owned(buffer: backends::byte::OwnedBytes) -> ReaderResult<Self> {
+    fn from_owned(buffer: OwnedBytes) -> ReaderResult<Self> {
         Ok(Self::from_shard(OwnedShard::from_owned(buffer)?))
     }
 
@@ -241,7 +251,7 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = backends::backend_capabilities();
+            let capabilities = StorageCapabilities::probe();
             self.choose_backend_with_capabilities(&capabilities)
         }
         #[cfg(not(target_os = "linux"))]
@@ -256,17 +266,17 @@ impl LoadStats {
     #[cfg(target_os = "linux")]
     fn choose_backend_with_capabilities(
         &self,
-        capabilities: &backends::BackendCapabilities,
+        capabilities: &StorageCapabilities,
     ) -> LoadBackend {
         if self.shard_count >= IOURING_SHARD_THRESHOLD
             && self.total_bytes >= IOURING_BYTE_THRESHOLD
-            && capabilities.is_available(backends::Backend::IoUring)
+            && capabilities.is_available(StorageKind::IoUring)
         {
             return LoadBackend::IoUring;
         }
 
         if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
-            && capabilities.is_available(backends::Backend::Async)
+            && capabilities.is_available(StorageKind::Tokio)
         {
             return LoadBackend::TokioAsync;
         }
@@ -371,18 +381,24 @@ impl Model {
 
     #[cfg(target_os = "linux")]
     fn load_io_uring_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let mut reader = backends::io_uring::Reader::new();
+        let engine = IoUringStorage::new();
         if shard_paths.len() == 1 {
-            let bytes = reader.load(&shard_paths[0]).map_err(ReaderError::from)?;
+            let bytes = engine
+                .read_file(FileReadRequest::new(&shard_paths[0]))
+                .map_err(ReaderError::from)?;
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
             });
         }
 
-        let shard_bytes = reader.load_batch(&shard_paths)?;
-        let shards: ReaderResult<Vec<_>> = shard_bytes
-            .into_iter()
-            .map(OwnedShard::from_owned)
+        let shards: ReaderResult<Vec<_>> = shard_paths
+            .into_par_iter()
+            .map(|path| {
+                let bytes = engine
+                    .read_file(FileReadRequest::new(&path))
+                    .map_err(ReaderError::from)?;
+                OwnedShard::from_owned(bytes)
+            })
             .collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
@@ -395,10 +411,10 @@ impl Model {
     }
 
     async fn load_async_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let mut reader = backends::AsyncReader::new();
+        let engine = TokioStorage::new();
         if shard_paths.len() == 1 {
-            let bytes = reader
-                .load(&shard_paths[0])
+            let bytes = engine
+                .read_file(FileReadRequest::new(&shard_paths[0]))
                 .await
                 .map_err(ReaderError::from)?;
             return Ok(Self {
@@ -417,10 +433,15 @@ impl Model {
 
         let limit =
             backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
-        let mut shard_bytes: Vec<backends::byte::OwnedBytes> = Vec::new();
+        let mut shard_bytes: Vec<OwnedBytes> = Vec::new();
         for chunk in shard_paths.chunks(limit) {
-            let chunk_paths: Vec<_> = chunk.to_vec();
-            shard_bytes.extend(reader.load_batch(&chunk_paths).await?);
+            for path in chunk {
+                let bytes = engine
+                    .read_file(FileReadRequest::new(path))
+                    .await
+                    .map_err(ReaderError::from)?;
+                shard_bytes.push(bytes);
+            }
         }
 
         let shards: ReaderResult<Vec<_>> = shard_bytes
@@ -438,18 +459,24 @@ impl Model {
     }
 
     fn load_sync_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let mut reader = backends::SyncReader::new();
+        let engine = SyncStorage::new();
         if shard_paths.len() == 1 {
-            let bytes = reader.load(&shard_paths[0]).map_err(ReaderError::from)?;
+            let bytes = engine
+                .read_file(FileReadRequest::new(&shard_paths[0]))
+                .map_err(ReaderError::from)?;
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
             });
         }
 
-        let shard_bytes = reader.load_batch(&shard_paths)?;
-        let shards: ReaderResult<Vec<_>> = shard_bytes
-            .into_iter()
-            .map(OwnedShard::from_owned)
+        let shards: ReaderResult<Vec<_>> = shard_paths
+            .into_par_iter()
+            .map(|path| {
+                let bytes = engine
+                    .read_file(FileReadRequest::new(&path))
+                    .map_err(ReaderError::from)?;
+                OwnedShard::from_owned(bytes)
+            })
             .collect();
         Ok(Self {
             storage: ModelStorage::Sharded(OwnedShardedModel::from_shards(shards?)?),
@@ -624,13 +651,11 @@ pub struct MmapModel {
 impl MmapModel {
     pub fn open(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let shard_paths = Model::discover_shards(path)?;
+        let mapper = MmapEngine::new();
         if shard_paths.len() == 1 {
-            let path_str = shard_paths[0]
-                .to_str()
-                .ok_or_else(|| {
-                    ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
-                })?;
-            let mmap = backends::mmap::map(path_str)?;
+            let mmap = mapper
+                .map_file(MmapRequest::new(&shard_paths[0]))
+                .map_err(ReaderError::from)?;
             return Ok(Self {
                 storage: MmapStorage::Single(MmapSingleModel::from_shard(
                     MmapShard::from_mmap(mmap)?,
@@ -641,10 +666,9 @@ impl MmapModel {
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_par_iter()
             .map(|shard_path| {
-                let path_str = shard_path.to_str().ok_or_else(|| {
-                    ReaderError::InvalidMetadata("path contains invalid UTF-8".to_owned())
-                })?;
-                let mmap = backends::mmap::map(path_str)?;
+                let mmap = mapper
+                    .map_file(MmapRequest::new(&shard_path))
+                    .map_err(ReaderError::from)?;
                 MmapShard::from_mmap(mmap)
             })
             .collect();
@@ -769,7 +793,7 @@ impl TryFrom<Vec<u8>> for Model {
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
-    use crate::backends::{BackendAvailability, BackendCapabilities, BackendUnavailableReason};
+    use crate::storage::availability::{StorageAvailability, UnavailableReason};
     use crate::formats::traits::TensorView;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
@@ -905,13 +929,13 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn capabilities_with_io_uring(io_uring: BackendAvailability) -> BackendCapabilities {
-        BackendCapabilities::new(
-            BackendAvailability::Available,
-            BackendAvailability::Available,
-            BackendAvailability::Available,
+    fn capabilities_with_io_uring(io_uring: StorageAvailability) -> StorageCapabilities {
+        StorageCapabilities {
+            sync: StorageAvailability::Available,
+            tokio: StorageAvailability::Available,
+            mmap: StorageAvailability::Available,
             io_uring,
-        )
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -921,8 +945,8 @@ mod tests {
             shard_count: 5,
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
+        let capabilities = capabilities_with_io_uring(StorageAvailability::unavailable(
+            UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         ));
 
@@ -939,8 +963,8 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(BackendAvailability::unavailable(
-            BackendUnavailableReason::PermissionDenied,
+        let capabilities = capabilities_with_io_uring(StorageAvailability::unavailable(
+            UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         ));
 
