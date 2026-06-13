@@ -198,7 +198,9 @@ enum LoadBackend {
 }
 
 const MULTI_PARTITION_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(target_os = "linux")]
 const IOURING_PARTITION_THRESHOLD: usize = 4;
+#[cfg(target_os = "linux")]
 const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
 impl LoadStats {
