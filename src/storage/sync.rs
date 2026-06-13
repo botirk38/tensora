@@ -140,13 +140,20 @@ impl super::ReadableStorage for SyncStorage {
             let backing: Arc<[u8]> = raw.into_shared();
 
             for member in &group.members {
-                let start = member.relative_offset;
-                let end = start + member.len;
-                // Slice is already a sub-range of `backing`; hand off the same Arc.
-                let slice: Arc<[u8]> = Arc::from(&backing[start..end]);
+                let slice = member.data(&backing).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "member {}..{} out of bounds for read of len {}",
+                            member.relative_offset,
+                            member.relative_offset + member.len,
+                            backing.len(),
+                        ),
+                    )
+                })?;
                 results[member.request_index] = Some(RangeReadResult {
                     request_index: member.request_index,
-                    bytes: slice,
+                    bytes: Arc::from(slice),
                     logical_offset: 0,
                     logical_len: member.len,
                 });
