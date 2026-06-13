@@ -4,21 +4,16 @@
 //! On Linux it defaults to O_DIRECT where possible; on other platforms it
 //! uses buffered `std::fs` I/O.
 //!
-//! Batch reads are coalesced via a [`Batcher`], which can be configured by
-//! calling [`SyncStorage::with_batcher`].
-//!
 //! Write access is obtained by calling [`SyncStorage::create_writer`], which
 //! returns a [`SyncWriter`] that holds an open file handle and implements
 //! [`WritableStorage`].
 
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::backends::{SyncReader as BackendReader, SyncWriter as BackendWriter};
 use crate::storage::{
     BatchReadRequest, FileReadRequest, IoResult, RangeReadRequest, RangeReadResult, WriteAtRequest,
     availability::{StorageAvailability, StorageCapabilities, StorageKind},
-    batch::Batcher,
     buffer::OwnedBytes,
 };
 
@@ -36,10 +31,7 @@ use crate::storage::{
 /// let bytes = engine.read_file(FileReadRequest::new(Path::new("model.safetensors")))?;
 /// ```
 #[derive(Debug, Clone, Copy)]
-pub struct SyncStorage {
-    /// Batcher used by [`ReadableStorage::read_ranges`].
-    batcher: Batcher,
-}
+pub struct SyncStorage;
 
 impl Default for SyncStorage {
     fn default() -> Self {
@@ -47,32 +39,12 @@ impl Default for SyncStorage {
     }
 }
 
-/// Default coalesce window for `SyncStorage`. 512 KiB works well for
-/// O_DIRECT / buffered sequential reads typical of ML checkpoint loading.
-const DEFAULT_COALESCE_WINDOW: usize = 512 * 1024;
-
 impl SyncStorage {
-    /// Create a `SyncStorage` engine with the default coalesce window (512 KiB).
+    /// Create a new `SyncStorage` engine.
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self { batcher: Batcher::new(DEFAULT_COALESCE_WINDOW) }
-    }
-
-    /// Return a new engine with the given batcher.
-    ///
-    /// Use this to tune the coalesce window for your workload:
-    ///
-    /// ```rust,ignore
-    /// use tensora::storage::sync::SyncStorage;
-    /// use tensora::storage::batch::Batcher;
-    ///
-    /// let engine = SyncStorage::default().with_batcher(Batcher::new(0)); // no coalescing
-    /// ```
-    #[inline]
-    #[must_use]
-    pub const fn with_batcher(self, batcher: Batcher) -> Self {
-        Self { batcher }
+        Self
     }
 
     /// Open `path` for writing and return a [`SyncWriter`] bound to it.
@@ -127,41 +99,18 @@ impl super::ReadableStorage for SyncStorage {
     }
 
     fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
-        if req.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let plan = self.batcher.plan(&req);
-        let mut results: Vec<Option<RangeReadResult>> = (0..req.len()).map(|_| None).collect();
-
-        for group in &plan.groups {
-            let mut reader = BackendReader::new();
-            let raw = convert_bytes(reader.load_range(&group.path, group.offset, group.len)?);
-            let backing: Arc<[u8]> = raw.into_shared();
-
-            for member in &group.members {
-                let slice = member.data(&backing).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!(
-                            "member {}..{} out of bounds for read of len {}",
-                            member.relative_offset,
-                            member.relative_offset + member.len,
-                            backing.len(),
-                        ),
-                    )
-                })?;
-                results[member.request_index] = Some(RangeReadResult {
-                    request_index: member.request_index,
-                    bytes: Arc::from(slice),
-                    logical_offset: 0,
-                    logical_len: member.len,
-                });
-            }
-        }
-
-        // All slots must be filled; unwrap is safe.
-        Ok(results.into_iter().map(Option::unwrap).collect())
+        req.paths
+            .iter()
+            .zip(req.ranges.iter())
+            .enumerate()
+            .map(|(i, (path, range))| {
+                let mut reader = BackendReader::new();
+                let raw = convert_bytes(reader.load_range(path, range.offset, range.len)?);
+                let bytes = raw.into_shared();
+                let logical_len = bytes.len();
+                Ok(RangeReadResult { request_index: i, bytes, logical_offset: 0, logical_len })
+            })
+            .collect()
     }
 }
 
@@ -325,27 +274,21 @@ mod tests {
     }
 
     #[test]
-    fn read_ranges_coalesces_adjacent() {
-        // Two adjacent ranges on the same file with window=0 → one read.
+    fn read_ranges_adjacent_correct() {
+        // Two adjacent ranges on the same file are read independently.
         let dir = TempDir::new().unwrap();
         let data: Vec<u8> = (0u8..=255).collect();
-        let path = write_tmp(&dir, "coalesce.bin", &data);
+        let path = write_tmp(&dir, "adjacent.bin", &data);
         let p = path.as_path();
 
-        let engine = SyncStorage::default().with_batcher(Batcher::new(0));
         let paths = [p, p];
         let ranges = [BatchRange::new(0, 50), BatchRange::new(50, 50)];
-        let results = engine.read_ranges(BatchReadRequest::new(&paths, &ranges)).unwrap();
+        let results =
+            SyncStorage::default().read_ranges(BatchReadRequest::new(&paths, &ranges)).unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].data(), &data[0..50]);
         assert_eq!(results[1].data(), &data[50..100]);
-    }
-
-    #[test]
-    fn with_batcher_overrides_window() {
-        let e = SyncStorage::default().with_batcher(Batcher::new(0));
-        assert_eq!(e.batcher.coalesce_window_bytes, 0);
     }
 
     #[test]
