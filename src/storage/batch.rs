@@ -1,166 +1,221 @@
-//! Request grouping and coalescing for batch I/O.
+//! Batch I/O planning via [`Batcher`].
 //!
-//! Engines that support batch reads use these helpers to:
-//! 1. Group requests by file path ([`group_requests_by_file`]).
-//! 2. Merge adjacent requests within a configurable window
-//!    ([`coalesce_requests`]).
+//! [`Batcher`] is the shared entity that all engines use to turn a
+//! [`BatchReadRequest`] into a list of [`CoalescedRead`]s — merged,
+//! sorted reads that satisfy one or more of the original requests.
 //!
-//! The output of `coalesce_requests` is a flat list of
-//! [`CoalescedGroup`]s. Each group carries one read range and the list of
-//! original requests whose data lives inside it, expressed as relative offsets.
+//! # Why a struct, not free functions?
+//!
+//! The coalescing window is an engine-level tuning knob. Different engines
+//! (sync, tokio, io_uring) want different windows; wrapping the parameter in a
+//! struct lets each engine hold a pre-configured `Batcher` and pass it to
+//! `plan()` without repeating the window at every call site.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tensora::storage::batch::{Batcher, BatchPlan};
+//! use tensora::storage::BatchReadRequest;
+//!
+//! let batcher = Batcher::new(512 * 1024); // 512 KiB coalesce window
+//! let plan: BatchPlan = batcher.plan(&req);
+//! for read in &plan.groups {
+//!     // issue one I/O for read.len bytes at read.offset in read.path
+//! }
+//! ```
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+use super::BatchReadRequest;
 
 // ============================================================================
-// Internal types
+// Output types
 // ============================================================================
 
-/// An original request annotated with its position in the caller's slice.
-#[derive(Debug, Clone)]
-pub struct IndexedRequest {
-    /// Index of this request in the caller's original input slice.
-    pub idx: usize,
-    /// Byte offset within the file.
-    pub offset: u64,
-    /// Number of bytes requested.
-    pub len: usize,
-}
-
-/// One original request's position within a [`CoalescedGroup`].
+/// One original request's position inside a [`CoalescedRead`].
 #[derive(Debug, Clone)]
 pub struct CoalescedMember {
-    /// Original request index.
-    pub idx: usize,
-    /// Byte offset of this member's data relative to the start of the group.
+    /// Index of this request in the original [`BatchReadRequest`].
+    pub request_index: usize,
+    /// Byte offset of this member's data relative to the start of the merged read.
     pub relative_offset: usize,
     /// Number of bytes for this member.
     pub len: usize,
 }
 
-/// A merged I/O group: one contiguous read that satisfies one or more original
-/// requests.
+/// A single merged read that satisfies one or more original requests.
 #[derive(Debug, Clone)]
-pub struct CoalescedGroup {
-    /// File to read from.
+pub struct CoalescedRead {
+    /// File to read.
     pub path: PathBuf,
-    /// Byte offset of the group's start within the file.
+    /// Byte offset of the merged read within the file.
     pub offset: u64,
     /// Total byte length of the merged read.
     pub len: usize,
-    /// The original requests whose data lives inside this group.
+    /// The original requests whose data lives inside this read.
     pub members: Vec<CoalescedMember>,
 }
 
-// ============================================================================
-// Result types
-// ============================================================================
-
-/// Intermediate per-request result before ordering is restored.
-///
-/// `(original_index, backing_arc, logical_offset_within_arc, logical_len)`
-pub type BatchResult = (usize, Arc<[u8]>, usize, usize);
-
-/// Final per-request result after ordering has been restored.
-///
-/// `(backing_arc, logical_offset, logical_len)`
-pub type FlattenedResult = (Arc<[u8]>, usize, usize);
-
-// ============================================================================
-// Public functions
-// ============================================================================
-
-/// Group a flat list of `(path, offset, len)` tuples by file path.
-///
-/// The returned map preserves insertion order within each file's request list.
-pub fn group_requests_by_file(
-    requests: &[(impl AsRef<Path>, u64, usize)],
-) -> HashMap<PathBuf, Vec<IndexedRequest>> {
-    requests.iter().enumerate().fold(HashMap::new(), |mut acc, (idx, (path, offset, len))| {
-        acc.entry(path.as_ref().to_path_buf()).or_default().push(IndexedRequest {
-            idx,
-            offset: *offset,
-            len: *len,
-        });
-        acc
-    })
+impl CoalescedRead {
+    /// Resolve a member's data from the raw bytes returned for this read.
+    ///
+    /// Returns `None` if the member's range is out of bounds for `raw`.
+    #[inline]
+    pub fn member_slice<'a>(&self, member: &CoalescedMember, raw: &'a [u8]) -> Option<&'a [u8]> {
+        let start = member.relative_offset;
+        let end = start.checked_add(member.len)?;
+        raw.get(start..end)
+    }
 }
 
-/// Coalesce per-file request groups into merged read ranges.
+/// The result of [`Batcher::plan`]: a set of merged reads in file-offset order.
+#[derive(Debug)]
+pub struct BatchPlan {
+    /// Merged reads to issue, in arbitrary order across files.
+    pub groups: Vec<CoalescedRead>,
+    /// Number of original requests covered by this plan (always == input batch size).
+    pub request_count: usize,
+}
+
+impl BatchPlan {
+    /// Returns `true` if there are no reads to issue.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+}
+
+// ============================================================================
+// Batcher
+// ============================================================================
+
+/// Plans a [`BatchReadRequest`] into coalesced reads.
 ///
-/// Requests within the same file that are within `window_bytes` of each other
-/// are merged into a single read. Requests are sorted by offset before
-/// coalescing.
-pub fn coalesce_requests(
-    grouped: HashMap<PathBuf, Vec<IndexedRequest>>,
-    window_bytes: usize,
-) -> Vec<CoalescedGroup> {
-    let mut groups = Vec::new();
+/// Adjacent requests within the same file that are within
+/// `coalesce_window_bytes` of each other are merged into a single read.
+/// Setting the window to `0` still merges requests that are exactly touching.
+///
+/// # Constructors
+///
+/// | Method | Window |
+/// |---|---|
+/// | [`Batcher::new`] | caller-specified |
+/// | [`Batcher::for_sync`] | 512 KiB (good default for O_DIRECT / buffered I/O) |
+/// | [`Batcher::for_tokio`] | 1 MiB (async I/O benefits from larger merges) |
+/// | [`Batcher::for_io_uring`] | 2 MiB (multi-worker ring can amortise overhead) |
+#[derive(Debug, Clone, Copy)]
+pub struct Batcher {
+    /// Requests within the same file separated by at most this many bytes are merged.
+    pub coalesce_window_bytes: usize,
+}
 
-    for (path, mut requests) in grouped {
-        requests.sort_unstable_by_key(|r| r.offset);
-
-        let mut current: Option<CoalescedGroup> = None;
-        for req in requests {
-            let req_end = req.offset.saturating_add(req.len as u64);
-
-            match &mut current {
-                Some(group)
-                    if req.offset
-                        <= group
-                            .offset
-                            .saturating_add(group.len as u64)
-                            .saturating_add(window_bytes as u64) =>
-                {
-                    let relative_offset =
-                        usize::try_from(req.offset.saturating_sub(group.offset))
-                            .unwrap_or(usize::MAX);
-                    let required_len = relative_offset.saturating_add(req.len);
-                    group.len = group.len.max(required_len);
-                    group.members.push(CoalescedMember {
-                        idx: req.idx,
-                        relative_offset,
-                        len: req.len,
-                    });
-                }
-                _ => {
-                    if let Some(g) = current.take() {
-                        groups.push(g);
-                    }
-                    current = Some(CoalescedGroup {
-                        path: path.clone(),
-                        offset: req.offset,
-                        len: req.len,
-                        members: vec![CoalescedMember { idx: req.idx, relative_offset: 0, len: req.len }],
-                    });
-                }
-            }
-
-            // Extend the group if req_end exceeds the current group end.
-            if let Some(group) = &mut current {
-                let group_end = group.offset.saturating_add(group.len as u64);
-                if req_end > group_end {
-                    group.len = usize::try_from(req_end.saturating_sub(group.offset))
-                        .unwrap_or(usize::MAX);
-                }
-            }
-        }
-
-        if let Some(g) = current.take() {
-            groups.push(g);
-        }
+impl Batcher {
+    /// Create a batcher with an explicit coalesce window.
+    #[inline]
+    #[must_use]
+    pub const fn new(coalesce_window_bytes: usize) -> Self {
+        Self { coalesce_window_bytes }
     }
 
-    groups
-}
+    /// Tuned for synchronous O_DIRECT / buffered I/O.
+    #[inline]
+    #[must_use]
+    pub const fn for_sync() -> Self {
+        Self::new(512 * 1024)
+    }
 
-/// Sort a list of `BatchResult`s by original index and strip the index,
-/// returning results in the caller's original request order.
-pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
-    let mut indexed: Vec<BatchResult> = results.into_iter().flatten().collect();
-    indexed.sort_unstable_by_key(|(idx, _, _, _)| *idx);
-    indexed.into_iter().map(|(_, arc, off, len)| (arc, off, len)).collect()
+    /// Tuned for Tokio async I/O.
+    #[inline]
+    #[must_use]
+    pub const fn for_tokio() -> Self {
+        Self::new(1024 * 1024)
+    }
+
+    /// Tuned for Linux io_uring multi-worker I/O.
+    #[inline]
+    #[must_use]
+    pub const fn for_io_uring() -> Self {
+        Self::new(2 * 1024 * 1024)
+    }
+
+    /// Produce a [`BatchPlan`] from a batch request.
+    ///
+    /// Requests are grouped by file path, sorted by offset within each file,
+    /// and merged when the gap between consecutive requests is at most
+    /// `self.coalesce_window_bytes`.
+    #[must_use]
+    pub fn plan<'a>(&self, req: &BatchReadRequest<'a>) -> BatchPlan {
+        let request_count = req.len();
+        if request_count == 0 {
+            return BatchPlan { groups: Vec::new(), request_count: 0 };
+        }
+
+        // Group by file: (path_index, offset, len, original_request_index)
+        let mut by_file: HashMap<&Path, Vec<(usize, u64, usize)>> = HashMap::new();
+        for (i, (path, range)) in req.paths.iter().zip(req.ranges.iter()).enumerate() {
+            by_file.entry(path).or_default().push((i, range.offset, range.len));
+        }
+
+        let mut groups: Vec<CoalescedRead> = Vec::new();
+
+        for (path, mut entries) in by_file {
+            // Sort by offset so we scan left-to-right.
+            entries.sort_unstable_by_key(|&(_, offset, _)| offset);
+
+            let mut current: Option<CoalescedRead> = None;
+
+            for (request_index, offset, len) in entries {
+                let req_end = offset.saturating_add(len as u64);
+
+                match &mut current {
+                    Some(g)
+                        if offset
+                            <= g.offset
+                                .saturating_add(g.len as u64)
+                                .saturating_add(self.coalesce_window_bytes as u64) =>
+                    {
+                        // Merge into the current group.
+                        let relative_offset =
+                            usize::try_from(offset.saturating_sub(g.offset)).unwrap_or(usize::MAX);
+                        let required_len = relative_offset.saturating_add(len);
+                        g.len = g.len.max(required_len);
+                        g.members.push(CoalescedMember { request_index, relative_offset, len });
+                    }
+                    _ => {
+                        if let Some(g) = current.take() {
+                            groups.push(g);
+                        }
+                        current = Some(CoalescedRead {
+                            path: path.to_path_buf(),
+                            offset,
+                            len,
+                            members: vec![CoalescedMember {
+                                request_index,
+                                relative_offset: 0,
+                                len,
+                            }],
+                        });
+                    }
+                }
+
+                // Extend the current group if this request reaches further.
+                if let Some(g) = &mut current {
+                    let group_end = g.offset.saturating_add(g.len as u64);
+                    if req_end > group_end {
+                        g.len = usize::try_from(req_end.saturating_sub(g.offset))
+                            .unwrap_or(usize::MAX);
+                    }
+                }
+            }
+
+            if let Some(g) = current.take() {
+                groups.push(g);
+            }
+        }
+
+        BatchPlan { groups, request_count }
+    }
 }
 
 // ============================================================================
@@ -170,77 +225,110 @@ pub fn flatten_results(results: Vec<Vec<BatchResult>>) -> Vec<FlattenedResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::{BatchRange, BatchReadRequest};
     use std::path::Path;
 
-    #[test]
-    fn group_by_file_single() {
-        let reqs = vec![("a.bin", 0u64, 100usize), ("a.bin", 100, 50)];
-        let g = group_requests_by_file(&reqs);
-        assert_eq!(g.len(), 1);
-        assert_eq!(g[Path::new("a.bin")].len(), 2);
+    fn req<'a>(
+        paths: &'a [&'a Path],
+        ranges: &'a [BatchRange],
+    ) -> BatchReadRequest<'a> {
+        BatchReadRequest::new(paths, ranges)
     }
 
     #[test]
-    fn group_by_file_multiple() {
-        let reqs = vec![("a.bin", 0u64, 10usize), ("b.bin", 0, 20), ("a.bin", 10, 10)];
-        let g = group_requests_by_file(&reqs);
-        assert_eq!(g.len(), 2);
-        assert_eq!(g[Path::new("a.bin")].len(), 2);
-        assert_eq!(g[Path::new("b.bin")].len(), 1);
+    fn empty_request_produces_empty_plan() {
+        let batcher = Batcher::new(0);
+        let plan = batcher.plan(&req(&[], &[]));
+        assert!(plan.is_empty());
+        assert_eq!(plan.request_count, 0);
     }
 
     #[test]
-    fn group_by_file_empty() {
-        let reqs: Vec<(&str, u64, usize)> = vec![];
-        assert!(group_requests_by_file(&reqs).is_empty());
+    fn single_request_one_group() {
+        let p = Path::new("/tmp/a.bin");
+        let paths = [p];
+        let ranges = [BatchRange::new(0, 100)];
+        let batcher = Batcher::new(0);
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].offset, 0);
+        assert_eq!(plan.groups[0].len, 100);
+        assert_eq!(plan.groups[0].members[0].request_index, 0);
     }
 
     #[test]
-    fn coalesce_merges_adjacent() {
-        let reqs = vec![("f", 0u64, 100usize), ("f", 120, 80), ("f", 1024, 64)];
-        let groups = coalesce_requests(group_requests_by_file(&reqs), 64);
-        // gap of 20 bytes <= window 64, so first two merge; third is separate
-        assert_eq!(groups.len(), 2);
+    fn adjacent_requests_merge_with_zero_window() {
+        let p = Path::new("/tmp/b.bin");
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 100), BatchRange::new(100, 50)];
+        let batcher = Batcher::new(0);
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1, "touching requests should merge");
+        assert_eq!(plan.groups[0].len, 150);
     }
 
     #[test]
-    fn coalesce_zero_window_touching_still_merges() {
-        // touching (gap == 0) should always merge
-        let reqs = vec![("f", 0u64, 100usize), ("f", 100, 50)];
-        let groups = coalesce_requests(group_requests_by_file(&reqs), 0);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].len, 150);
+    fn gap_within_window_merges() {
+        let p = Path::new("/tmp/c.bin");
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 100), BatchRange::new(150, 50)];
+        let batcher = Batcher::new(64); // 50-byte gap < 64-byte window
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].len, 200); // 0..200 covers both
     }
 
     #[test]
-    fn coalesce_zero_window_with_gap_does_not_merge() {
-        let reqs = vec![("f", 0u64, 100usize), ("f", 101, 50)];
-        let groups = coalesce_requests(group_requests_by_file(&reqs), 0);
-        assert_eq!(groups.len(), 2);
+    fn gap_beyond_window_stays_separate() {
+        let p = Path::new("/tmp/d.bin");
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 100), BatchRange::new(201, 50)];
+        let batcher = Batcher::new(100); // 101-byte gap > 100-byte window
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 2);
     }
 
     #[test]
-    fn coalesce_cross_file_never_merged() {
-        let reqs = vec![("a", 0u64, 100usize), ("b", 0, 100)];
-        let groups = coalesce_requests(group_requests_by_file(&reqs), usize::MAX);
-        assert_eq!(groups.len(), 2);
+    fn different_files_never_merge() {
+        let a = Path::new("/tmp/a.bin");
+        let b = Path::new("/tmp/b.bin");
+        let paths = [a, b];
+        let ranges = [BatchRange::new(0, 100), BatchRange::new(0, 100)];
+        let batcher = Batcher::new(usize::MAX);
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 2);
     }
 
     #[test]
-    fn flatten_results_restores_order() {
-        let results: Vec<Vec<BatchResult>> = vec![
-            vec![(2, Arc::new([3u8]), 0, 1), (0, Arc::new([1u8]), 0, 1)],
-            vec![(1, Arc::new([2u8]), 0, 1)],
-        ];
-        let flat = flatten_results(results);
-        assert_eq!(flat.len(), 3);
-        assert_eq!(flat[0].0.as_ref(), &[1u8]);
-        assert_eq!(flat[1].0.as_ref(), &[2u8]);
-        assert_eq!(flat[2].0.as_ref(), &[3u8]);
+    fn member_slice_resolves_correctly() {
+        let p = Path::new("/tmp/e.bin");
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 4), BatchRange::new(4, 4)];
+        let batcher = Batcher::new(0);
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
+        let raw = &[10u8, 20, 30, 40, 50, 60, 70, 80];
+        let g = &plan.groups[0];
+        // members are sorted by offset; member 0 = bytes 0..4, member 1 = 4..8
+        let m0 = g.members.iter().find(|m| m.request_index == 0).unwrap();
+        let m1 = g.members.iter().find(|m| m.request_index == 1).unwrap();
+        assert_eq!(g.member_slice(m0, raw), Some(&[10u8, 20, 30, 40][..]));
+        assert_eq!(g.member_slice(m1, raw), Some(&[50u8, 60, 70, 80][..]));
     }
 
     #[test]
-    fn flatten_results_empty() {
-        assert!(flatten_results(vec![]).is_empty());
+    fn request_count_matches_input() {
+        let p = Path::new("/tmp/f.bin");
+        let paths = [p, p, p];
+        let ranges = [BatchRange::new(0, 10), BatchRange::new(20, 10), BatchRange::new(40, 10)];
+        let batcher = Batcher::new(0);
+        let plan = batcher.plan(&req(&paths, &ranges));
+        assert_eq!(plan.request_count, 3);
+    }
+
+    #[test]
+    fn preset_constructors_are_ordered_by_window() {
+        assert!(Batcher::for_sync().coalesce_window_bytes <= Batcher::for_tokio().coalesce_window_bytes);
+        assert!(Batcher::for_tokio().coalesce_window_bytes <= Batcher::for_io_uring().coalesce_window_bytes);
     }
 }
