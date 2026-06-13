@@ -25,6 +25,7 @@
 
 pub mod availability;
 pub mod buffer;
+pub mod io_uring;
 pub mod mmap;
 pub mod sync;
 pub mod tokio;
