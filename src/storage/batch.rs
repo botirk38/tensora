@@ -9,11 +9,8 @@
 //!
 //! # Constructors
 //!
-//! | Method | Behaviour |
-//! |---|---|
-//! | [`Batcher::new(n)`] | merge gaps up to `n` bytes |
-//! | [`Batcher::disabled()`] | never merge (every request is its own read) |
-//! | [`Batcher::unlimited()`] | always merge within the same file |
+//! [`Batcher::new(n)`] is the only constructor. Pass `0` to merge only
+//! touching requests; pass `usize::MAX` to always merge within a file.
 //!
 //! # Example
 //!
@@ -113,37 +110,13 @@ pub struct Batcher {
 
 impl Batcher {
     /// Create a batcher that merges gaps up to `coalesce_window_bytes`.
+    ///
+    /// `0` means only touching (zero-gap) requests are merged.
+    /// `usize::MAX` means all requests in the same file are always merged.
     #[inline]
     #[must_use]
     pub const fn new(coalesce_window_bytes: usize) -> Self {
         Self { coalesce_window_bytes }
-    }
-
-    /// Never merge: every request becomes its own read.
-    ///
-    /// Equivalent to `Batcher::new(0)` with no touching ranges.
-    /// Useful when the caller has already optimised the request list or when
-    /// measuring the cost of coalescing.
-    #[inline]
-    #[must_use]
-    pub const fn disabled() -> Self {
-        // Use usize::MAX - 1 so that `offset <= group_end + window` can never
-        // be satisfied for non-touching ranges without overflow.
-        // Actually simplest: window = 0 means only gap==0 merges, which for
-        // non-touching is already no-merge. For truly disabled, use a sentinel
-        // that makes the condition fail. We keep it simple: use window = 0
-        // and document that touching requests still merge.
-        Self::new(0)
-    }
-
-    /// Always merge all requests in the same file into a single read.
-    ///
-    /// Useful for network-backed or high-latency storage where seek overhead
-    /// dominates and one large sequential read is cheaper than many small ones.
-    #[inline]
-    #[must_use]
-    pub const fn unlimited() -> Self {
-        Self::new(usize::MAX)
     }
 
     /// Produce a [`BatchPlan`] from a batch request.
@@ -334,26 +307,26 @@ mod tests {
     }
 
     #[test]
-    fn disabled_only_merges_touching() {
+    fn zero_window_only_merges_touching() {
         let p = Path::new("/tmp/x.bin");
-        // Gap of 1 byte — should NOT merge with disabled batcher.
+        // Gap of 1 byte — should NOT merge with window = 0.
         let paths = [p, p];
         let ranges = [BatchRange::new(0, 99), BatchRange::new(100, 50)];
-        let plan = Batcher::disabled().plan(&req(&paths, &ranges));
-        assert_eq!(plan.groups.len(), 2, "non-touching should not merge with disabled");
+        let plan = Batcher::new(0).plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 2, "non-touching should not merge with window=0");
 
-        // Touching (gap == 0) — should still merge.
+        // Touching (gap == 0) — should merge.
         let ranges2 = [BatchRange::new(0, 100), BatchRange::new(100, 50)];
-        let plan2 = Batcher::disabled().plan(&req(&paths, &ranges2));
-        assert_eq!(plan2.groups.len(), 1, "touching should merge even with disabled");
+        let plan2 = Batcher::new(0).plan(&req(&paths, &ranges2));
+        assert_eq!(plan2.groups.len(), 1, "touching should merge even with window=0");
     }
 
     #[test]
-    fn unlimited_merges_all_in_same_file() {
+    fn max_window_merges_all_in_same_file() {
         let p = Path::new("/tmp/y.bin");
         let paths = [p, p, p];
         let ranges = [BatchRange::new(0, 10), BatchRange::new(9999, 10), BatchRange::new(99999, 10)];
-        let plan = Batcher::unlimited().plan(&req(&paths, &ranges));
+        let plan = Batcher::new(usize::MAX).plan(&req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 1);
     }
 
