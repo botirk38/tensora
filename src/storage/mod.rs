@@ -1,13 +1,16 @@
-//! Storage engine vocabulary types.
+//! Storage engine traits and vocabulary types.
 //!
-//! This module defines the request/result types used by all storage engines.
-//! Engines are introduced in subsequent PRs; this module is the shared vocabulary
-//! they all speak.
+//! # Traits
+//!
+//! - [`StorageEngine`] — base trait all engines implement (kind, availability)
+//! - [`ReadableStorage`] — file and range reads
+//! - [`WritableStorage`] — write-at and flush
+//! - [`MappableStorage`] — memory-map a file or range (mmap engine only)
+//! - [`ReadWriteStorage`] — blanket marker for engines that are both readable and writable
 //!
 //! # Request types
 //!
 //! All requests borrow their path as `&Path` to avoid allocation at the call site.
-//! Builders are provided for ergonomics.
 //!
 //! - [`FileReadRequest`] — read an entire file
 //! - [`RangeReadRequest`] — read a byte range from a file
@@ -22,6 +25,7 @@
 
 pub mod availability;
 pub mod buffer;
+pub mod sync;
 
 pub use std::io::Result as IoResult;
 
@@ -231,6 +235,83 @@ impl<'a> MmapRangeRequest<'a> {
         Self { path, offset, len }
     }
 }
+
+// ============================================================================
+// Engine traits
+// ============================================================================
+
+/// Base trait that every storage engine must implement.
+pub trait StorageEngine {
+    /// The kind identifier for this engine.
+    fn kind(&self) -> availability::StorageKind;
+
+    /// Whether this engine type is available in the current environment.
+    fn availability() -> availability::StorageAvailability
+    where
+        Self: Sized;
+
+    /// Full capability snapshot for the environment.
+    fn capabilities() -> availability::StorageCapabilities
+    where
+        Self: Sized;
+}
+
+/// An engine that can read files and byte ranges.
+pub trait ReadableStorage: StorageEngine {
+    /// Read an entire file into an [`buffer::OwnedBytes`] buffer.
+    fn read_file(&self, req: FileReadRequest<'_>) -> IoResult<buffer::OwnedBytes>;
+
+    /// Read a contiguous byte range from a file.
+    fn read_range(&self, req: RangeReadRequest<'_>) -> IoResult<buffer::OwnedBytes>;
+
+    /// Read a batch of byte ranges, possibly from multiple files.
+    ///
+    /// Results are returned in the same order as the input ranges.
+    /// The default implementation issues reads sequentially; engines should
+    /// override this with a parallel or coalescing implementation.
+    fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
+        req.paths
+            .iter()
+            .zip(req.ranges.iter())
+            .enumerate()
+            .map(|(request_index, (path, range))| {
+                let bytes = self.read_range(RangeReadRequest::new(path, range.offset, range.len))?;
+                Ok(RangeReadResult {
+                    request_index,
+                    bytes: bytes.into_shared(),
+                    logical_offset: 0,
+                    logical_len: range.len,
+                })
+            })
+            .collect()
+    }
+}
+
+/// An engine that can write bytes at specified offsets.
+///
+/// Implementors manage their own open file handle. Call [`WritableStorage::flush`]
+/// before dropping to ensure all data is durable.
+pub trait WritableStorage: StorageEngine {
+    /// Write `req.data` starting at `req.offset` within the engine's open file.
+    fn write_at(&mut self, req: WriteAtRequest<'_>) -> IoResult<()>;
+
+    /// Flush buffered data and synchronise to durable storage.
+    fn flush(&mut self) -> IoResult<()>;
+}
+
+/// An engine that can memory-map files or byte ranges.
+pub trait MappableStorage: StorageEngine {
+    /// Memory-map an entire file.
+    fn map_file(&self, req: MmapRequest<'_>) -> IoResult<buffer::MmapRegion>;
+
+    /// Memory-map a byte range within a file.
+    fn map_range(&self, req: MmapRangeRequest<'_>) -> IoResult<buffer::MmapRegion>;
+}
+
+/// Blanket marker for engines that implement both [`ReadableStorage`] and
+/// [`WritableStorage`].
+pub trait ReadWriteStorage: ReadableStorage + WritableStorage {}
+impl<T: ReadableStorage + WritableStorage> ReadWriteStorage for T {}
 
 // ============================================================================
 // Tests
