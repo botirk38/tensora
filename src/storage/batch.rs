@@ -1,7 +1,8 @@
 //! Batch I/O planning via [`Batcher`].
 //!
-//! [`Batcher`] turns a [`BatchReadRequest`] into a list of [`CoalescedRead`]s —
-//! merged reads that satisfy one or more of the original requests.
+//! [`Batcher`] turns a [`BatchReadRequest`] into a [`BatchPlan`] — a list of
+//! [`CoalescedRead`]s, each representing one merged I/O that satisfies one or
+//! more of the original requests.
 //!
 //! `Batcher` describes *policy* only (how aggressively to merge adjacent
 //! requests). It has no knowledge of any specific engine. Engines hold a
@@ -20,12 +21,13 @@
 //! // Merge adjacent requests separated by up to 256 KiB.
 //! let batcher = Batcher::new(256 * 1024);
 //! let plan = batcher.plan(&req);
-//! for read in &plan.groups {
-//!     // issue one I/O for read.len bytes at read.offset in read.path
+//! for group in &plan.groups {
+//!     // issue one I/O for group.len bytes at group.offset in group.path,
+//!     // then call group.member_data(member, &raw_bytes) for each member.
 //! }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::BatchReadRequest;
@@ -45,7 +47,22 @@ pub struct CoalescedMember {
     pub len: usize,
 }
 
+impl CoalescedMember {
+    /// Slice this member's data out of the raw bytes returned for its
+    /// [`CoalescedRead`].
+    ///
+    /// Returns `None` if the member's range is out of bounds for `raw`,
+    /// which would indicate a corrupt plan or wrong buffer.
+    #[inline]
+    pub fn data<'a>(&self, raw: &'a [u8]) -> Option<&'a [u8]> {
+        let end = self.relative_offset.checked_add(self.len)?;
+        raw.get(self.relative_offset..end)
+    }
+}
+
 /// A single merged read that satisfies one or more original requests.
+///
+/// Members are in offset order within the file.
 #[derive(Debug, Clone)]
 pub struct CoalescedRead {
     /// File to read.
@@ -54,28 +71,19 @@ pub struct CoalescedRead {
     pub offset: u64,
     /// Total byte length of the merged read.
     pub len: usize,
-    /// The original requests whose data lives inside this read.
+    /// Original requests whose data lives inside this read, in offset order.
     pub members: Vec<CoalescedMember>,
 }
 
-impl CoalescedRead {
-    /// Resolve a member's data from the raw bytes returned for this read.
-    ///
-    /// Returns `None` if the member's range is out of bounds for `raw`.
-    #[inline]
-    pub fn member_slice<'a>(&self, member: &CoalescedMember, raw: &'a [u8]) -> Option<&'a [u8]> {
-        let start = member.relative_offset;
-        let end = start.checked_add(member.len)?;
-        raw.get(start..end)
-    }
-}
-
-/// The result of [`Batcher::plan`]: a set of merged reads in file-offset order.
+/// The result of [`Batcher::plan`].
+///
+/// Groups are in `(path, offset)` order — deterministic across runs for the
+/// same input. Members within each group are in offset order.
 #[derive(Debug)]
 pub struct BatchPlan {
-    /// Merged reads to issue, in arbitrary order across files.
+    /// Merged reads to issue.
     pub groups: Vec<CoalescedRead>,
-    /// Number of original requests covered by this plan (always == input batch size).
+    /// Number of original requests covered by this plan (== input batch size).
     pub request_count: usize,
 }
 
@@ -123,7 +131,8 @@ impl Batcher {
     ///
     /// Requests are grouped by file path, sorted by offset within each file,
     /// and merged when the gap between consecutive requests is at most
-    /// `self.coalesce_window_bytes`.
+    /// `self.coalesce_window_bytes`. The returned groups are in `(path, offset)`
+    /// order — deterministic for the same input.
     #[must_use]
     pub fn plan<'a>(&self, req: &BatchReadRequest<'a>) -> BatchPlan {
         let request_count = req.len();
@@ -131,8 +140,8 @@ impl Batcher {
             return BatchPlan { groups: Vec::new(), request_count: 0 };
         }
 
-        // Group by file: (path_index, offset, len, original_request_index)
-        let mut by_file: HashMap<&Path, Vec<(usize, u64, usize)>> = HashMap::new();
+        // BTreeMap gives deterministic iteration order (sorted by path).
+        let mut by_file: BTreeMap<&Path, Vec<(usize, u64, usize)>> = BTreeMap::new();
         for (i, (path, range)) in req.paths.iter().zip(req.ranges.iter()).enumerate() {
             by_file.entry(path).or_default().push((i, range.offset, range.len));
         }
@@ -143,23 +152,25 @@ impl Batcher {
             // Sort by offset so we scan left-to-right.
             entries.sort_unstable_by_key(|&(_, offset, _)| offset);
 
+            // Clone path once per file, not once per group.
+            let path_buf = path.to_path_buf();
             let mut current: Option<CoalescedRead> = None;
 
             for (request_index, offset, len) in entries {
-                let req_end = offset.saturating_add(len as u64);
+                // End of this request as a u64 file offset.
+                let req_end: u64 = offset.saturating_add(len as u64);
 
                 match &mut current {
-                    Some(g)
-                        if offset
-                            <= g.offset
-                                .saturating_add(g.len as u64)
-                                .saturating_add(self.coalesce_window_bytes as u64) =>
-                    {
-                        // Merge into the current group.
-                        let relative_offset =
-                            usize::try_from(offset.saturating_sub(g.offset)).unwrap_or(usize::MAX);
+                    Some(g) if should_merge(g, offset, self.coalesce_window_bytes) => {
+                        // This request falls within the current group's merge window.
+                        // relative_offset: how far into g's buffer this member starts.
+                        // Because entries are sorted and should_merge passed, offset >= g.offset.
+                        let relative_offset = (offset - g.offset) as usize;
                         let required_len = relative_offset.saturating_add(len);
-                        g.len = g.len.max(required_len);
+                        // Extend the group if this request reaches past the current end.
+                        if required_len > g.len {
+                            g.len = required_len;
+                        }
                         g.members.push(CoalescedMember { request_index, relative_offset, len });
                     }
                     _ => {
@@ -167,7 +178,7 @@ impl Batcher {
                             groups.push(g);
                         }
                         current = Some(CoalescedRead {
-                            path: path.to_path_buf(),
+                            path: path_buf.clone(),
                             offset,
                             len,
                             members: vec![CoalescedMember {
@@ -179,12 +190,15 @@ impl Batcher {
                     }
                 }
 
-                // Extend the current group if this request reaches further.
+                // Extend the current group if req_end reaches past it.
+                // This handles the case where the request starts inside the group
+                // but extends beyond it (e.g. a large overlapping range).
                 if let Some(g) = &mut current {
-                    let group_end = g.offset.saturating_add(g.len as u64);
+                    let group_end: u64 = g.offset.saturating_add(g.len as u64);
                     if req_end > group_end {
-                        g.len = usize::try_from(req_end.saturating_sub(g.offset))
-                            .unwrap_or(usize::MAX);
+                        // Safe: req_end > g.offset always holds here because
+                        // req_end >= offset >= g.offset.
+                        g.len = (req_end - g.offset) as usize;
                     }
                 }
             }
@@ -199,6 +213,28 @@ impl Batcher {
 }
 
 // ============================================================================
+// Internal helpers
+// ============================================================================
+
+/// Returns `true` if `offset` falls within `g`'s current extent plus the
+/// coalesce window.
+///
+/// Precondition: entries are sorted by offset, so `offset >= g.offset`.
+/// Using plain arithmetic (not saturating) is safe here because:
+/// - `g.offset <= offset` (sort invariant)
+/// - `g.len` is at most the file size (bounded by actual I/O)
+/// - `window` is caller-controlled; overflow via `window = usize::MAX` is
+///   handled by the `u64` cast path: `(g.len as u64).saturating_add(window as u64)`
+///   saturates to `u64::MAX`, making the condition always true, which is the
+///   intended "unlimited" semantics.
+#[inline]
+fn should_merge(g: &CoalescedRead, offset: u64, window: usize) -> bool {
+    let group_end: u64 = g.offset.saturating_add(g.len as u64);
+    let merge_limit: u64 = group_end.saturating_add(window as u64);
+    offset <= merge_limit
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -208,17 +244,15 @@ mod tests {
     use crate::storage::{BatchRange, BatchReadRequest};
     use std::path::Path;
 
-    fn req<'a>(
-        paths: &'a [&'a Path],
-        ranges: &'a [BatchRange],
-    ) -> BatchReadRequest<'a> {
+    fn make_req<'a>(paths: &'a [&'a Path], ranges: &'a [BatchRange]) -> BatchReadRequest<'a> {
         BatchReadRequest::new(paths, ranges)
     }
 
+    // --- empty / trivial ---
+
     #[test]
     fn empty_request_produces_empty_plan() {
-        let batcher = Batcher::new(0);
-        let plan = batcher.plan(&req(&[], &[]));
+        let plan = Batcher::new(0).plan(&make_req(&[], &[]));
         assert!(plan.is_empty());
         assert_eq!(plan.request_count, 0);
     }
@@ -226,24 +260,22 @@ mod tests {
     #[test]
     fn single_request_one_group() {
         let p = Path::new("/tmp/a.bin");
-        let paths = [p];
-        let ranges = [BatchRange::new(0, 100)];
-        let batcher = Batcher::new(0);
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(0).plan(&make_req(&[p], &[BatchRange::new(0, 100)]));
         assert_eq!(plan.groups.len(), 1);
         assert_eq!(plan.groups[0].offset, 0);
         assert_eq!(plan.groups[0].len, 100);
         assert_eq!(plan.groups[0].members[0].request_index, 0);
     }
 
+    // --- merging ---
+
     #[test]
-    fn adjacent_requests_merge_with_zero_window() {
+    fn touching_requests_always_merge() {
         let p = Path::new("/tmp/b.bin");
         let paths = [p, p];
         let ranges = [BatchRange::new(0, 100), BatchRange::new(100, 50)];
-        let batcher = Batcher::new(0);
-        let plan = batcher.plan(&req(&paths, &ranges));
-        assert_eq!(plan.groups.len(), 1, "touching requests should merge");
+        let plan = Batcher::new(0).plan(&make_req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
         assert_eq!(plan.groups[0].len, 150);
     }
 
@@ -251,22 +283,36 @@ mod tests {
     fn gap_within_window_merges() {
         let p = Path::new("/tmp/c.bin");
         let paths = [p, p];
+        // gap of 50 bytes, window = 64
         let ranges = [BatchRange::new(0, 100), BatchRange::new(150, 50)];
-        let batcher = Batcher::new(64); // 50-byte gap < 64-byte window
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(64).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 1);
-        assert_eq!(plan.groups[0].len, 200); // 0..200 covers both
+        assert_eq!(plan.groups[0].offset, 0);
+        assert_eq!(plan.groups[0].len, 200);
     }
 
     #[test]
     fn gap_beyond_window_stays_separate() {
         let p = Path::new("/tmp/d.bin");
         let paths = [p, p];
+        // gap of 101 bytes, window = 100
         let ranges = [BatchRange::new(0, 100), BatchRange::new(201, 50)];
-        let batcher = Batcher::new(100); // 101-byte gap > 100-byte window
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(100).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 2);
     }
+
+    #[test]
+    fn overlapping_requests_extend_group() {
+        // [0..100] then [50..150]: second starts inside first, extends beyond it.
+        let p = Path::new("/tmp/overlap.bin");
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 100), BatchRange::new(50, 100)];
+        let plan = Batcher::new(0).plan(&make_req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].len, 150);
+    }
+
+    // --- file separation ---
 
     #[test]
     fn different_files_never_merge() {
@@ -274,65 +320,86 @@ mod tests {
         let b = Path::new("/tmp/b.bin");
         let paths = [a, b];
         let ranges = [BatchRange::new(0, 100), BatchRange::new(0, 100)];
-        let batcher = Batcher::new(usize::MAX);
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(usize::MAX).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 2);
     }
 
+    // --- determinism ---
+
     #[test]
-    fn member_slice_resolves_correctly() {
+    fn output_order_is_deterministic() {
+        // Same input twice must produce identical group order.
+        let a = Path::new("/tmp/a.bin");
+        let b = Path::new("/tmp/b.bin");
+        let paths = [a, b, a];
+        let ranges = [BatchRange::new(0, 10), BatchRange::new(0, 10), BatchRange::new(20, 10)];
+        let batcher = Batcher::new(0);
+        let p1 = batcher.plan(&make_req(&paths, &ranges));
+        let p2 = batcher.plan(&make_req(&paths, &ranges));
+        let paths1: Vec<_> = p1.groups.iter().map(|g| &g.path).collect();
+        let paths2: Vec<_> = p2.groups.iter().map(|g| &g.path).collect();
+        assert_eq!(paths1, paths2);
+    }
+
+    // --- member data ---
+
+    #[test]
+    fn member_data_resolves_correctly() {
         let p = Path::new("/tmp/e.bin");
         let paths = [p, p];
         let ranges = [BatchRange::new(0, 4), BatchRange::new(4, 4)];
-        let batcher = Batcher::new(0);
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(0).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 1);
+
         let raw = &[10u8, 20, 30, 40, 50, 60, 70, 80];
         let g = &plan.groups[0];
-        // members are sorted by offset; member 0 = bytes 0..4, member 1 = 4..8
         let m0 = g.members.iter().find(|m| m.request_index == 0).unwrap();
         let m1 = g.members.iter().find(|m| m.request_index == 1).unwrap();
-        assert_eq!(g.member_slice(m0, raw), Some(&[10u8, 20, 30, 40][..]));
-        assert_eq!(g.member_slice(m1, raw), Some(&[50u8, 60, 70, 80][..]));
+        assert_eq!(m0.data(raw), Some(&[10u8, 20, 30, 40][..]));
+        assert_eq!(m1.data(raw), Some(&[50u8, 60, 70, 80][..]));
     }
+
+    #[test]
+    fn member_data_out_of_bounds_returns_none() {
+        let m = CoalescedMember { request_index: 0, relative_offset: 10, len: 5 };
+        assert_eq!(m.data(&[0u8; 4]), None); // 10+5 > 4
+    }
+
+    // --- request_count ---
 
     #[test]
     fn request_count_matches_input() {
         let p = Path::new("/tmp/f.bin");
         let paths = [p, p, p];
         let ranges = [BatchRange::new(0, 10), BatchRange::new(20, 10), BatchRange::new(40, 10)];
-        let batcher = Batcher::new(0);
-        let plan = batcher.plan(&req(&paths, &ranges));
+        let plan = Batcher::new(0).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.request_count, 3);
     }
+
+    // --- window edge cases ---
 
     #[test]
     fn zero_window_only_merges_touching() {
         let p = Path::new("/tmp/x.bin");
-        // Gap of 1 byte — should NOT merge with window = 0.
         let paths = [p, p];
+        // gap of 1 byte — should NOT merge
         let ranges = [BatchRange::new(0, 99), BatchRange::new(100, 50)];
-        let plan = Batcher::new(0).plan(&req(&paths, &ranges));
-        assert_eq!(plan.groups.len(), 2, "non-touching should not merge with window=0");
-
-        // Touching (gap == 0) — should merge.
-        let ranges2 = [BatchRange::new(0, 100), BatchRange::new(100, 50)];
-        let plan2 = Batcher::new(0).plan(&req(&paths, &ranges2));
-        assert_eq!(plan2.groups.len(), 1, "touching should merge even with window=0");
+        let plan = Batcher::new(0).plan(&make_req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 2);
     }
 
     #[test]
     fn max_window_merges_all_in_same_file() {
         let p = Path::new("/tmp/y.bin");
         let paths = [p, p, p];
-        let ranges = [BatchRange::new(0, 10), BatchRange::new(9999, 10), BatchRange::new(99999, 10)];
-        let plan = Batcher::new(usize::MAX).plan(&req(&paths, &ranges));
+        let ranges =
+            [BatchRange::new(0, 10), BatchRange::new(9999, 10), BatchRange::new(99999, 10)];
+        let plan = Batcher::new(usize::MAX).plan(&make_req(&paths, &ranges));
         assert_eq!(plan.groups.len(), 1);
     }
 
     #[test]
     fn new_window_is_stored() {
-        let b = Batcher::new(128 * 1024);
-        assert_eq!(b.coalesce_window_bytes, 128 * 1024);
+        assert_eq!(Batcher::new(128 * 1024).coalesce_window_bytes, 128 * 1024);
     }
 }
