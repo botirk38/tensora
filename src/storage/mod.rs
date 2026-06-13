@@ -1,9 +1,10 @@
-//! Storage engine traits and vocabulary types.
+//! Storage engine traits, vocabulary types, and batch planning.
 //!
 //! # Traits
 //!
 //! - [`StorageEngine`] — base trait all engines implement (kind, availability)
-//! - [`ReadableStorage`] — file and range reads, with a default batch impl
+//! - [`ReadableStorage`] — file and range reads; engines override `read_ranges`
+//!   with coalescing implementations built on [`batch::Batcher`]
 //! - [`WritableStorage`] — write-at and flush
 //! - [`MappableStorage`] — memory-map a file or range (mmap engine only)
 //! - [`ReadWriteStorage`] — blanket marker for engines that are both readable and writable
@@ -22,11 +23,17 @@
 //! # Result types
 //!
 //! - [`RangeReadResult`] — single result from a batch read
+//!
+//! # Batch planning
+//!
+//! Use [`batch::Batcher`] to merge adjacent ranges before issuing I/O.
+//! Each engine holds a pre-configured [`batch::Batcher`]; preset constructors
+//! (`Batcher::for_sync`, `Batcher::for_tokio`, `Batcher::for_io_uring`) choose
+//! sensible coalesce windows per engine type.
 
 pub mod availability;
 pub mod batch;
 pub mod buffer;
-pub mod plan;
 pub mod sync;
 
 pub use std::io::Result as IoResult;

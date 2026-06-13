@@ -1,20 +1,24 @@
 //! Synchronous blocking storage engine.
 //!
-//! [`SyncStorage`] implements [`ReadableStorage`] and [`WritableStorage`]
-//! by delegating to the existing `backends::sync_io` internals. On Linux it
-//! defaults to O_DIRECT where possible; on other platforms it uses buffered
-//! `std::fs` I/O.
+//! [`SyncStorage`] implements [`ReadableStorage`] and [`StorageEngine`].
+//! On Linux it defaults to O_DIRECT where possible; on other platforms it
+//! uses buffered `std::fs` I/O.
 //!
-//! The file handle for writes is owned by a separate [`SyncWriter`] obtained
-//! via [`SyncStorage::create_writer`]. This keeps read and write concerns apart
-//! while still satisfying [`WritableStorage`].
+//! Batch reads are coalesced via a [`Batcher`], which can be configured by
+//! calling [`SyncStorage::with_batcher`].
+//!
+//! Write access is obtained by calling [`SyncStorage::create_writer`], which
+//! returns a [`SyncWriter`] that holds an open file handle and implements
+//! [`WritableStorage`].
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::backends::{SyncReader as BackendReader, SyncWriter as BackendWriter};
 use crate::storage::{
     BatchReadRequest, FileReadRequest, IoResult, RangeReadRequest, RangeReadResult, WriteAtRequest,
     availability::{StorageAvailability, StorageCapabilities, StorageKind},
+    batch::Batcher,
     buffer::OwnedBytes,
 };
 
@@ -24,8 +28,6 @@ use crate::storage::{
 
 /// Synchronous blocking storage engine.
 ///
-/// Construct with [`SyncStorage::default()`].
-///
 /// ```rust,ignore
 /// use tensora::storage::sync::SyncStorage;
 /// use tensora::storage::{FileReadRequest, ReadableStorage};
@@ -33,15 +35,40 @@ use crate::storage::{
 /// let engine = SyncStorage::default();
 /// let bytes = engine.read_file(FileReadRequest::new(Path::new("model.safetensors")))?;
 /// ```
-#[derive(Debug, Default)]
-pub struct SyncStorage;
+#[derive(Debug, Clone, Copy)]
+pub struct SyncStorage {
+    /// Batcher used by [`ReadableStorage::read_ranges`].
+    batcher: Batcher,
+}
+
+impl Default for SyncStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SyncStorage {
-    /// Create a new `SyncStorage` engine.
+    /// Create a `SyncStorage` engine with the default [`Batcher::for_sync`] coalesce window.
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { batcher: Batcher::for_sync() }
+    }
+
+    /// Return a new engine with the given batcher.
+    ///
+    /// Use this to tune the coalesce window for your workload:
+    ///
+    /// ```rust,ignore
+    /// use tensora::storage::sync::SyncStorage;
+    /// use tensora::storage::batch::Batcher;
+    ///
+    /// let engine = SyncStorage::default().with_batcher(Batcher::new(0)); // no coalescing
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn with_batcher(self, batcher: Batcher) -> Self {
+        Self { batcher }
     }
 
     /// Open `path` for writing and return a [`SyncWriter`] bound to it.
@@ -87,14 +114,12 @@ impl super::StorageEngine for SyncStorage {
 impl super::ReadableStorage for SyncStorage {
     fn read_file(&self, req: FileReadRequest<'_>) -> IoResult<OwnedBytes> {
         let mut reader = BackendReader::new();
-        let backends_bytes = reader.load(req.path)?;
-        Ok(convert_bytes(backends_bytes))
+        Ok(convert_bytes(reader.load(req.path)?))
     }
 
     fn read_range(&self, req: RangeReadRequest<'_>) -> IoResult<OwnedBytes> {
         let mut reader = BackendReader::new();
-        let backends_bytes = reader.load_range(req.path, req.offset, req.len)?;
-        Ok(convert_bytes(backends_bytes))
+        Ok(convert_bytes(reader.load_range(req.path, req.offset, req.len)?))
     }
 
     fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
@@ -102,27 +127,30 @@ impl super::ReadableStorage for SyncStorage {
             return Ok(Vec::new());
         }
 
-        // Build the (PathBuf, u64, usize) tuples that backends::SyncReader expects.
-        let requests: Vec<(std::path::PathBuf, u64, usize)> = req
-            .paths
-            .iter()
-            .zip(req.ranges.iter())
-            .map(|(p, r)| (p.to_path_buf(), r.offset, r.len))
-            .collect();
+        let plan = self.batcher.plan(&req);
+        let mut results: Vec<Option<RangeReadResult>> = (0..req.len()).map(|_| None).collect();
 
-        let mut reader = BackendReader::new();
-        let flat = reader.load_range_batch(&requests)?;
+        for group in &plan.groups {
+            let mut reader = BackendReader::new();
+            let raw = convert_bytes(reader.load_range(&group.path, group.offset, group.len)?);
+            let backing: Arc<[u8]> = raw.into_shared();
 
-        Ok(flat
-            .into_iter()
-            .enumerate()
-            .map(|(request_index, (arc, logical_offset, logical_len))| RangeReadResult {
-                request_index,
-                bytes: arc,
-                logical_offset,
-                logical_len,
-            })
-            .collect())
+            for member in &group.members {
+                let start = member.relative_offset;
+                let end = start + member.len;
+                // Slice is already a sub-range of `backing`; hand off the same Arc.
+                let slice: Arc<[u8]> = Arc::from(&backing[start..end]);
+                results[member.request_index] = Some(RangeReadResult {
+                    request_index: member.request_index,
+                    bytes: slice,
+                    logical_offset: 0,
+                    logical_len: member.len,
+                });
+            }
+        }
+
+        // All slots must be filled; unwrap is safe.
+        Ok(results.into_iter().map(Option::unwrap).collect())
     }
 }
 
@@ -130,7 +158,9 @@ impl super::ReadableStorage for SyncStorage {
 // SyncWriter + WritableStorage
 // ============================================================================
 
-/// A file handle opened for synchronous writes by [`SyncStorage::create_writer`].
+/// A file handle opened for synchronous writes.
+///
+/// Obtain via [`SyncStorage::create_writer`].
 pub struct SyncWriter {
     inner: BackendWriter,
 }
@@ -195,7 +225,6 @@ fn convert_bytes(b: crate::backends::byte::OwnedBytes) -> OwnedBytes {
 mod tests {
     use super::*;
     use crate::storage::{BatchRange, ReadableStorage, StorageEngine, WritableStorage};
-    use std::path::Path;
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -210,8 +239,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let engine = SyncStorage::default();
-        let result = engine.read_file(FileReadRequest::new(&path)).unwrap();
+        let result = SyncStorage::default().read_file(FileReadRequest::new(&path)).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -220,8 +248,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let engine = SyncStorage::default();
-        let result = engine.read_file(FileReadRequest::new(&path)).unwrap();
+        let result = SyncStorage::default().read_file(FileReadRequest::new(&path)).unwrap();
         assert!(result.is_empty());
     }
 
@@ -231,8 +258,8 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let engine = SyncStorage::default();
-        let result = engine.read_range(RangeReadRequest::new(&path, 10, 20)).unwrap();
+        let result =
+            SyncStorage::default().read_range(RangeReadRequest::new(&path, 10, 20)).unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
     }
 
@@ -241,47 +268,44 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let engine = SyncStorage::default();
-        let result = engine.read_range(RangeReadRequest::new(&path, 0, 0)).unwrap();
+        let result =
+            SyncStorage::default().read_range(RangeReadRequest::new(&path, 0, 0)).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn read_ranges_batch_empty() {
-        let engine = SyncStorage::default();
-        let req = BatchReadRequest::new(&[], &[]);
-        let results = engine.read_ranges(req).unwrap();
+    fn read_ranges_empty() {
+        let results =
+            SyncStorage::default().read_ranges(BatchReadRequest::new(&[], &[])).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
-    fn read_ranges_batch_single() {
+    fn read_ranges_single() {
         let dir = TempDir::new().unwrap();
         let data: Vec<u8> = (0u8..200).collect();
         let path = write_tmp(&dir, "batch.bin", &data);
 
-        let engine = SyncStorage::default();
         let paths = [path.as_path()];
         let ranges = [BatchRange::new(50, 30)];
-        let req = BatchReadRequest::new(&paths, &ranges);
-        let results = engine.read_ranges(req).unwrap();
+        let results =
+            SyncStorage::default().read_ranges(BatchReadRequest::new(&paths, &ranges)).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].data(), &data[50..80]);
     }
 
     #[test]
-    fn read_ranges_batch_multiple_preserves_order() {
+    fn read_ranges_multiple_preserves_order() {
         let dir = TempDir::new().unwrap();
         let data: Vec<u8> = (0u8..=255).collect();
         let path = write_tmp(&dir, "multi.bin", &data);
         let p = path.as_path();
 
-        let engine = SyncStorage::default();
         let paths = [p, p, p];
         let ranges = [BatchRange::new(0, 10), BatchRange::new(20, 10), BatchRange::new(100, 5)];
-        let req = BatchReadRequest::new(&paths, &ranges);
-        let results = engine.read_ranges(req).unwrap();
+        let results =
+            SyncStorage::default().read_ranges(BatchReadRequest::new(&paths, &ranges)).unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
@@ -290,12 +314,35 @@ mod tests {
     }
 
     #[test]
+    fn read_ranges_coalesces_adjacent() {
+        // Two adjacent ranges on the same file with window=0 → one read.
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).collect();
+        let path = write_tmp(&dir, "coalesce.bin", &data);
+        let p = path.as_path();
+
+        let engine = SyncStorage::default().with_batcher(Batcher::new(0));
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 50), BatchRange::new(50, 50)];
+        let results = engine.read_ranges(BatchReadRequest::new(&paths, &ranges)).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].data(), &data[0..50]);
+        assert_eq!(results[1].data(), &data[50..100]);
+    }
+
+    #[test]
+    fn with_batcher_overrides_window() {
+        let e = SyncStorage::default().with_batcher(Batcher::new(0));
+        assert_eq!(e.batcher.coalesce_window_bytes, 0);
+    }
+
+    #[test]
     fn write_at_and_flush_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("write.bin");
 
-        let engine = SyncStorage::default();
-        let mut writer = engine.create_writer(&path).unwrap();
+        let mut writer = SyncStorage::default().create_writer(&path).unwrap();
         writer.write_at(WriteAtRequest::new(0, b"hello world")).unwrap();
         writer.flush().unwrap();
         drop(writer);
@@ -304,13 +351,12 @@ mod tests {
     }
 
     #[test]
-    fn storage_engine_kind() {
-        let engine = SyncStorage::default();
-        assert_eq!(engine.kind(), StorageKind::Sync);
+    fn kind_is_sync() {
+        assert_eq!(SyncStorage::default().kind(), StorageKind::Sync);
     }
 
     #[test]
-    fn storage_engine_availability_is_available() {
+    fn availability_is_available() {
         assert!(SyncStorage::availability().is_available());
     }
 }
