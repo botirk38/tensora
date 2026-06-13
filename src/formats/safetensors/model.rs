@@ -8,7 +8,8 @@ use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
-pub use safetensors::tensor::{Dtype, SafeTensors};
+pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};
+use safetensors::tensor::{Metadata, TensorInfo};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,50 +18,106 @@ use std::sync::Arc;
 type TensorShardMap = HashMap<Arc<str>, usize>;
 type TensorNameList = Arc<[Arc<str>]>;
 
-#[derive(Debug)]
+/// A parsed safetensors shard with owned storage.
+///
+/// Stores the parsed [`Metadata`] (header, no lifetime) plus the raw data
+/// bytes as an `Arc<[u8]>` beginning at `data_start` within the original
+/// buffer. This eliminates the previous `transmute`-based self-referential
+/// pattern: tensor data is sliced from `data` on demand using the byte
+/// offsets recorded in `Metadata`.
+#[derive(Debug, Clone)]
 struct OwnedShard {
-    tensors: SafeTensors<'static>,
-    buffer: backends::byte::OwnedBytes,
+    metadata: Metadata,
+    /// The tensor data region (i.e. the bytes after the safetensors header).
+    data: Arc<[u8]>,
 }
 
 impl OwnedShard {
     fn from_owned(buffer: backends::byte::OwnedBytes) -> ReaderResult<Self> {
-        let slice: &[u8] = &buffer;
-        let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
-        let tensors = SafeTensors::deserialize(static_slice)?;
-        Ok(Self { tensors, buffer })
+        let bytes: Arc<[u8]> = buffer.into_shared();
+        // `read_metadata` returns (header_json_len, metadata); the actual
+        // tensor data begins at header_json_len + 8 (the 8-byte length prefix).
+        let (header_json_len, metadata) = SafeTensors::read_metadata(&bytes)?;
+        const N_LEN: usize = std::mem::size_of::<u64>();
+        let data: Arc<[u8]> = Arc::from(&bytes[header_json_len + N_LEN..]);
+        Ok(Self { metadata, data })
     }
 
     fn from_bytes(bytes: Vec<u8>) -> ReaderResult<Self> {
         Self::from_owned(backends::byte::OwnedBytes::Shared(bytes.into()))
     }
+
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
+        let info = self.metadata.info(name).ok_or_else(|| ReaderError::TensorNotFound {
+            name: name.to_owned(),
+        })?;
+        tensor_from_info_and_data(info, &self.data, name)
+    }
 }
 
-#[derive(Debug)]
+/// A parsed safetensors shard backed by a memory-mapped file.
+///
+/// Stores the parsed [`Metadata`] plus the original [`Mmap`] handle.
+/// Tensor data is sliced directly from the mmap on demand — no `transmute`.
+///
+/// [`Mmap`]: backends::mmap::Mmap
+#[derive(Debug, Clone)]
 struct MmapShard {
-    tensors: SafeTensors<'static>,
-    _mmap: backends::mmap::Mmap,
+    metadata: Metadata,
+    /// Offset within `mmap` at which tensor data begins.
+    data_start: usize,
+    mmap: backends::mmap::Mmap,
 }
 
 impl MmapShard {
     fn from_mmap(mmap: backends::mmap::Mmap) -> ReaderResult<Self> {
-        let slice = mmap.as_slice();
-        let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
-        let tensors = SafeTensors::deserialize(static_slice)?;
-        Ok(Self {
-            tensors,
-            _mmap: mmap,
-        })
+        // `read_metadata` returns (header_json_len, metadata); the actual
+        // tensor data begins at header_json_len + 8 (the 8-byte length prefix).
+        let (header_json_len, metadata) = SafeTensors::read_metadata(mmap.as_slice())?;
+        const N_LEN: usize = std::mem::size_of::<u64>();
+        let data_start = header_json_len + N_LEN;
+        Ok(Self { metadata, data_start, mmap })
+    }
+
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
+        let info = self.metadata.info(name).ok_or_else(|| ReaderError::TensorNotFound {
+            name: name.to_owned(),
+        })?;
+        let data = &self.mmap.as_slice()[self.data_start..];
+        tensor_from_info_and_data(info, data, name)
     }
 }
 
-impl Clone for MmapShard {
-    fn clone(&self) -> Self {
-        Self::from_mmap(self._mmap.clone()).expect("valid safetensors mmap data")
-    }
+// ============================================================================
+// Shared helper
+// ============================================================================
+
+/// Build a [`Tensor`] from a [`TensorInfo`] and a data slice.
+///
+/// `data` must be the tensor-data region (i.e. after the safetensors header).
+/// `TensorInfo::data_offsets` are relative to the start of that region.
+fn tensor_from_info_and_data<'a>(
+    info: &TensorInfo,
+    data: &'a [u8],
+    name: &str,
+) -> ReaderResult<Tensor<'a>> {
+    let (start, end) = info.data_offsets;
+    let slice = data.get(start..end).ok_or_else(|| {
+        ReaderError::InvalidMetadata(format!(
+            "tensor {name}: data offset {start}..{end} out of bounds (data len {})",
+            data.len()
+        ))
+    })?;
+    StTensorView::new(info.dtype, info.shape.clone(), slice)
+        .map(Tensor)
+        .map_err(ReaderError::from)
 }
 
-#[derive(Debug)]
+// ============================================================================
+// Owned (eager) model internals
+// ============================================================================
+
+#[derive(Debug, Clone)]
 struct OwnedSingleModel {
     shard: OwnedShard,
     tensor_names: TensorNameList,
@@ -69,7 +126,7 @@ struct OwnedSingleModel {
 impl OwnedSingleModel {
     fn from_shard(shard: OwnedShard) -> Self {
         let mut tensor_names: Vec<Arc<str>> =
-            shard.tensors.names().into_iter().map(Into::into).collect();
+            shard.metadata.offset_keys().into_iter().map(Arc::from).collect();
         tensor_names.sort_unstable();
         Self {
             shard,
@@ -85,12 +142,8 @@ impl OwnedSingleModel {
         Ok(Self::from_shard(OwnedShard::from_owned(buffer)?))
     }
 
-    fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
-        self.shard
-            .tensors
-            .tensor(name)
-            .map(Tensor)
-            .map_err(ReaderError::from)
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
+        self.shard.tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {
@@ -98,7 +151,7 @@ impl OwnedSingleModel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OwnedShardedModel {
     shards: Vec<OwnedShard>,
     tensor_shards: TensorShardMap,
@@ -107,24 +160,17 @@ struct OwnedShardedModel {
 
 impl OwnedShardedModel {
     fn from_shards(shards: Vec<OwnedShard>) -> ReaderResult<Self> {
-        let (tensor_shards, tensor_names) =
-            Self::build_index(shards.iter().map(|s| &s.tensors))?;
-        Ok(Self {
-            shards,
-            tensor_shards,
-            tensor_names,
-        })
+        let (tensor_shards, tensor_names) = Self::build_index(&shards)?;
+        Ok(Self { shards, tensor_shards, tensor_names })
     }
 
-    fn build_index<'a>(
-        shards: impl Iterator<Item = &'a SafeTensors<'static>>,
-    ) -> ReaderResult<(TensorShardMap, TensorNameList)> {
+    fn build_index(shards: &[OwnedShard]) -> ReaderResult<(TensorShardMap, TensorNameList)> {
         let mut tensor_shards = HashMap::new();
         let mut tensor_names = Vec::new();
 
-        for (shard_idx, tensors) in shards.enumerate() {
-            for name in tensors.names() {
-                let name: Arc<str> = name.into();
+        for (shard_idx, shard) in shards.iter().enumerate() {
+            for name in shard.metadata.offset_keys() {
+                let name: Arc<str> = Arc::from(name.as_str());
                 if tensor_shards.insert(name.clone(), shard_idx).is_some() {
                     return Err(ReaderError::InvalidMetadata(format!(
                         "duplicate tensor name across shards: {}",
@@ -139,7 +185,7 @@ impl OwnedShardedModel {
         Ok((tensor_shards, tensor_names.into()))
     }
 
-    fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
         let shard_idx =
             self.tensor_shards
                 .get(name)
@@ -147,11 +193,7 @@ impl OwnedShardedModel {
                 .ok_or_else(|| ReaderError::TensorNotFound {
                     name: name.to_owned(),
                 })?;
-        self.shards[shard_idx]
-            .tensors
-            .tensor(name)
-            .map(Tensor)
-            .map_err(ReaderError::from)
+        self.shards[shard_idx].tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {
@@ -233,14 +275,14 @@ impl LoadStats {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ModelStorage {
     Single(OwnedSingleModel),
     Sharded(OwnedShardedModel),
 }
 
 /// SafeTensors reader with owned, eager storage.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Model {
     storage: ModelStorage,
 }
@@ -415,7 +457,7 @@ impl Model {
     }
 
     #[inline]
-    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+    pub fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
         match &self.storage {
             ModelStorage::Single(model) => model.tensor(name),
             ModelStorage::Sharded(model) => model.tensor(name),
@@ -455,36 +497,7 @@ impl Model {
     }
 }
 
-impl Clone for Model {
-    fn clone(&self) -> Self {
-        match &self.storage {
-            ModelStorage::Single(model) => Self {
-                storage: ModelStorage::Single(OwnedSingleModel {
-                    shard: OwnedShard::from_bytes(model.shard.buffer.to_vec())
-                        .expect("valid safetensors data"),
-                    tensor_names: model.tensor_names.clone(),
-                }),
-            },
-            ModelStorage::Sharded(model) => {
-                let shards = model
-                    .shards
-                    .iter()
-                    .map(|shard| {
-                        OwnedShard::from_bytes(shard.buffer.to_vec())
-                            .expect("valid safetensors data")
-                    })
-                    .collect::<Vec<_>>();
-                Self {
-                    storage: ModelStorage::Sharded(OwnedShardedModel {
-                        tensor_shards: model.tensor_shards.clone(),
-                        tensor_names: model.tensor_names.clone(),
-                        shards,
-                    }),
-                }
-            }
-        }
-    }
-}
+
 
 impl ModelTrait for Model {
     type Tensor<'a>
@@ -509,7 +522,7 @@ impl ModelTrait for Model {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MmapSingleModel {
     shard: MmapShard,
     tensor_names: TensorNameList,
@@ -518,7 +531,7 @@ struct MmapSingleModel {
 impl MmapSingleModel {
     fn from_shard(shard: MmapShard) -> Self {
         let mut tensor_names: Vec<Arc<str>> =
-            shard.tensors.names().into_iter().map(Into::into).collect();
+            shard.metadata.offset_keys().into_iter().map(Arc::from).collect();
         tensor_names.sort_unstable();
         Self {
             shard,
@@ -526,12 +539,8 @@ impl MmapSingleModel {
         }
     }
 
-    fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
-        self.shard
-            .tensors
-            .tensor(name)
-            .map(Tensor)
-            .map_err(ReaderError::from)
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
+        self.shard.tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {
@@ -539,7 +548,7 @@ impl MmapSingleModel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MmapShardedModel {
     shards: Vec<MmapShard>,
     tensor_shards: TensorShardMap,
@@ -552,8 +561,8 @@ impl MmapShardedModel {
         let mut tensor_names = Vec::new();
 
         for (shard_idx, shard) in shards.iter().enumerate() {
-            for name in shard.tensors.names() {
-                let name: Arc<str> = name.into();
+            for name in shard.metadata.offset_keys() {
+                let name: Arc<str> = Arc::from(name.as_str());
                 if tensor_shards.insert(name.clone(), shard_idx).is_some() {
                     return Err(ReaderError::InvalidMetadata(format!(
                         "duplicate tensor name across shards: {}",
@@ -572,7 +581,7 @@ impl MmapShardedModel {
         })
     }
 
-    fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+    fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
         let shard_idx =
             self.tensor_shards
                 .get(name)
@@ -580,11 +589,7 @@ impl MmapShardedModel {
                 .ok_or_else(|| ReaderError::TensorNotFound {
                     name: name.to_owned(),
                 })?;
-        self.shards[shard_idx]
-            .tensors
-            .tensor(name)
-            .map(Tensor)
-            .map_err(ReaderError::from)
+        self.shards[shard_idx].tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {
@@ -604,14 +609,14 @@ impl MmapShardedModel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum MmapStorage {
     Single(MmapSingleModel),
     Sharded(MmapShardedModel),
 }
 
 /// SafeTensors reader with mmap-backed, lazy storage.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MmapModel {
     storage: MmapStorage,
 }
@@ -649,7 +654,7 @@ impl MmapModel {
     }
 
     #[inline]
-    pub fn tensor(&self, name: &str) -> ReaderResult<Tensor<'static>> {
+    pub fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
         match &self.storage {
             MmapStorage::Single(model) => model.tensor(name),
             MmapStorage::Sharded(model) => model.tensor(name),
