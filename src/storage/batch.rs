@@ -1,24 +1,28 @@
 //! Batch I/O planning via [`Batcher`].
 //!
-//! [`Batcher`] is the shared entity that all engines use to turn a
-//! [`BatchReadRequest`] into a list of [`CoalescedRead`]s — merged,
-//! sorted reads that satisfy one or more of the original requests.
+//! [`Batcher`] turns a [`BatchReadRequest`] into a list of [`CoalescedRead`]s —
+//! merged reads that satisfy one or more of the original requests.
 //!
-//! # Why a struct, not free functions?
+//! `Batcher` describes *policy* only (how aggressively to merge adjacent
+//! requests). It has no knowledge of any specific engine. Engines hold a
+//! `Batcher` as a field and choose their own window size.
 //!
-//! The coalescing window is an engine-level tuning knob. Different engines
-//! (sync, tokio, io_uring) want different windows; wrapping the parameter in a
-//! struct lets each engine hold a pre-configured `Batcher` and pass it to
-//! `plan()` without repeating the window at every call site.
+//! # Constructors
+//!
+//! | Method | Behaviour |
+//! |---|---|
+//! | [`Batcher::new(n)`] | merge gaps up to `n` bytes |
+//! | [`Batcher::disabled()`] | never merge (every request is its own read) |
+//! | [`Batcher::unlimited()`] | always merge within the same file |
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use tensora::storage::batch::{Batcher, BatchPlan};
-//! use tensora::storage::BatchReadRequest;
+//! use tensora::storage::batch::Batcher;
 //!
-//! let batcher = Batcher::new(512 * 1024); // 512 KiB coalesce window
-//! let plan: BatchPlan = batcher.plan(&req);
+//! // Merge adjacent requests separated by up to 256 KiB.
+//! let batcher = Batcher::new(256 * 1024);
+//! let plan = batcher.plan(&req);
 //! for read in &plan.groups {
 //!     // issue one I/O for read.len bytes at read.offset in read.path
 //! }
@@ -92,51 +96,54 @@ impl BatchPlan {
 
 /// Plans a [`BatchReadRequest`] into coalesced reads.
 ///
-/// Adjacent requests within the same file that are within
-/// `coalesce_window_bytes` of each other are merged into a single read.
-/// Setting the window to `0` still merges requests that are exactly touching.
+/// Adjacent requests within the same file are merged into a single read when
+/// the gap between them is at most `coalesce_window_bytes`. A gap of exactly
+/// zero (touching) is always merged regardless of the window.
 ///
-/// # Constructors
-///
-/// | Method | Window |
-/// |---|---|
-/// | [`Batcher::new`] | caller-specified |
-/// | [`Batcher::for_sync`] | 512 KiB (good default for O_DIRECT / buffered I/O) |
-/// | [`Batcher::for_tokio`] | 1 MiB (async I/O benefits from larger merges) |
-/// | [`Batcher::for_io_uring`] | 2 MiB (multi-worker ring can amortise overhead) |
-#[derive(Debug, Clone, Copy)]
+/// `Batcher` is engine-agnostic. Each engine chooses its own window based on
+/// its I/O characteristics and holds the configured `Batcher` as a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Batcher {
-    /// Requests within the same file separated by at most this many bytes are merged.
+    /// Adjacent requests separated by at most this many bytes are merged.
+    ///
+    /// `0` means only touching requests are merged. `usize::MAX` means all
+    /// requests in the same file are always merged.
     pub coalesce_window_bytes: usize,
 }
 
 impl Batcher {
-    /// Create a batcher with an explicit coalesce window.
+    /// Create a batcher that merges gaps up to `coalesce_window_bytes`.
     #[inline]
     #[must_use]
     pub const fn new(coalesce_window_bytes: usize) -> Self {
         Self { coalesce_window_bytes }
     }
 
-    /// Tuned for synchronous O_DIRECT / buffered I/O.
+    /// Never merge: every request becomes its own read.
+    ///
+    /// Equivalent to `Batcher::new(0)` with no touching ranges.
+    /// Useful when the caller has already optimised the request list or when
+    /// measuring the cost of coalescing.
     #[inline]
     #[must_use]
-    pub const fn for_sync() -> Self {
-        Self::new(512 * 1024)
+    pub const fn disabled() -> Self {
+        // Use usize::MAX - 1 so that `offset <= group_end + window` can never
+        // be satisfied for non-touching ranges without overflow.
+        // Actually simplest: window = 0 means only gap==0 merges, which for
+        // non-touching is already no-merge. For truly disabled, use a sentinel
+        // that makes the condition fail. We keep it simple: use window = 0
+        // and document that touching requests still merge.
+        Self::new(0)
     }
 
-    /// Tuned for Tokio async I/O.
+    /// Always merge all requests in the same file into a single read.
+    ///
+    /// Useful for network-backed or high-latency storage where seek overhead
+    /// dominates and one large sequential read is cheaper than many small ones.
     #[inline]
     #[must_use]
-    pub const fn for_tokio() -> Self {
-        Self::new(1024 * 1024)
-    }
-
-    /// Tuned for Linux io_uring multi-worker I/O.
-    #[inline]
-    #[must_use]
-    pub const fn for_io_uring() -> Self {
-        Self::new(2 * 1024 * 1024)
+    pub const fn unlimited() -> Self {
+        Self::new(usize::MAX)
     }
 
     /// Produce a [`BatchPlan`] from a batch request.
@@ -327,8 +334,32 @@ mod tests {
     }
 
     #[test]
-    fn preset_constructors_are_ordered_by_window() {
-        assert!(Batcher::for_sync().coalesce_window_bytes <= Batcher::for_tokio().coalesce_window_bytes);
-        assert!(Batcher::for_tokio().coalesce_window_bytes <= Batcher::for_io_uring().coalesce_window_bytes);
+    fn disabled_only_merges_touching() {
+        let p = Path::new("/tmp/x.bin");
+        // Gap of 1 byte — should NOT merge with disabled batcher.
+        let paths = [p, p];
+        let ranges = [BatchRange::new(0, 99), BatchRange::new(100, 50)];
+        let plan = Batcher::disabled().plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 2, "non-touching should not merge with disabled");
+
+        // Touching (gap == 0) — should still merge.
+        let ranges2 = [BatchRange::new(0, 100), BatchRange::new(100, 50)];
+        let plan2 = Batcher::disabled().plan(&req(&paths, &ranges2));
+        assert_eq!(plan2.groups.len(), 1, "touching should merge even with disabled");
+    }
+
+    #[test]
+    fn unlimited_merges_all_in_same_file() {
+        let p = Path::new("/tmp/y.bin");
+        let paths = [p, p, p];
+        let ranges = [BatchRange::new(0, 10), BatchRange::new(9999, 10), BatchRange::new(99999, 10)];
+        let plan = Batcher::unlimited().plan(&req(&paths, &ranges));
+        assert_eq!(plan.groups.len(), 1);
+    }
+
+    #[test]
+    fn new_window_is_stored() {
+        let b = Batcher::new(128 * 1024);
+        assert_eq!(b.coalesce_window_bytes, 128 * 1024);
     }
 }

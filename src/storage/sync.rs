@@ -47,12 +47,16 @@ impl Default for SyncStorage {
     }
 }
 
+/// Default coalesce window for `SyncStorage`. 512 KiB works well for
+/// O_DIRECT / buffered sequential reads typical of ML checkpoint loading.
+const DEFAULT_COALESCE_WINDOW: usize = 512 * 1024;
+
 impl SyncStorage {
-    /// Create a `SyncStorage` engine with the default [`Batcher::for_sync`] coalesce window.
+    /// Create a `SyncStorage` engine with the default coalesce window (512 KiB).
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self { batcher: Batcher::for_sync() }
+        Self { batcher: Batcher::new(DEFAULT_COALESCE_WINDOW) }
     }
 
     /// Return a new engine with the given batcher.
