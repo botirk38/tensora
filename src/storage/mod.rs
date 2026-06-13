@@ -25,6 +25,7 @@
 
 pub mod availability;
 pub mod buffer;
+pub mod mmap;
 pub mod sync;
 
 pub use std::io::Result as IoResult;

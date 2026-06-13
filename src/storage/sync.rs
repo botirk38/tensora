@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::backends::{SyncReader as BackendReader, SyncWriter as BackendWriter};
 use crate::storage::{
-    BatchReadRequest, FileReadRequest, IoResult, RangeReadRequest, RangeReadResult, WriteAtRequest,
+    FileReadRequest, IoResult, RangeReadRequest, WriteAtRequest,
     availability::{StorageAvailability, StorageCapabilities, StorageKind},
     buffer::OwnedBytes,
 };
@@ -97,21 +97,6 @@ impl super::ReadableStorage for SyncStorage {
         let mut reader = BackendReader::new();
         Ok(convert_bytes(reader.load_range(req.path, req.offset, req.len)?))
     }
-
-    fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
-        req.paths
-            .iter()
-            .zip(req.ranges.iter())
-            .enumerate()
-            .map(|(i, (path, range))| {
-                let mut reader = BackendReader::new();
-                let raw = convert_bytes(reader.load_range(path, range.offset, range.len)?);
-                let bytes = raw.into_shared();
-                let logical_len = bytes.len();
-                Ok(RangeReadResult { request_index: i, bytes, logical_offset: 0, logical_len })
-            })
-            .collect()
-    }
 }
 
 // ============================================================================
@@ -184,7 +169,7 @@ fn convert_bytes(b: crate::backends::byte::OwnedBytes) -> OwnedBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{BatchRange, ReadableStorage, StorageEngine, WritableStorage};
+    use crate::storage::{BatchRange, BatchReadRequest, ReadableStorage, StorageEngine, WritableStorage};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
