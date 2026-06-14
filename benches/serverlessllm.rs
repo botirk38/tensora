@@ -7,7 +7,6 @@ use std::hint::black_box;
 use std::time::Duration;
 use tensora::formats::serverlessllm;
 
-
 // ---------------------------------------------------------------------------
 // Full-model load benchmarks (one per backend)
 // ---------------------------------------------------------------------------
@@ -26,7 +25,9 @@ fn bench_default(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = serverlessllm::Model::load(black_box(&dir_str)).await.unwrap();
+            let model = serverlessllm::Model::load(black_box(&dir_str))
+                .await
+                .unwrap();
             let bytes: usize = (&model).into_iter().map(|(_, t)| t.data().len()).sum();
             black_box((model.len(), bytes))
         });
@@ -69,7 +70,9 @@ fn bench_async(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = serverlessllm::Model::load_async(black_box(&dir_str)).await.unwrap();
+            let model = serverlessllm::Model::load_async(black_box(&dir_str))
+                .await
+                .unwrap();
             let bytes: usize = (&model).into_iter().map(|(_, t)| t.data().len()).sum();
             black_box((model.len(), bytes))
         });

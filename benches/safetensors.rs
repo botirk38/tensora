@@ -67,7 +67,9 @@ fn bench_async(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = safetensors::Model::load_async(black_box(&dir_str)).await.unwrap();
+            let model = safetensors::Model::load_async(black_box(&dir_str))
+                .await
+                .unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });

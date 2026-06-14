@@ -25,9 +25,10 @@
 //! writer.write_to_file_async([("weight", tensor)], None, "model.safetensors").await.unwrap();
 //! ```
 
-use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
+use crate::storage::WriteAtRequest;
+use crate::storage::tokio::TokioStorage;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
@@ -174,10 +175,16 @@ impl Writer {
             std::fs::create_dir_all(parent)?;
         }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let mut writer = backends::AsyncWriter::create(path_ref)
+        let engine = TokioStorage::new();
+        let mut writer = engine
+            .create_writer(path_ref)
             .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writer.write_all(&buffer).await.map_err(WriterError::from)
+            .map_err(WriterError::from)?;
+        writer
+            .write_at(WriteAtRequest::new(0, &buffer))
+            .await
+            .map_err(WriterError::from)?;
+        writer.flush().await.map_err(WriterError::from)
     }
 }
 
@@ -338,8 +345,7 @@ mod tests {
     #[test]
     fn dtype_mapping_all_known() {
         let known = [
-            "BOOL", "U8", "I8", "I16", "I32", "I64", "U32", "U64",
-            "F16", "F32", "F64", "BF16",
+            "BOOL", "U8", "I8", "I16", "I32", "I64", "U32", "U64", "F16", "F32", "F64", "BF16",
         ];
         for k in &known {
             assert!(dtype_from_str(k).is_ok(), "failed for {k}");

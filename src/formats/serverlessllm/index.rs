@@ -2,8 +2,9 @@
 //!
 //! Redesigned for compiled metadata - all partition info computed once at parse time.
 
-use crate::backends;
 use crate::formats::error::{ReaderError, ReaderResult};
+use crate::storage::FileReadRequest;
+use crate::storage::tokio::TokioStorage;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -206,8 +207,10 @@ impl Index {
 
     /// Load index from file asynchronously.
     pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let mut reader = backends::AsyncReader::new();
-        let data = reader.load(path.as_ref()).await?;
+        let engine = TokioStorage::new();
+        let data = engine
+            .read_file(FileReadRequest::new(path.as_ref()))
+            .await?;
         Self::from_bytes(&data)
     }
 
@@ -295,7 +298,6 @@ mod tests {
         let p0 = index.partition(0).expect("partition 0");
         assert_eq!(p0.max_required_size, 30);
     }
-
 
     #[test]
     fn empty_index_accessors() {

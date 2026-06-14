@@ -13,6 +13,10 @@ use crate::storage::{
     availability::{StorageAvailability, StorageCapabilities, StorageKind},
     buffer::MmapRegion,
 };
+use memmap2::MmapOptions;
+use std::fs::File;
+use std::io::{Error, ErrorKind};
+use std::sync::Arc;
 
 // ============================================================================
 // MmapStorage
@@ -90,7 +94,19 @@ impl super::MappableStorage for MmapStorage {
     /// Returns an I/O error if the file cannot be opened, is empty, or exceeds
     /// `usize::MAX` bytes.
     fn map_file(&self, req: MmapRequest<'_>) -> IoResult<MmapRegion> {
-        crate::backends::mmap::map(req.path)
+        let file = File::open(req.path)?;
+        let len_u64 = file.metadata()?.len();
+        let len = usize::try_from(len_u64)
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "file too large"))?;
+        if len == 0 {
+            return Err(Error::new(ErrorKind::InvalidData, "cannot mmap empty file"));
+        }
+        let inner = unsafe { MmapOptions::new().map(&file)? };
+        Ok(MmapRegion {
+            inner: Arc::new(inner),
+            start: 0,
+            len,
+        })
     }
 
     /// Memory-map a byte range within a file.
@@ -103,7 +119,42 @@ impl super::MappableStorage for MmapStorage {
     /// Returns an I/O error if the file cannot be opened, `req.len == 0`,
     /// the range overflows, or the range extends beyond the file.
     fn map_range(&self, req: MmapRangeRequest<'_>) -> IoResult<MmapRegion> {
-        crate::backends::mmap::map_range(req.path, req.offset, req.len)
+        if req.len == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "cannot mmap empty range",
+            ));
+        }
+        let file = File::open(req.path)?;
+        let file_len = file.metadata()?.len();
+        let end =
+            req.offset
+                .checked_add(u64::try_from(req.len).map_err(|e| {
+                    Error::new(ErrorKind::InvalidInput, format!("len too large: {e}"))
+                })?)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range overflow"))?;
+        if end > file_len {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "range exceeds file size",
+            ));
+        }
+        let page_size = u64::try_from(region::page::size()).unwrap_or(4096);
+        let aligned_offset = (req.offset / page_size) * page_size;
+        let start = usize::try_from(req.offset - aligned_offset)
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+        let map_len = req.len + start;
+        let inner = unsafe {
+            MmapOptions::new()
+                .offset(aligned_offset)
+                .len(map_len)
+                .map(&file)?
+        };
+        Ok(MmapRegion {
+            inner: Arc::new(inner),
+            start,
+            len: req.len,
+        })
     }
 }
 
@@ -139,7 +190,9 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let region = MmapStorage::new().map_file(MmapRequest::new(&path)).unwrap();
+        let region = MmapStorage::new()
+            .map_file(MmapRequest::new(&path))
+            .unwrap();
         assert_eq!(region.as_slice(), &data[..]);
         assert_eq!(region.len(), 4096);
         assert!(!region.is_empty());
@@ -150,7 +203,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let err = MmapStorage::new().map_file(MmapRequest::new(&path)).unwrap_err();
+        let err = MmapStorage::new()
+            .map_file(MmapRequest::new(&path))
+            .unwrap_err();
         assert!(
             err.kind() == std::io::ErrorKind::InvalidData
                 || err.kind() == std::io::ErrorKind::Other,
@@ -165,8 +220,9 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let region =
-            MmapStorage::new().map_range(MmapRangeRequest::new(&path, 10, 20)).unwrap();
+        let region = MmapStorage::new()
+            .map_range(MmapRangeRequest::new(&path, 10, 20))
+            .unwrap();
         assert_eq!(region.as_slice(), &data[10..30]);
         assert_eq!(region.len(), 20);
     }
@@ -176,8 +232,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let err =
-            MmapStorage::new().map_range(MmapRangeRequest::new(&path, 0, 0)).unwrap_err();
+        let err = MmapStorage::new()
+            .map_range(MmapRangeRequest::new(&path, 0, 0))
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -186,8 +243,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "short.bin", b"hi");
 
-        let err =
-            MmapStorage::new().map_range(MmapRangeRequest::new(&path, 0, 1000)).unwrap_err();
+        let err = MmapStorage::new()
+            .map_range(MmapRangeRequest::new(&path, 0, 1000))
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
@@ -197,7 +255,9 @@ mod tests {
         let data = vec![0xABu8; 1024 * 1024]; // 1 MiB
         let path = write_tmp(&dir, "large.bin", &data);
 
-        let region = MmapStorage::new().map_file(MmapRequest::new(&path)).unwrap();
+        let region = MmapStorage::new()
+            .map_file(MmapRequest::new(&path))
+            .unwrap();
         assert_eq!(region.len(), data.len());
         assert!(region.as_slice().iter().all(|&b| b == 0xAB));
     }
@@ -213,8 +273,9 @@ mod tests {
         let path = write_tmp(&dir, "pages.bin", &data);
 
         // Map 100 bytes starting at the second page boundary (4096)
-        let region =
-            MmapStorage::new().map_range(MmapRangeRequest::new(&path, 4096, 100)).unwrap();
+        let region = MmapStorage::new()
+            .map_range(MmapRangeRequest::new(&path, 4096, 100))
+            .unwrap();
         assert_eq!(region.len(), 100);
         assert_eq!(region.as_slice(), &data[4096..4196]);
     }
@@ -224,7 +285,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "clone.bin", b"hello clone");
 
-        let r1 = MmapStorage::new().map_file(MmapRequest::new(&path)).unwrap();
+        let r1 = MmapStorage::new()
+            .map_file(MmapRequest::new(&path))
+            .unwrap();
         let r2 = r1.clone();
         assert_eq!(r1.as_slice(), r2.as_slice());
         // Both point at the same underlying Arc<memmap2::Mmap>

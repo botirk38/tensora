@@ -4,7 +4,11 @@
 
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::Model as ModelTrait;
+#[cfg(target_os = "linux")]
+use crate::storage::availability::{StorageCapabilities, StorageKind};
 use crate::storage::buffer::{MmapRegion, OwnedBytes};
+#[cfg(target_os = "linux")]
+use crate::storage::io_uring::IoUringStorage;
 use crate::storage::mmap::MmapStorage as MmapEngine;
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
@@ -12,10 +16,6 @@ use crate::storage::{
     BatchRange, BatchReadRequest, FileReadRequest, MappableStorage, MmapRequest, RangeReadResult,
     ReadableStorage,
 };
-#[cfg(target_os = "linux")]
-use crate::storage::availability::{StorageCapabilities, StorageKind};
-#[cfg(target_os = "linux")]
-use crate::storage::io_uring::IoUringStorage;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -211,7 +211,12 @@ impl LoadPlan {
             .map(|(i, b)| {
                 let bytes: Arc<[u8]> = b.into_shared();
                 let len = bytes.len();
-                RangeReadResult { request_index: i, bytes, logical_offset: 0, logical_len: len }
+                RangeReadResult {
+                    request_index: i,
+                    bytes,
+                    logical_offset: 0,
+                    logical_len: len,
+                }
             })
             .collect();
         self.assemble(range_results)
@@ -573,12 +578,15 @@ mod tests {
         };
         match stats.choose_backend() {
             LoadBackend::Sync => {}
-            other => panic!("expected Sync for single partition, got {:?}", match other {
-                LoadBackend::TokioAsync => "TokioAsync",
-                #[cfg(target_os = "linux")]
-                LoadBackend::IoUring => "IoUring",
-                _ => "unknown",
-            }),
+            other => panic!(
+                "expected Sync for single partition, got {:?}",
+                match other {
+                    LoadBackend::TokioAsync => "TokioAsync",
+                    #[cfg(target_os = "linux")]
+                    LoadBackend::IoUring => "IoUring",
+                    _ => "unknown",
+                }
+            ),
         }
     }
 

@@ -21,7 +21,7 @@ use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
-use crate::storage::{WriteAtRequest, WritableStorage};
+use crate::storage::{WritableStorage, WriteAtRequest};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -122,7 +122,10 @@ pub async fn write_index(
     ensure_parent_dir_async(path).await?;
     let json = serialize_index(tensors)?;
     let engine = TokioStorage::new();
-    let mut writer = engine.create_writer(path).await.map_err(WriterError::from)?;
+    let mut writer = engine
+        .create_writer(path)
+        .await
+        .map_err(WriterError::from)?;
     writer
         .write_at(WriteAtRequest::new(0, &json))
         .await
@@ -170,7 +173,10 @@ pub async fn write_partition(output_path: impl AsRef<Path>, data: &[u8]) -> Writ
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
     let engine = TokioStorage::new();
-    let mut writer = engine.create_writer(path).await.map_err(WriterError::from)?;
+    let mut writer = engine
+        .create_writer(path)
+        .await
+        .map_err(WriterError::from)?;
     writer
         .write_at(WriteAtRequest::new(0, data))
         .await

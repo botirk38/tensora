@@ -12,17 +12,136 @@
 
 use std::sync::Arc;
 
-pub use zeropool::PooledBuffer;
 use zeropool::BufferPool;
+pub use zeropool::PooledBuffer;
+
+// ============================================================================
+// AlignedBuffer — O_DIRECT aligned heap buffer (Linux only)
+// ============================================================================
+
+/// A page-aligned buffer for O_DIRECT I/O (Linux only).
+#[cfg(target_os = "linux")]
+pub struct AlignedBuffer {
+    ptr: std::ptr::NonNull<u8>,
+    layout: std::alloc::Layout,
+    len: usize,
+}
 
 #[cfg(target_os = "linux")]
-pub use crate::backends::odirect::AlignedBuffer;
+impl AlignedBuffer {
+    const BLOCK_SIZE: usize = 4096;
 
-/// An mmap-backed byte region for use inside [`OwnedBytes`].
+    pub fn new(capacity: usize) -> std::io::Result<Self> {
+        if capacity == 0 {
+            return Ok(Self {
+                ptr: std::ptr::NonNull::dangling(),
+                layout: unsafe { std::alloc::Layout::from_size_align_unchecked(1, 1) },
+                len: 0,
+            });
+        }
+        let layout =
+            std::alloc::Layout::from_size_align(capacity, Self::BLOCK_SIZE).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid alloc layout")
+            })?;
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        Ok(Self {
+            ptr: std::ptr::NonNull::new(ptr).unwrap(),
+            layout,
+            len: 0,
+        })
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+    pub fn set_len(&mut self, len: usize) {
+        assert!(len <= self.layout.size());
+        self.len = len;
+    }
+    pub fn capacity(&self) -> usize {
+        self.layout.size()
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for AlignedBuffer {
+    fn drop(&mut self) {
+        if self.layout.size() > 0 {
+            unsafe { std::alloc::dealloc(self.ptr.as_ptr(), self.layout) }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Debug for AlignedBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlignedBuffer")
+            .field("len", &self.len)
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for AlignedBuffer {}
+
+// ============================================================================
+// MmapRegion — Arc-backed memory-mapped file region
+// ============================================================================
+
+/// A memory-mapped file region backed by an `Arc<memmap2::Mmap>`.
 ///
-/// Wraps `backends::mmap::Mmap` for now; will become the canonical mmap type
-/// once `backends` is deleted in a later PR.
-pub type MmapRegion = crate::backends::mmap::Mmap;
+/// Cheaply cloneable; `as_slice()` returns exactly `len` bytes starting at
+/// `start` within the underlying mapping.
+#[derive(Debug, Clone)]
+pub struct MmapRegion {
+    pub inner: Arc<memmap2::Mmap>,
+    pub start: usize,
+    pub len: usize,
+}
+
+impl MmapRegion {
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.inner[self.start..self.start + self.len]
+    }
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl AsRef<[u8]> for MmapRegion {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for MmapRegion {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
 
 // ============================================================================
 // Global buffer pool
@@ -210,7 +329,9 @@ impl std::ops::Deref for OwnedBytes {
 
 impl std::fmt::Debug for OwnedBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OwnedBytes").field("len", &self.len()).finish_non_exhaustive()
+        f.debug_struct("OwnedBytes")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -227,7 +348,13 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         tmp.write_all(b"hello_mmap").unwrap();
         tmp.flush().unwrap();
-        crate::backends::mmap::map(tmp.path()).unwrap()
+        let file = std::fs::File::open(tmp.path()).unwrap();
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
+        MmapRegion {
+            inner: Arc::new(mmap),
+            start: 0,
+            len: 10,
+        }
     }
 
     #[test]
@@ -320,7 +447,10 @@ mod tests {
         assert_eq!(OwnedBytes::from_vec(data.clone()).into_vec(), data);
         let arc: Arc<[u8]> = Arc::from(data.clone());
         assert_eq!(OwnedBytes::Shared(arc).into_vec(), data);
-        assert_eq!(OwnedBytes::Mmap(make_mmap_region()).into_vec(), b"hello_mmap");
+        assert_eq!(
+            OwnedBytes::Mmap(make_mmap_region()).into_vec(),
+            b"hello_mmap"
+        );
     }
 
     #[test]

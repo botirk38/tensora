@@ -15,11 +15,11 @@
 
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
-use crate::storage::sync::SyncStorage;
-use crate::storage::tokio::TokioStorage;
-use crate::storage::{RangeReadRequest, ReadableStorage, WriteAtRequest, WritableStorage};
 #[cfg(target_os = "linux")]
 use crate::storage::availability::{StorageCapabilities, StorageKind};
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{RangeReadRequest, ReadableStorage, WritableStorage, WriteAtRequest};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -241,10 +241,7 @@ impl ConversionPlan {
         Self::from_tensors(tensors, partition_count)
     }
 
-    fn from_tensors(
-        mut tensors: Vec<TensorSource>,
-        partition_count: usize,
-    ) -> WriterResult<Self> {
+    fn from_tensors(mut tensors: Vec<TensorSource>, partition_count: usize) -> WriterResult<Self> {
         if tensors.is_empty() {
             return Err(WriterError::InvalidInput(
                 "no tensors found in input directory".to_owned(),
@@ -506,11 +503,7 @@ impl ConversionPlan {
 
     // -- Materialization ----------------------------------------------------
 
-    async fn materialize(
-        &self,
-        output_dir: &str,
-        backend: ConversionBackend,
-    ) -> WriterResult<()> {
+    async fn materialize(&self, output_dir: &str, backend: ConversionBackend) -> WriterResult<()> {
         let output_dir = Path::new(output_dir);
         tokio::fs::create_dir_all(output_dir).await?;
 
@@ -871,7 +864,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn dtype_mapping_exhaustive() {
         let dtypes = [
@@ -950,13 +942,9 @@ mod tests {
         let out = tmp.path().join("out_default");
 
         crate::test_utils::run_async(async {
-            convert_safetensors_to_serverlessllm(
-                src.to_str().unwrap(),
-                out.to_str().unwrap(),
-                2,
-            )
-            .await
-            .expect("convert default");
+            convert_safetensors_to_serverlessllm(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+                .await
+                .expect("convert default");
         });
 
         assert!(out.join("tensor_index.json").exists());
@@ -1062,12 +1050,8 @@ mod tests {
         write_shard(&shard, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
-        convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .unwrap();
+        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+            .unwrap();
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
         let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();

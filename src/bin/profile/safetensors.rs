@@ -219,8 +219,8 @@ fn profile_load_hf_native(config: &ProfileConfig) -> ProfileResult {
                 continue;
             }
             let data = fs::read(&path)?;
-            let tensors =
-                ::safetensors::SafeTensors::deserialize(&data).map_err(|e| ProfileError::new(e.to_string()))?;
+            let tensors = ::safetensors::SafeTensors::deserialize(&data)
+                .map_err(|e| ProfileError::new(e.to_string()))?;
             tensor_count += tensors.len();
             black_box(&tensors);
         }

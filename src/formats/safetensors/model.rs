@@ -3,19 +3,18 @@
 //! Public loading is directory-based. Single-file models are supported only when
 //! they live in a one-file directory. File-path inputs are rejected.
 
-use crate::backends;
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
 use crate::storage::MmapRequest;
+#[cfg(target_os = "linux")]
+use crate::storage::availability::{StorageCapabilities, StorageKind};
 use crate::storage::buffer::{MmapRegion, OwnedBytes};
+#[cfg(target_os = "linux")]
+use crate::storage::io_uring::IoUringStorage;
 use crate::storage::mmap::MmapStorage as MmapEngine;
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
 use crate::storage::{FileReadRequest, MappableStorage, ReadableStorage};
-#[cfg(target_os = "linux")]
-use crate::storage::availability::{StorageCapabilities, StorageKind};
-#[cfg(target_os = "linux")]
-use crate::storage::io_uring::IoUringStorage;
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};
@@ -58,9 +57,12 @@ impl OwnedShard {
     }
 
     fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
-        let info = self.metadata.info(name).ok_or_else(|| ReaderError::TensorNotFound {
-            name: name.to_owned(),
-        })?;
+        let info = self
+            .metadata
+            .info(name)
+            .ok_or_else(|| ReaderError::TensorNotFound {
+                name: name.to_owned(),
+            })?;
         tensor_from_info_and_data(info, &self.data, name)
     }
 }
@@ -86,13 +88,20 @@ impl MmapShard {
         let (header_json_len, metadata) = SafeTensors::read_metadata(mmap.as_slice())?;
         const N_LEN: usize = std::mem::size_of::<u64>();
         let data_start = header_json_len + N_LEN;
-        Ok(Self { metadata, data_start, mmap })
+        Ok(Self {
+            metadata,
+            data_start,
+            mmap,
+        })
     }
 
     fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
-        let info = self.metadata.info(name).ok_or_else(|| ReaderError::TensorNotFound {
-            name: name.to_owned(),
-        })?;
+        let info = self
+            .metadata
+            .info(name)
+            .ok_or_else(|| ReaderError::TensorNotFound {
+                name: name.to_owned(),
+            })?;
         let data = &self.mmap.as_slice()[self.data_start..];
         tensor_from_info_and_data(info, data, name)
     }
@@ -135,8 +144,12 @@ struct OwnedSingleModel {
 
 impl OwnedSingleModel {
     fn from_shard(shard: OwnedShard) -> Self {
-        let mut tensor_names: Vec<Arc<str>> =
-            shard.metadata.offset_keys().into_iter().map(Arc::from).collect();
+        let mut tensor_names: Vec<Arc<str>> = shard
+            .metadata
+            .offset_keys()
+            .into_iter()
+            .map(Arc::from)
+            .collect();
         tensor_names.sort_unstable();
         Self {
             shard,
@@ -171,7 +184,11 @@ struct OwnedShardedModel {
 impl OwnedShardedModel {
     fn from_shards(shards: Vec<OwnedShard>) -> ReaderResult<Self> {
         let (tensor_shards, tensor_names) = Self::build_index(&shards)?;
-        Ok(Self { shards, tensor_shards, tensor_names })
+        Ok(Self {
+            shards,
+            tensor_shards,
+            tensor_names,
+        })
     }
 
     fn build_index(shards: &[OwnedShard]) -> ReaderResult<(TensorShardMap, TensorNameList)> {
@@ -264,10 +281,7 @@ impl LoadStats {
     }
 
     #[cfg(target_os = "linux")]
-    fn choose_backend_with_capabilities(
-        &self,
-        capabilities: &StorageCapabilities,
-    ) -> LoadBackend {
+    fn choose_backend_with_capabilities(&self, capabilities: &StorageCapabilities) -> LoadBackend {
         if self.shard_count >= IOURING_SHARD_THRESHOLD
             && self.total_bytes >= IOURING_BYTE_THRESHOLD
             && capabilities.is_available(StorageKind::IoUring)
@@ -431,8 +445,25 @@ impl Model {
             }
         }
 
-        let limit =
-            backends::bounded_async_concurrency(shard_paths.len(), total_bytes, max_shard_bytes);
+        // Compute a chunk size that balances concurrency against memory pressure.
+        // More shards and larger average sizes warrant higher concurrency; skew
+        // (one very large shard) reduces it to avoid head-of-line stalls.
+        const PARALLELISM_TARGET_BYTES: f64 = 256.0 * 1024.0 * 1024.0;
+        let limit = {
+            let n = shard_paths.len();
+            let total = total_bytes.max(1) as f64;
+            let max_item = max_shard_bytes.max(1) as f64;
+            let avg_item = total / n as f64;
+            let count_factor = (n as f64).ln_1p();
+            let size_factor = (PARALLELISM_TARGET_BYTES / avg_item).sqrt().clamp(0.5, 4.0);
+            let skew_factor = (max_item / avg_item).sqrt().clamp(1.0, 4.0);
+            let raw = (1.0 + count_factor * size_factor / skew_factor).clamp(1.0, n as f64);
+            let cpu = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(4)
+                .max(2);
+            (raw as usize).min(cpu).max(n.clamp(2, 4).min(cpu))
+        };
         let mut shard_bytes: Vec<OwnedBytes> = Vec::new();
         for chunk in shard_paths.chunks(limit) {
             for path in chunk {
@@ -524,8 +555,6 @@ impl Model {
     }
 }
 
-
-
 impl ModelTrait for Model {
     type Tensor<'a>
         = Tensor<'a>
@@ -557,8 +586,12 @@ struct MmapSingleModel {
 
 impl MmapSingleModel {
     fn from_shard(shard: MmapShard) -> Self {
-        let mut tensor_names: Vec<Arc<str>> =
-            shard.metadata.offset_keys().into_iter().map(Arc::from).collect();
+        let mut tensor_names: Vec<Arc<str>> = shard
+            .metadata
+            .offset_keys()
+            .into_iter()
+            .map(Arc::from)
+            .collect();
         tensor_names.sort_unstable();
         Self {
             shard,
@@ -657,9 +690,9 @@ impl MmapModel {
                 .map_file(MmapRequest::new(&shard_paths[0]))
                 .map_err(ReaderError::from)?;
             return Ok(Self {
-                storage: MmapStorage::Single(MmapSingleModel::from_shard(
-                    MmapShard::from_mmap(mmap)?,
-                )),
+                storage: MmapStorage::Single(MmapSingleModel::from_shard(MmapShard::from_mmap(
+                    mmap,
+                )?)),
             });
         }
 
@@ -792,9 +825,9 @@ impl TryFrom<Vec<u8>> for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::traits::TensorView;
     #[cfg(target_os = "linux")]
     use crate::storage::availability::{StorageAvailability, UnavailableReason};
-    use crate::formats::traits::TensorView;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;

@@ -18,7 +18,7 @@ Core Rust library for Tensora.
 `lib.rs` re-exports the most commonly used types:
 
 ```rust
-use tensora::{SafeTensorsModel, ServerlessLLMModel, backends};
+use tensora::{SafeTensorsModel, ServerlessLLMModel, storage};
 ```
 
 ## Platform Notes

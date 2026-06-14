@@ -13,16 +13,23 @@
 
 #[cfg(target_os = "linux")]
 mod inner {
-    use std::path::{Path, PathBuf};
+    use std::fs::{File, OpenOptions};
+    use std::io::{Error, ErrorKind};
+    use std::os::fd::AsRawFd;
+    use std::path::Path;
     use std::sync::Arc;
 
-    use crate::backends::io_uring::{Reader as BackendReader, Writer as BackendWriter};
+    use io_uring::{IoUring, opcode, types};
+
     use crate::storage::{
         BatchReadRequest, FileReadRequest, IoResult, RangeReadRequest, RangeReadResult,
         WriteAtRequest,
-        availability::{StorageAvailability, StorageCapabilities, StorageKind, UnavailableReason},
+        availability::{StorageAvailability, StorageCapabilities, StorageKind},
         buffer::OwnedBytes,
     };
+
+    const RING_DEPTH: u32 = 8;
+    const MAX_IO_LEN: usize = u32::MAX as usize;
 
     // ============================================================================
     // IoUringStorage
@@ -30,17 +37,18 @@ mod inner {
 
     /// High-throughput io_uring storage engine (Linux only).
     ///
-    /// Implements [`ReadableStorage`] and [`StorageEngine`].  Creates a fresh
-    /// `io_uring` ring per operation; for sustained throughput construct a
-    /// single engine and reuse it across many calls.
+    /// Implements [`ReadableStorage`] and [`StorageEngine`].  Each operation uses
+    /// a short-lived io_uring ring and submits one or more offset-addressed I/O
+    /// operations against ordinary file descriptors.
     ///
     /// ```rust,ignore
     /// use tensora::storage::io_uring::IoUringStorage;
     /// use tensora::storage::{FileReadRequest, ReadableStorage};
     /// use std::path::Path;
     ///
-    /// let engine = IoUringStorage::new()?;
+    /// let engine = IoUringStorage::new();
     /// let bytes = engine.read_file(FileReadRequest::new(Path::new("model.bin")))?;
+    /// # std::io::Result::Ok(())
     /// ```
     ///
     /// [`ReadableStorage`]: crate::storage::ReadableStorage
@@ -67,8 +75,14 @@ mod inner {
         /// Returns an I/O error if io_uring is unavailable, or if the file
         /// cannot be created.
         pub fn create_writer(&self, path: &Path) -> IoResult<IoUringWriter> {
-            let _writer = BackendWriter::create(path)?;
-            Ok(IoUringWriter { path: path.to_path_buf() })
+            ensure_available()?;
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = File::create(path)?;
+            Ok(IoUringWriter { file })
         }
     }
 
@@ -85,39 +99,7 @@ mod inner {
         where
             Self: Sized,
         {
-            match crate::backends::io_uring::availability() {
-                crate::backends::availability::BackendAvailability::Available => {
-                    StorageAvailability::Available
-                }
-                crate::backends::availability::BackendAvailability::Unavailable {
-                    reason,
-                    details,
-                } => {
-                    use crate::backends::availability::BackendUnavailableReason;
-                    let r = match reason {
-                        BackendUnavailableReason::UnsupportedPlatform => {
-                            UnavailableReason::UnsupportedPlatform
-                        }
-                        BackendUnavailableReason::PermissionDenied => {
-                            UnavailableReason::PermissionDenied
-                        }
-                        BackendUnavailableReason::MissingKernelFeature => {
-                            UnavailableReason::MissingKernelFeature
-                        }
-                        BackendUnavailableReason::InvalidKernelConfiguration => {
-                            UnavailableReason::InvalidKernelConfiguration
-                        }
-                        BackendUnavailableReason::MissingDependency => {
-                            UnavailableReason::MissingDependency
-                        }
-                        BackendUnavailableReason::FilesystemUnsupported => {
-                            UnavailableReason::FilesystemUnsupported
-                        }
-                        BackendUnavailableReason::Other(msg) => UnavailableReason::Other(msg),
-                    };
-                    StorageAvailability::unavailable(r, details)
-                }
-            }
+            StorageCapabilities::probe().io_uring
         }
 
         fn capabilities() -> StorageCapabilities
@@ -134,13 +116,11 @@ mod inner {
 
     impl super::super::ReadableStorage for IoUringStorage {
         fn read_file(&self, req: FileReadRequest<'_>) -> IoResult<OwnedBytes> {
-            let mut reader = BackendReader::new();
-            convert_bytes(reader.load(req.path)?)
+            load(req.path)
         }
 
         fn read_range(&self, req: RangeReadRequest<'_>) -> IoResult<OwnedBytes> {
-            let mut reader = BackendReader::new();
-            convert_bytes(reader.load_range(req.path, req.offset, req.len)?)
+            load_range(req.path, req.offset, req.len)
         }
 
         fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
@@ -148,27 +128,20 @@ mod inner {
                 return Ok(Vec::new());
             }
 
-            let backend_requests: Vec<crate::backends::BatchRequest> = req
-                .paths
+            req.paths
                 .iter()
                 .zip(req.ranges.iter())
-                .map(|(path, range)| (path.to_path_buf(), range.offset, range.len))
-                .collect();
-
-            let mut reader = BackendReader::new();
-            let flattened: Vec<crate::backends::batch::FlattenedResult> =
-                reader.load_range_batch(&backend_requests)?;
-
-            Ok(flattened
-                .into_iter()
                 .enumerate()
-                .map(|(i, (bytes, logical_offset, logical_len))| RangeReadResult {
-                    request_index: i,
-                    bytes,
-                    logical_offset,
-                    logical_len,
+                .map(|(request_index, (path, range))| {
+                    let bytes = read_range_arc(path, range.offset, range.len)?;
+                    Ok(RangeReadResult {
+                        request_index,
+                        bytes,
+                        logical_offset: 0,
+                        logical_len: range.len,
+                    })
                 })
-                .collect())
+                .collect()
         }
     }
 
@@ -178,16 +151,10 @@ mod inner {
 
     /// A file opened for io_uring writes.
     ///
-    /// Unlike `SyncWriter` / `TokioWriter` which hold an open file descriptor,
-    /// `IoUringWriter` reopens the file per [`write_at`] call — the io_uring
-    /// backend manages file descriptors internally within each operation.
-    ///
     /// Obtain via [`IoUringStorage::create_writer`].
-    ///
-    /// [`write_at`]: IoUringWriter::write_at
     #[derive(Debug)]
     pub struct IoUringWriter {
-        path: PathBuf,
+        file: File,
     }
 
     impl super::super::StorageEngine for IoUringWriter {
@@ -212,28 +179,150 @@ mod inner {
 
     impl super::super::WritableStorage for IoUringWriter {
         fn write_at(&mut self, req: WriteAtRequest<'_>) -> IoResult<()> {
-            let mut writer = BackendWriter::new()?;
-            writer.write_at(&self.path, req.offset, req.data)
+            ensure_available()?;
+            write_all_at(&self.file, req.offset, req.data)
         }
 
         fn flush(&mut self) -> IoResult<()> {
-            Ok(())
+            self.file.sync_all()
         }
     }
 
     // ============================================================================
-    // Helper: convert backends::byte::OwnedBytes → storage::buffer::OwnedBytes
+    // Core I/O helpers
     // ============================================================================
 
-    fn convert_bytes(b: crate::backends::byte::OwnedBytes) -> IoResult<OwnedBytes> {
-        use crate::backends::byte::OwnedBytes as B;
-        Ok(match b {
-            B::Pooled(p) => OwnedBytes::Pooled(p),
-            B::Aligned(a) => OwnedBytes::Aligned(a),
-            B::Shared(s) => OwnedBytes::Shared(s),
-            B::Mmap(m) => OwnedBytes::Mmap(m),
-            B::Vec(v) => OwnedBytes::Vec(v),
-        })
+    fn ensure_available() -> IoResult<()> {
+        match IoUringStorage::availability() {
+            StorageAvailability::Available => Ok(()),
+            unavailable => Err(Error::other(format!("io_uring storage is {unavailable}"))),
+        }
+    }
+
+    fn open_for_read(path: &Path) -> IoResult<File> {
+        ensure_available()?;
+        OpenOptions::new().read(true).open(path)
+    }
+
+    fn load(path: &Path) -> IoResult<OwnedBytes> {
+        let file = open_for_read(path)?;
+        let len =
+            usize::try_from(file.metadata()?.len()).map_err(|_| Error::other("file too large"))?;
+        if len == 0 {
+            return Ok(OwnedBytes::Shared(Arc::new([])));
+        }
+
+        let mut buf = vec![0u8; len];
+        read_exact_at(&file, 0, &mut buf)?;
+        Ok(OwnedBytes::Vec(buf))
+    }
+
+    fn load_range(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
+        Ok(OwnedBytes::Shared(read_range_arc(path, offset, len)?))
+    }
+
+    fn read_range_arc(path: &Path, offset: u64, len: usize) -> IoResult<Arc<[u8]>> {
+        if len == 0 {
+            return Ok(Arc::new([]));
+        }
+
+        let file = open_for_read(path)?;
+        let mut buf = vec![0u8; len];
+        read_exact_at(&file, offset, &mut buf)?;
+        Ok(Arc::from(buf.into_boxed_slice()))
+    }
+
+    fn read_exact_at(file: &File, offset: u64, mut buf: &mut [u8]) -> IoResult<()> {
+        let mut ring = IoUring::new(RING_DEPTH)?;
+        let mut absolute_offset = offset;
+
+        while !buf.is_empty() {
+            let chunk_len = buf.len().min(MAX_IO_LEN);
+            let (chunk, rest) = buf.split_at_mut(chunk_len);
+            let mut read = 0usize;
+
+            while read < chunk.len() {
+                let len = (chunk.len() - read).min(MAX_IO_LEN);
+                let ptr = unsafe { chunk.as_mut_ptr().add(read) };
+                let entry = opcode::Read::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
+                    .offset(absolute_offset + read as u64)
+                    .build()
+                    .user_data(0);
+
+                submit_one(&mut ring, &entry)?;
+                let result = wait_one(&mut ring)?;
+                if result == 0 {
+                    return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
+                }
+                read += result;
+            }
+
+            absolute_offset = absolute_offset
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "read offset overflow"))?;
+            buf = rest;
+        }
+
+        Ok(())
+    }
+
+    fn write_all_at(file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+        let mut ring = IoUring::new(RING_DEPTH)?;
+        let mut absolute_offset = offset;
+
+        while !data.is_empty() {
+            let chunk_len = data.len().min(MAX_IO_LEN);
+            let (chunk, rest) = data.split_at(chunk_len);
+            let mut written = 0usize;
+
+            while written < chunk.len() {
+                let len = (chunk.len() - written).min(MAX_IO_LEN);
+                let ptr = unsafe { chunk.as_ptr().add(written) };
+                let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
+                    .offset(absolute_offset + written as u64)
+                    .build()
+                    .user_data(0);
+
+                submit_one(&mut ring, &entry)?;
+                let result = wait_one(&mut ring)?;
+                if result == 0 {
+                    return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
+                }
+                written += result;
+            }
+
+            absolute_offset = absolute_offset
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "write offset overflow"))?;
+            data = rest;
+        }
+
+        Ok(())
+    }
+
+    fn submit_one(ring: &mut IoUring, entry: &io_uring::squeue::Entry) -> IoResult<()> {
+        {
+            let mut submission = ring.submission();
+            unsafe {
+                submission
+                    .push(entry)
+                    .map_err(|_| Error::other("io_uring submission queue is full"))?;
+            }
+        }
+        ring.submit_and_wait(1)?;
+        Ok(())
+    }
+
+    fn wait_one(ring: &mut IoUring) -> IoResult<usize> {
+        let completion = ring
+            .completion()
+            .next()
+            .ok_or_else(|| Error::other("io_uring completion queue was empty"))?;
+        let result = completion.result();
+        if result < 0 {
+            return Err(Error::from_raw_os_error(-result));
+        }
+        Ok(result as usize)
     }
 
     // ============================================================================
@@ -279,8 +368,9 @@ mod inner {
             let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
             let path = write_tmp(&dir, "file.bin", &data);
 
-            let result =
-                IoUringStorage::new().read_file(FileReadRequest::new(&path)).unwrap();
+            let result = IoUringStorage::new()
+                .read_file(FileReadRequest::new(&path))
+                .unwrap();
             assert_eq!(result.as_ref(), &data[..]);
         }
 
@@ -292,8 +382,9 @@ mod inner {
             let dir = TempDir::new().unwrap();
             let path = write_tmp(&dir, "empty.bin", b"");
 
-            let result =
-                IoUringStorage::new().read_file(FileReadRequest::new(&path)).unwrap();
+            let result = IoUringStorage::new()
+                .read_file(FileReadRequest::new(&path))
+                .unwrap();
             assert!(result.is_empty());
         }
 
@@ -367,8 +458,11 @@ mod inner {
             let p = path.as_path();
 
             let paths = [p, p, p];
-            let ranges =
-                [BatchRange::new(0, 10), BatchRange::new(20, 10), BatchRange::new(100, 5)];
+            let ranges = [
+                BatchRange::new(0, 10),
+                BatchRange::new(20, 10),
+                BatchRange::new(100, 5),
+            ];
             let results = IoUringStorage::new()
                 .read_ranges(BatchReadRequest::new(&paths, &ranges))
                 .unwrap();
@@ -388,7 +482,9 @@ mod inner {
             let path = dir.path().join("write.bin");
 
             let mut writer = IoUringStorage::new().create_writer(&path).unwrap();
-            writer.write_at(WriteAtRequest::new(0, b"hello io_uring")).unwrap();
+            writer
+                .write_at(WriteAtRequest::new(0, b"hello io_uring"))
+                .unwrap();
             writer.flush().unwrap();
             drop(writer);
 

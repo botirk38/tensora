@@ -278,7 +278,8 @@ pub trait ReadableStorage: StorageEngine {
             .zip(req.ranges.iter())
             .enumerate()
             .map(|(request_index, (path, range))| {
-                let bytes = self.read_range(RangeReadRequest::new(path, range.offset, range.len))?;
+                let bytes =
+                    self.read_range(RangeReadRequest::new(path, range.offset, range.len))?;
                 Ok(RangeReadResult {
                     request_index,
                     bytes: bytes.into_shared(),

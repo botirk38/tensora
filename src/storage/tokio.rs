@@ -14,13 +14,173 @@
 //! [`ReadableStorage`]: crate::storage::ReadableStorage
 
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::backends::{AsyncReader as BackendReader, AsyncWriter as BackendWriter};
 use crate::storage::{
     BatchReadRequest, FileReadRequest, IoResult, RangeReadRequest, RangeReadResult, WriteAtRequest,
     availability::{StorageAvailability, StorageCapabilities, StorageKind},
-    buffer::OwnedBytes,
+    buffer::{OwnedBytes, get_buffer_pool},
 };
+
+#[cfg(target_os = "linux")]
+use crate::storage::buffer::AlignedBuffer;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
+
+// ============================================================================
+// O_DIRECT helpers (Linux only)
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+const BLOCK_SIZE: usize = 4096;
+#[cfg(target_os = "linux")]
+const BLOCK_SIZE_U64: u64 = 4096;
+
+#[cfg(target_os = "linux")]
+#[inline]
+const fn round_up_to_block(n: usize) -> usize {
+    (n + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
+}
+
+/// Try O_DIRECT first; fall back to regular open if the filesystem rejects it.
+#[cfg(target_os = "linux")]
+fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECT)
+        .open(path)
+    {
+        Ok(f) => Ok((f, true)),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+            let f = std::fs::File::open(path)?;
+            Ok((f, false))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Read exactly `actual_len` bytes into an aligned O_DIRECT buffer.
+///
+/// O_DIRECT reads may return short at EOF (the kernel reads aligned blocks but
+/// the file may be shorter than `aligned_len`).  This loops until `actual_len`
+/// bytes have been read.
+#[cfg(target_os = "linux")]
+fn read_direct(file: &mut std::fs::File, buf: &mut [u8], actual_len: usize) -> IoResult<()> {
+    use std::io::Read;
+    let mut pos = 0usize;
+    while pos < actual_len {
+        let n = file.read(&mut buf[pos..])?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("O_DIRECT short read: got {pos} of {actual_len} bytes"),
+            ));
+        }
+        pos += n;
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Blocking I/O helpers
+// ============================================================================
+
+/// Read an entire file into an [`OwnedBytes`] buffer (blocking).
+///
+/// On Linux attempts O_DIRECT first and falls back to a regular buffered read
+/// if the filesystem does not support it.  On other platforms always uses a
+/// plain `std::fs::File` read into the global buffer pool.
+fn load_blocking(path: &Path) -> IoResult<OwnedBytes> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+
+        let (mut file, direct) = open_prefer_direct(path)?;
+        let len = usize::try_from(file.metadata()?.len())
+            .map_err(|_| std::io::Error::other("file too large"))?;
+        if len == 0 {
+            return Ok(OwnedBytes::Shared(Arc::new([])));
+        }
+        if direct {
+            let aligned_len = round_up_to_block(len);
+            let mut buf = AlignedBuffer::new(aligned_len)?;
+            buf.set_len(aligned_len);
+            read_direct(&mut file, buf.as_mut_slice(), len)?;
+            buf.set_len(len);
+            Ok(OwnedBytes::Aligned(buf))
+        } else {
+            let mut buf = get_buffer_pool().get(len);
+            file.read_exact(&mut buf[..])?;
+            Ok(OwnedBytes::Pooled(buf))
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::io::Read;
+
+        let mut file = std::fs::File::open(path)?;
+        let len = usize::try_from(file.metadata()?.len())
+            .map_err(|_| std::io::Error::other("file too large"))?;
+        if len == 0 {
+            return Ok(OwnedBytes::Shared(Arc::new([])));
+        }
+        let mut buf = get_buffer_pool().get(len);
+        file.read_exact(&mut buf[..])?;
+        Ok(OwnedBytes::Pooled(buf))
+    }
+}
+
+/// Read a byte range from a file into an [`OwnedBytes`] buffer (blocking).
+///
+/// On Linux attempts O_DIRECT first; when the offset is not block-aligned the
+/// aligned super-range is read and the requested slice is extracted into a
+/// shared `Arc<[u8]>` to avoid carrying the full aligned buffer.
+fn load_range_blocking(path: &Path, offset: u64, len: usize) -> IoResult<OwnedBytes> {
+    if len == 0 {
+        return Ok(OwnedBytes::Shared(Arc::new([])));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let (mut file, direct) = open_prefer_direct(path)?;
+        if direct {
+            let aligned_offset = offset & !(BLOCK_SIZE_U64 - 1);
+            let head_skip = (offset - aligned_offset) as usize;
+            let aligned_len = round_up_to_block(head_skip + len);
+
+            file.seek(SeekFrom::Start(aligned_offset))?;
+            let mut buf = AlignedBuffer::new(aligned_len)?;
+            buf.set_len(aligned_len);
+            read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
+
+            if head_skip == 0 {
+                buf.set_len(len);
+                return Ok(OwnedBytes::Aligned(buf));
+            }
+            let slice = &buf.as_slice()[head_skip..head_skip + len];
+            Ok(OwnedBytes::Shared(Arc::from(slice)))
+        } else {
+            file.seek(SeekFrom::Start(offset))?;
+            let mut buf = get_buffer_pool().get(len);
+            file.read_exact(&mut buf[..])?;
+            Ok(OwnedBytes::Pooled(buf))
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let mut file = std::fs::File::open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = get_buffer_pool().get(len);
+        file.read_exact(&mut buf[..])?;
+        Ok(OwnedBytes::Pooled(buf))
+    }
+}
 
 // ============================================================================
 // TokioStorage
@@ -53,8 +213,10 @@ impl TokioStorage {
     ///
     /// Returns an I/O error if the file cannot be opened or read.
     pub async fn read_file(&self, req: FileReadRequest<'_>) -> IoResult<OwnedBytes> {
-        let mut reader = BackendReader::new();
-        convert_bytes(reader.load(req.path).await?)
+        let path_buf = req.path.to_path_buf();
+        tokio::task::spawn_blocking(move || load_blocking(&path_buf))
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
     /// Read a contiguous byte range from a file.
@@ -66,8 +228,15 @@ impl TokioStorage {
     /// Returns an I/O error if the file cannot be opened or the range cannot
     /// be read.
     pub async fn read_range(&self, req: RangeReadRequest<'_>) -> IoResult<OwnedBytes> {
-        let mut reader = BackendReader::new();
-        convert_bytes(reader.load_range(req.path, req.offset, req.len).await?)
+        if req.len == 0 {
+            return Ok(OwnedBytes::Shared(Arc::new([])));
+        }
+        let path_buf = req.path.to_path_buf();
+        let offset = req.offset;
+        let len = req.len;
+        tokio::task::spawn_blocking(move || load_range_blocking(&path_buf, offset, len))
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
     /// Read a batch of byte ranges, possibly from multiple files.
@@ -83,30 +252,35 @@ impl TokioStorage {
             return Ok(Vec::new());
         }
 
-        // Build the backend BatchRequest slice: (PathBuf, offset, len)
-        let backend_requests: Vec<crate::backends::BatchRequest> = req
+        // Spawn one blocking task per request; collect handles preserving order.
+        let handles: Vec<tokio::task::JoinHandle<IoResult<Arc<[u8]>>>> = req
             .paths
             .iter()
             .zip(req.ranges.iter())
-            .map(|(path, range)| (path.to_path_buf(), range.offset, range.len))
-            .collect();
-
-        let mut reader = BackendReader::new();
-        let flattened: Vec<crate::backends::batch::FlattenedResult> =
-            reader.load_range_batch(&backend_requests).await?;
-
-        // `flattened` is Vec<FlattenedResult> = Vec<(Arc<[u8]>, usize, usize)>
-        // where each entry corresponds 1:1 to the original request order.
-        let results = flattened
-            .into_iter()
-            .enumerate()
-            .map(|(i, (bytes, logical_offset, logical_len))| RangeReadResult {
-                request_index: i,
-                bytes,
-                logical_offset,
-                logical_len,
+            .map(|(path, range)| {
+                let path_buf = path.to_path_buf();
+                let offset = range.offset;
+                let len = range.len;
+                tokio::task::spawn_blocking(move || {
+                    let bytes = load_range_blocking(&path_buf, offset, len)?;
+                    Ok(bytes.into_shared())
+                })
             })
             .collect();
+
+        let mut results = Vec::with_capacity(handles.len());
+        for (i, handle) in handles.into_iter().enumerate() {
+            let bytes: Arc<[u8]> = handle
+                .await
+                .map_err(|_| std::io::Error::other("spawn_blocking panicked"))??;
+            let logical_len = req.ranges[i].len;
+            results.push(RangeReadResult {
+                request_index: i,
+                bytes,
+                logical_offset: 0,
+                logical_len,
+            });
+        }
 
         Ok(results)
     }
@@ -119,7 +293,13 @@ impl TokioStorage {
     ///
     /// Returns an I/O error if the file cannot be created.
     pub async fn create_writer(&self, path: &Path) -> IoResult<TokioWriter> {
-        Ok(TokioWriter { inner: BackendWriter::create(path).await? })
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let file = tokio::fs::File::create(path).await?;
+        Ok(TokioWriter { file })
     }
 }
 
@@ -155,7 +335,7 @@ impl super::StorageEngine for TokioStorage {
 ///
 /// Obtain via [`TokioStorage::create_writer`].
 pub struct TokioWriter {
-    inner: BackendWriter,
+    file: tokio::fs::File,
 }
 
 impl std::fmt::Debug for TokioWriter {
@@ -171,7 +351,9 @@ impl TokioWriter {
     ///
     /// Returns an I/O error if the write fails.
     pub async fn write_at(&mut self, req: WriteAtRequest<'_>) -> IoResult<()> {
-        self.inner.write_at(req.offset, req.data).await
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+        self.file.seek(std::io::SeekFrom::Start(req.offset)).await?;
+        self.file.write_all(req.data).await
     }
 
     /// Flush buffered data and synchronise to durable storage.
@@ -180,7 +362,7 @@ impl TokioWriter {
     ///
     /// Returns an I/O error if the sync fails.
     pub async fn flush(&mut self) -> IoResult<()> {
-        self.inner.sync_all().await
+        self.file.sync_all().await
     }
 }
 
@@ -202,22 +384,6 @@ impl super::StorageEngine for TokioWriter {
     {
         StorageCapabilities::probe()
     }
-}
-
-// ============================================================================
-// Helper: convert backends::byte::OwnedBytes → storage::buffer::OwnedBytes
-// ============================================================================
-
-fn convert_bytes(b: crate::backends::byte::OwnedBytes) -> IoResult<OwnedBytes> {
-    use crate::backends::byte::OwnedBytes as B;
-    Ok(match b {
-        B::Pooled(p) => OwnedBytes::Pooled(p),
-        #[cfg(target_os = "linux")]
-        B::Aligned(a) => OwnedBytes::Aligned(a),
-        B::Shared(s) => OwnedBytes::Shared(s),
-        B::Mmap(m) => OwnedBytes::Mmap(m),
-        B::Vec(v) => OwnedBytes::Vec(v),
-    })
 }
 
 // ============================================================================
@@ -252,7 +418,10 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let result = TokioStorage::new().read_file(FileReadRequest::new(&path)).await.unwrap();
+        let result = TokioStorage::new()
+            .read_file(FileReadRequest::new(&path))
+            .await
+            .unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -261,7 +430,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let result = TokioStorage::new().read_file(FileReadRequest::new(&path)).await.unwrap();
+        let result = TokioStorage::new()
+            .read_file(FileReadRequest::new(&path))
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 
@@ -324,7 +496,11 @@ mod tests {
         let p = path.as_path();
 
         let paths = [p, p, p];
-        let ranges = [BatchRange::new(0, 10), BatchRange::new(20, 10), BatchRange::new(100, 5)];
+        let ranges = [
+            BatchRange::new(0, 10),
+            BatchRange::new(20, 10),
+            BatchRange::new(100, 5),
+        ];
         let results = TokioStorage::new()
             .read_ranges(BatchReadRequest::new(&paths, &ranges))
             .await
@@ -343,7 +519,10 @@ mod tests {
 
         let engine = TokioStorage::new();
         let mut writer = engine.create_writer(&path).await.unwrap();
-        writer.write_at(WriteAtRequest::new(0, b"hello async")).await.unwrap();
+        writer
+            .write_at(WriteAtRequest::new(0, b"hello async"))
+            .await
+            .unwrap();
         writer.flush().await.unwrap();
         drop(writer);
 
