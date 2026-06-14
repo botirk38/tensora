@@ -17,9 +17,11 @@
 //! ...
 //! ```
 
-use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{WriteAtRequest, WritableStorage};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -119,10 +121,13 @@ pub async fn write_index(
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
     let json = serialize_index(tensors)?;
-    let mut writer = backends::AsyncWriter::create(path)
+    let engine = TokioStorage::new();
+    let mut writer = engine.create_writer(path).await.map_err(WriterError::from)?;
+    writer
+        .write_at(WriteAtRequest::new(0, &json))
         .await
         .map_err(WriterError::from)?;
-    writer.write_all(&json).await.map_err(WriterError::from)
+    writer.flush().await.map_err(WriterError::from)
 }
 
 pub fn write_index_sync(
@@ -132,8 +137,12 @@ pub fn write_index_sync(
     let path = output_path.as_ref();
     ensure_parent_dir_sync(path)?;
     let json = serialize_index(tensors)?;
-    let mut writer = backends::SyncWriter::create(path)?;
-    writer.write_all(&json).map_err(WriterError::from)
+    let engine = SyncStorage::new();
+    let mut writer = engine.create_writer(path).map_err(WriterError::from)?;
+    writer
+        .write_at(WriteAtRequest::new(0, &json))
+        .map_err(WriterError::from)?;
+    writer.flush().map_err(WriterError::from)
 }
 
 fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<Vec<u8>> {
@@ -160,15 +169,24 @@ fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<
 pub async fn write_partition(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
     ensure_parent_dir_async(path).await?;
-    let mut writer = backends::AsyncWriter::create(path).await?;
-    writer.write_all(data).await.map_err(WriterError::from)
+    let engine = TokioStorage::new();
+    let mut writer = engine.create_writer(path).await.map_err(WriterError::from)?;
+    writer
+        .write_at(WriteAtRequest::new(0, data))
+        .await
+        .map_err(WriterError::from)?;
+    writer.flush().await.map_err(WriterError::from)
 }
 
 pub fn write_partition_sync(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
     ensure_parent_dir_sync(path)?;
-    let mut writer = backends::SyncWriter::create(path)?;
-    writer.write_all(data).map_err(WriterError::from)
+    let engine = SyncStorage::new();
+    let mut writer = engine.create_writer(path).map_err(WriterError::from)?;
+    writer
+        .write_at(WriteAtRequest::new(0, data))
+        .map_err(WriterError::from)?;
+    writer.flush().map_err(WriterError::from)
 }
 
 async fn ensure_parent_dir_async(path: &Path) -> WriterResult<()> {
