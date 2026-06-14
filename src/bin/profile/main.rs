@@ -165,16 +165,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error::Error>> {
-    let capabilities = tensora::backends::backend_capabilities();
+    use tensora::storage::availability::{StorageAvailability, StorageCapabilities};
+    let capabilities = StorageCapabilities::probe();
     match format {
         CapabilityFormat::Text => {
-            for (backend, availability) in capabilities.iter() {
-                println!("{backend:<10} {availability}");
+            for (kind, availability) in capabilities.iter() {
+                println!("{kind:<10} {availability}");
             }
         }
         CapabilityFormat::Shell => {
-            for (backend, availability) in capabilities.iter() {
-                let key = backend.as_str().replace('-', "_").to_ascii_uppercase();
+            for (kind, availability) in capabilities.iter() {
+                let key = kind.as_str().replace('-', "_").to_ascii_uppercase();
                 println!(
                     "TENSORA_BACKEND_{key}_AVAILABLE={}",
                     availability.is_available()
@@ -183,12 +184,12 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
         }
         CapabilityFormat::Json => {
             let mut entries = serde_json::Map::new();
-            for (backend, availability) in capabilities.iter() {
+            for (kind, availability) in capabilities.iter() {
                 let value = match availability {
-                    tensora::backends::BackendAvailability::Available => serde_json::json!({
+                    StorageAvailability::Available => serde_json::json!({
                         "available": true,
                     }),
-                    tensora::backends::BackendAvailability::Unavailable { reason, details } => {
+                    StorageAvailability::Unavailable { reason, details } => {
                         serde_json::json!({
                             "available": false,
                             "reason": reason.code(),
@@ -196,7 +197,7 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
                         })
                     }
                 };
-                entries.insert(backend.as_str().to_owned(), value);
+                entries.insert(kind.as_str().to_owned(), value);
             }
             println!("{}", serde_json::Value::Object(entries));
         }
