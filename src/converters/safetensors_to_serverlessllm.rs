@@ -13,9 +13,13 @@
 //! - `convert_safetensors_to_serverlessllm_async` — Tokio async I/O
 //! - `convert_safetensors_to_serverlessllm_io_uring` — Linux io_uring I/O
 
-use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{RangeReadRequest, ReadableStorage, WriteAtRequest, WritableStorage};
+#[cfg(target_os = "linux")]
+use crate::storage::availability::{StorageCapabilities, StorageKind};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -195,8 +199,8 @@ impl ConversionStats {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                let capabilities = backends::backend_capabilities();
-                if capabilities.is_available(backends::Backend::IoUring) {
+                let capabilities = StorageCapabilities::probe();
+                if capabilities.is_available(StorageKind::IoUring) {
                     return ConversionBackend::IoUring;
                 }
             }
@@ -594,7 +598,9 @@ impl ConversionPlan {
             f.set_len(total_size)?;
         }
 
-        let mut writer = backends::AsyncWriter::create(&path)
+        let engine = TokioStorage::new();
+        let mut writer = engine
+            .create_writer(&path)
             .await
             .map_err(WriterError::from)?;
 
@@ -604,20 +610,19 @@ impl ConversionPlan {
         }
 
         for (shard_path, shard_ops) in by_shard {
-            let mut reader = backends::AsyncReader::new();
             for op in shard_ops {
-                let data = reader
-                    .load_range(shard_path, op.source_offset, op.size)
+                let data = engine
+                    .read_range(RangeReadRequest::new(shard_path, op.source_offset, op.size))
                     .await
                     .map_err(WriterError::from)?;
                 writer
-                    .write_at(op.dest_offset, data.as_ref())
+                    .write_at(WriteAtRequest::new(op.dest_offset, data.as_ref()))
                     .await
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.sync_all().await.map_err(WriterError::from)?;
+        writer.flush().await.map_err(WriterError::from)?;
         Ok(())
     }
 
@@ -632,8 +637,8 @@ impl ConversionPlan {
         let f = std::fs::File::create(&path)?;
         f.set_len(total_size)?;
 
-        let mut writer = backends::SyncWriter::create(&path)?;
-        let mut reader = backends::SyncReader::new();
+        let engine = SyncStorage::new();
+        let mut writer = engine.create_writer(&path).map_err(WriterError::from)?;
 
         let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
         for op in ops {
@@ -642,16 +647,16 @@ impl ConversionPlan {
 
         for (shard_path, shard_ops) in by_shard {
             for op in shard_ops {
-                let data = reader
-                    .load_range(shard_path.clone(), op.source_offset, op.size)
+                let data = engine
+                    .read_range(RangeReadRequest::new(shard_path, op.source_offset, op.size))
                     .map_err(WriterError::from)?;
                 writer
-                    .write_at(op.dest_offset, data.as_ref())
+                    .write_at(WriteAtRequest::new(op.dest_offset, data.as_ref()))
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.sync_all().map_err(WriterError::from)?;
+        writer.flush().map_err(WriterError::from)?;
         Ok(())
     }
 }
