@@ -2,9 +2,20 @@
 //!
 //! Provides both eager (owned) and lazy (mmap-backed) model loading.
 
-use crate::backends;
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::Model as ModelTrait;
+use crate::storage::buffer::{MmapRegion, OwnedBytes};
+use crate::storage::mmap::MmapStorage as MmapEngine;
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{
+    BatchRange, BatchReadRequest, FileReadRequest, MappableStorage, MmapRequest, RangeReadResult,
+    ReadableStorage,
+};
+#[cfg(target_os = "linux")]
+use crate::storage::availability::{StorageCapabilities, StorageKind};
+#[cfg(target_os = "linux")]
+use crate::storage::io_uring::IoUringStorage;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -69,14 +80,7 @@ impl LoadPlan {
         Ok(())
     }
 
-    fn requests(&self) -> Vec<(PathBuf, u64, usize)> {
-        self.partitions
-            .iter()
-            .map(|p| (p.path.clone(), 0, p.size as usize))
-            .collect()
-    }
-
-    fn assemble_single(&self, data: backends::byte::OwnedBytes) -> Tensors {
+    fn assemble_single(&self, data: OwnedBytes) -> Tensors {
         let backing: Arc<[u8]> = data.into_shared();
         let mut tensors = HashMap::with_capacity(self.index.len());
         for name in self.index.tensor_names().iter() {
@@ -89,10 +93,7 @@ impl LoadPlan {
         tensors
     }
 
-    fn assemble(
-        &self,
-        results: Vec<(Arc<[u8]>, usize, usize)>,
-    ) -> ReaderResult<Tensors> {
+    fn assemble(&self, results: Vec<RangeReadResult>) -> ReaderResult<Tensors> {
         let max_partition_id = self
             .partitions
             .iter()
@@ -100,11 +101,12 @@ impl LoadPlan {
             .max()
             .unwrap_or(0);
         let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
-        for (read, (buf, _, _)) in self.partitions.iter().zip(results) {
-            if buf.len() < read.size as usize {
+        for (read, result) in self.partitions.iter().zip(results) {
+            let buf = Arc::clone(&result.bytes);
+            if result.logical_len < read.size as usize {
                 return Err(ReaderError::PartitionTooSmall {
                     path: read.path.to_string_lossy().to_string(),
-                    actual: buf.len() as u64,
+                    actual: result.logical_len as u64,
                     required: read.size,
                 });
             }
@@ -122,23 +124,35 @@ impl LoadPlan {
         Ok(tensors)
     }
 
+    fn batch_ranges(&self) -> (Vec<&Path>, Vec<BatchRange>) {
+        let paths: Vec<&Path> = self.partitions.iter().map(|p| p.path.as_path()).collect();
+        let ranges: Vec<BatchRange> = self
+            .partitions
+            .iter()
+            .map(|p| BatchRange::new(0, p.size as usize))
+            .collect();
+        (paths, ranges)
+    }
+
     fn execute_sync(&self) -> ReaderResult<Tensors> {
         if self.partitions.is_empty() {
             return Ok(HashMap::new());
         }
         self.validate()?;
 
+        let engine = SyncStorage::new();
+
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
-            let mut reader = backends::SyncReader::new();
-            let data = reader.load(&read.path).map_err(ReaderError::from)?;
+            let data = engine
+                .read_file(FileReadRequest::new(&read.path))
+                .map_err(ReaderError::from)?;
             return Ok(self.assemble_single(data));
         }
 
-        let mut reader = backends::SyncReader::new();
-        let results = reader
-            .load_range_batch(&self.requests())
-            .map_err(ReaderError::from)?;
+        let (paths, ranges) = self.batch_ranges();
+        let req = BatchReadRequest::new(&paths, &ranges);
+        let results = engine.read_ranges(req).map_err(ReaderError::from)?;
         self.assemble(results)
     }
 
@@ -148,17 +162,20 @@ impl LoadPlan {
             return Ok(HashMap::new());
         }
         self.validate()?;
-        let mut reader = backends::io_uring::Reader::new();
+
+        let engine = IoUringStorage::new();
 
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
-            let data = reader.load(&read.path).map_err(ReaderError::from)?;
+            let data = engine
+                .read_file(FileReadRequest::new(&read.path))
+                .map_err(ReaderError::from)?;
             return Ok(self.assemble_single(data));
         }
 
-        let results = reader
-            .load_range_batch(&self.requests())
-            .map_err(ReaderError::from)?;
+        let (paths, ranges) = self.batch_ranges();
+        let req = BatchReadRequest::new(&paths, &ranges);
+        let results = engine.read_ranges(req).map_err(ReaderError::from)?;
         self.assemble(results)
     }
 
@@ -168,19 +185,36 @@ impl LoadPlan {
         }
         self.validate()?;
 
+        let engine = TokioStorage::new();
+
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
-            let mut reader = backends::AsyncReader::new();
-            let data = reader.load(&read.path).await.map_err(ReaderError::from)?;
+            let data = engine
+                .read_file(FileReadRequest::new(&read.path))
+                .await
+                .map_err(ReaderError::from)?;
             return Ok(self.assemble_single(data));
         }
 
-        let mut reader = backends::AsyncReader::new();
-        let results = reader
-            .load_range_batch(&self.requests())
-            .await
-            .map_err(ReaderError::from)?;
-        self.assemble(results)
+        let mut results: Vec<OwnedBytes> = Vec::with_capacity(self.partitions.len());
+        for p in &self.partitions {
+            let bytes = engine
+                .read_file(FileReadRequest::new(&p.path))
+                .await
+                .map_err(ReaderError::from)?;
+            results.push(bytes);
+        }
+        // Convert to RangeReadResult for assemble()
+        let range_results: Vec<RangeReadResult> = results
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let bytes: Arc<[u8]> = b.into_shared();
+                let len = bytes.len();
+                RangeReadResult { request_index: i, bytes, logical_offset: 0, logical_len: len }
+            })
+            .collect();
+        self.assemble(range_results)
     }
 }
 
@@ -222,16 +256,16 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = backends::backend_capabilities();
+            let capabilities = StorageCapabilities::probe();
             if self.partition_count >= IOURING_PARTITION_THRESHOLD
                 && self.total_bytes >= IOURING_BYTE_THRESHOLD
-                && capabilities.is_available(backends::Backend::IoUring)
+                && capabilities.is_available(StorageKind::IoUring)
             {
                 return LoadBackend::IoUring;
             }
 
             if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
-                && capabilities.is_available(backends::Backend::Async)
+                && capabilities.is_available(StorageKind::Tokio)
             {
                 return LoadBackend::TokioAsync;
             }
@@ -377,7 +411,7 @@ impl ModelTrait for Model {
 #[derive(Debug)]
 pub struct MmapModel {
     index: Index,
-    partitions: HashMap<usize, backends::mmap::Mmap>,
+    partitions: HashMap<usize, MmapRegion>,
 }
 
 impl MmapModel {
@@ -385,7 +419,8 @@ impl MmapModel {
         let dir_path = directory.as_ref();
         let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
         let partition_ids = index.partition_ids();
-        let partitions: Result<HashMap<usize, backends::mmap::Mmap>, ReaderError> = partition_ids
+        let mapper = MmapEngine::new();
+        let partitions: Result<HashMap<usize, MmapRegion>, ReaderError> = partition_ids
             .par_iter()
             .map(|&partition_id| {
                 let partition_path = format!(
@@ -393,7 +428,9 @@ impl MmapModel {
                     dir_path.join("tensor.data").display(),
                     partition_id
                 );
-                let mmap = backends::mmap::map(&partition_path)?;
+                let mmap = mapper
+                    .map_file(MmapRequest::new(std::path::Path::new(&partition_path)))
+                    .map_err(ReaderError::from)?;
                 Ok((partition_id, mmap))
             })
             .collect();
@@ -413,7 +450,7 @@ impl MmapModel {
         if end > mmap.len() {
             return None;
         }
-        let tensor_mmap = backends::mmap::Mmap {
+        let tensor_mmap = MmapRegion {
             inner: Arc::clone(&mmap.inner),
             start: mmap.start + start,
             len: desc.size,
