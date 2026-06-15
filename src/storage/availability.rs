@@ -15,6 +15,7 @@
 //! ```
 
 use std::fmt;
+use std::sync::OnceLock;
 
 // ============================================================================
 // StorageKind
@@ -23,7 +24,7 @@ use std::fmt;
 /// Identifies a storage engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StorageKind {
-    /// Synchronous blocking I/O (O_DIRECT on Linux, buffered elsewhere).
+    /// Synchronous blocking I/O (O_DIRECT on Linux, buffered std::fs on macOS).
     Sync,
     /// Tokio async I/O.
     Tokio,
@@ -221,6 +222,16 @@ impl StorageCapabilities {
             mmap,
             io_uring,
         }
+    }
+
+    /// Returns a process-wide cached capability snapshot.
+    ///
+    /// Use this for format heuristics and hot paths. Use [`StorageCapabilities::probe`]
+    /// only when a fresh environment probe is explicitly required.
+    #[must_use]
+    pub fn cached() -> &'static Self {
+        static CAPABILITIES: OnceLock<StorageCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(Self::probe)
     }
 
     fn probe_mmap() -> StorageAvailability {

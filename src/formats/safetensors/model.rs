@@ -5,16 +5,15 @@
 
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
-use crate::storage::MmapRequest;
 #[cfg(target_os = "linux")]
 use crate::storage::availability::{StorageCapabilities, StorageKind};
 use crate::storage::buffer::{MmapRegion, OwnedBytes};
 #[cfg(target_os = "linux")]
 use crate::storage::io_uring::IoUringStorage;
-use crate::storage::mmap::MmapStorage as MmapEngine;
+use crate::storage::mmap::MmapStorage;
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
-use crate::storage::{FileReadRequest, MappableStorage, ReadableStorage};
+use crate::storage::{MappableStorage, ReadableStorage};
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};
@@ -247,7 +246,7 @@ struct LoadStats {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoadBackend {
+enum LoadEngine {
     Sync,
     TokioAsync,
     #[cfg(target_os = "linux")]
@@ -261,41 +260,40 @@ const IOURING_SHARD_THRESHOLD: usize = 4;
 const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
 impl LoadStats {
-    fn choose_backend(&self) -> LoadBackend {
+    fn choose_engine(&self) -> LoadEngine {
         if self.shard_count <= 1 {
-            return LoadBackend::Sync;
+            return LoadEngine::Sync;
         }
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = StorageCapabilities::probe();
-            self.choose_backend_with_capabilities(&capabilities)
+            self.choose_engine_with_capabilities(StorageCapabilities::cached())
         }
         #[cfg(not(target_os = "linux"))]
         {
             if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD {
-                return LoadBackend::TokioAsync;
+                return LoadEngine::TokioAsync;
             }
-            LoadBackend::Sync
+            LoadEngine::Sync
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn choose_backend_with_capabilities(&self, capabilities: &StorageCapabilities) -> LoadBackend {
+    fn choose_engine_with_capabilities(&self, capabilities: &StorageCapabilities) -> LoadEngine {
         if self.shard_count >= IOURING_SHARD_THRESHOLD
             && self.total_bytes >= IOURING_BYTE_THRESHOLD
             && capabilities.is_available(StorageKind::IoUring)
         {
-            return LoadBackend::IoUring;
+            return LoadEngine::IoUring;
         }
 
         if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
             && capabilities.is_available(StorageKind::Tokio)
         {
-            return LoadBackend::TokioAsync;
+            return LoadEngine::TokioAsync;
         }
 
-        LoadBackend::Sync
+        LoadEngine::Sync
     }
 }
 
@@ -379,11 +377,11 @@ impl Model {
 
     pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let (stats, shard_paths) = Self::directory_stats(&path)?;
-        match stats.choose_backend() {
+        match stats.choose_engine() {
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => Self::load_io_uring_from_shards(shard_paths),
-            LoadBackend::TokioAsync => Self::load_async_from_shards(shard_paths).await,
-            LoadBackend::Sync => Self::load_sync_from_shards(shard_paths),
+            LoadEngine::IoUring => Self::load_io_uring_from_shards(shard_paths),
+            LoadEngine::TokioAsync => Self::load_async_from_shards(shard_paths).await,
+            LoadEngine::Sync => Self::load_sync_from_shards(shard_paths),
         }
     }
 
@@ -398,7 +396,7 @@ impl Model {
         let engine = IoUringStorage::new();
         if shard_paths.len() == 1 {
             let bytes = engine
-                .read_file(FileReadRequest::new(&shard_paths[0]))
+                .read_file(&shard_paths[0])
                 .map_err(ReaderError::from)?;
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
@@ -408,9 +406,7 @@ impl Model {
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_par_iter()
             .map(|path| {
-                let bytes = engine
-                    .read_file(FileReadRequest::new(&path))
-                    .map_err(ReaderError::from)?;
+                let bytes = engine.read_file(&path).map_err(ReaderError::from)?;
                 OwnedShard::from_owned(bytes)
             })
             .collect();
@@ -428,7 +424,7 @@ impl Model {
         let engine = TokioStorage::new();
         if shard_paths.len() == 1 {
             let bytes = engine
-                .read_file(FileReadRequest::new(&shard_paths[0]))
+                .read_file(&shard_paths[0])
                 .await
                 .map_err(ReaderError::from)?;
             return Ok(Self {
@@ -467,10 +463,7 @@ impl Model {
         let mut shard_bytes: Vec<OwnedBytes> = Vec::new();
         for chunk in shard_paths.chunks(limit) {
             for path in chunk {
-                let bytes = engine
-                    .read_file(FileReadRequest::new(path))
-                    .await
-                    .map_err(ReaderError::from)?;
+                let bytes = engine.read_file(path).await.map_err(ReaderError::from)?;
                 shard_bytes.push(bytes);
             }
         }
@@ -493,7 +486,7 @@ impl Model {
         let engine = SyncStorage::new();
         if shard_paths.len() == 1 {
             let bytes = engine
-                .read_file(FileReadRequest::new(&shard_paths[0]))
+                .read_file(&shard_paths[0])
                 .map_err(ReaderError::from)?;
             return Ok(Self {
                 storage: ModelStorage::Single(OwnedSingleModel::from_owned(bytes)?),
@@ -503,9 +496,7 @@ impl Model {
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_par_iter()
             .map(|path| {
-                let bytes = engine
-                    .read_file(FileReadRequest::new(&path))
-                    .map_err(ReaderError::from)?;
+                let bytes = engine.read_file(&path).map_err(ReaderError::from)?;
                 OwnedShard::from_owned(bytes)
             })
             .collect();
@@ -670,7 +661,7 @@ impl MmapShardedModel {
 }
 
 #[derive(Debug, Clone)]
-enum MmapStorage {
+enum MmapModelStorage {
     Single(MmapSingleModel),
     Sharded(MmapShardedModel),
 }
@@ -678,75 +669,73 @@ enum MmapStorage {
 /// SafeTensors reader with mmap-backed, lazy storage.
 #[derive(Debug, Clone)]
 pub struct MmapModel {
-    storage: MmapStorage,
+    storage: MmapModelStorage,
 }
 
 impl MmapModel {
     pub fn open(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let shard_paths = Model::discover_shards(path)?;
-        let mapper = MmapEngine::new();
+        let mapper = MmapStorage::new();
         if shard_paths.len() == 1 {
             let mmap = mapper
-                .map_file(MmapRequest::new(&shard_paths[0]))
+                .map_file(&shard_paths[0])
                 .map_err(ReaderError::from)?;
             return Ok(Self {
-                storage: MmapStorage::Single(MmapSingleModel::from_shard(MmapShard::from_mmap(
-                    mmap,
-                )?)),
+                storage: MmapModelStorage::Single(MmapSingleModel::from_shard(
+                    MmapShard::from_mmap(mmap)?,
+                )),
             });
         }
 
         let shards: ReaderResult<Vec<_>> = shard_paths
             .into_par_iter()
             .map(|shard_path| {
-                let mmap = mapper
-                    .map_file(MmapRequest::new(&shard_path))
-                    .map_err(ReaderError::from)?;
+                let mmap = mapper.map_file(&shard_path).map_err(ReaderError::from)?;
                 MmapShard::from_mmap(mmap)
             })
             .collect();
         Ok(Self {
-            storage: MmapStorage::Sharded(MmapShardedModel::from_shards(shards?)?),
+            storage: MmapModelStorage::Sharded(MmapShardedModel::from_shards(shards?)?),
         })
     }
 
     #[inline]
     pub fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
         match &self.storage {
-            MmapStorage::Single(model) => model.tensor(name),
-            MmapStorage::Sharded(model) => model.tensor(name),
+            MmapModelStorage::Single(model) => model.tensor(name),
+            MmapModelStorage::Sharded(model) => model.tensor(name),
         }
     }
 
     #[inline]
     pub fn tensor_names(&self) -> &[Arc<str>] {
         match &self.storage {
-            MmapStorage::Single(model) => model.tensor_names(),
-            MmapStorage::Sharded(model) => model.tensor_names(),
+            MmapModelStorage::Single(model) => model.tensor_names(),
+            MmapModelStorage::Sharded(model) => model.tensor_names(),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
         match &self.storage {
-            MmapStorage::Single(model) => model.tensor_names().len(),
-            MmapStorage::Sharded(model) => model.len(),
+            MmapModelStorage::Single(model) => model.tensor_names().len(),
+            MmapModelStorage::Sharded(model) => model.len(),
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
         match &self.storage {
-            MmapStorage::Single(model) => model.tensor_names().is_empty(),
-            MmapStorage::Sharded(model) => model.is_empty(),
+            MmapModelStorage::Single(model) => model.tensor_names().is_empty(),
+            MmapModelStorage::Sharded(model) => model.is_empty(),
         }
     }
 
     #[inline]
     pub fn contains(&self, name: &str) -> bool {
         match &self.storage {
-            MmapStorage::Single(model) => model.tensor(name).is_ok(),
-            MmapStorage::Sharded(model) => model.contains(name),
+            MmapModelStorage::Single(model) => model.tensor(name).is_ok(),
+            MmapModelStorage::Sharded(model) => model.contains(name),
         }
     }
 }
@@ -906,7 +895,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        assert_eq!(stats.choose_backend(), LoadBackend::Sync);
+        assert_eq!(stats.choose_engine(), LoadEngine::Sync);
     }
 
     #[test]
@@ -916,11 +905,11 @@ mod tests {
             total_bytes: 256 * 1024 * 1024,
         };
 
-        match stats.choose_backend() {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
+        match stats.choose_engine() {
+            LoadEngine::Sync => {}
+            LoadEngine::TokioAsync => {}
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => panic!("expected Sync, got IoUring"),
+            LoadEngine::IoUring => panic!("expected Sync, got IoUring"),
         }
     }
 
@@ -930,7 +919,7 @@ mod tests {
             shard_count: 1,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        assert_eq!(stats.choose_backend(), LoadBackend::Sync);
+        assert_eq!(stats.choose_engine(), LoadEngine::Sync);
     }
 
     #[test]
@@ -939,11 +928,11 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        match stats.choose_backend() {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
+        match stats.choose_engine() {
+            LoadEngine::Sync => {}
+            LoadEngine::TokioAsync => {}
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => panic!("expected Sync for small 2-shard"),
+            LoadEngine::IoUring => panic!("expected Sync for small 2-shard"),
         }
     }
 
@@ -953,11 +942,11 @@ mod tests {
             shard_count: 4,
             total_bytes: 8 * 1024 * 1024 * 1024,
         };
-        match stats.choose_backend() {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
+        match stats.choose_engine() {
+            LoadEngine::Sync => {}
+            LoadEngine::TokioAsync => {}
             #[cfg(target_os = "linux")]
-            LoadBackend::IoUring => {}
+            LoadEngine::IoUring => {}
         }
     }
 
@@ -984,8 +973,8 @@ mod tests {
         ));
 
         assert_eq!(
-            stats.choose_backend_with_capabilities(&capabilities),
-            LoadBackend::TokioAsync
+            stats.choose_engine_with_capabilities(&capabilities),
+            LoadEngine::TokioAsync
         );
     }
 
@@ -1002,8 +991,8 @@ mod tests {
         ));
 
         assert_eq!(
-            stats.choose_backend_with_capabilities(&capabilities),
-            LoadBackend::Sync
+            stats.choose_engine_with_capabilities(&capabilities),
+            LoadEngine::Sync
         );
     }
 
@@ -1014,10 +1003,10 @@ mod tests {
             shard_count: 4,
             total_bytes: 2 * 1024 * 1024 * 1024,
         };
-        match stats.choose_backend() {
-            LoadBackend::Sync => {}
-            LoadBackend::TokioAsync => {}
-            LoadBackend::IoUring => panic!("expected Sync below threshold"),
+        match stats.choose_engine() {
+            LoadEngine::Sync => {}
+            LoadEngine::TokioAsync => {}
+            LoadEngine::IoUring => panic!("expected Sync below threshold"),
         }
     }
 

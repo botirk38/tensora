@@ -1,15 +1,15 @@
 # profile
 
-Performance measurement harness for Tensora I/O backends.
+Performance measurement harness for Tensora storage engines.
 
 ## Usage
 
 ```bash
-cargo run --release --bin profile -- <FORMAT> <BACKEND> --model-id <HF/MODEL> [--iterations N]
+cargo run --release --bin profile -- <FORMAT> <ENGINE> --model-id <HF/MODEL> [--iterations N]
 ```
 
 **Formats:** `safetensors`, `serverlessllm`
-**Backends:** `default`, `sync`, `async`, `mmap`, `io-uring` (Linux only)
+**Storage engines:** `default`, `sync`, `tokio`, `mmap`, `io-uring` (Linux only)
 
 ## Examples
 

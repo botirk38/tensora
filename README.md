@@ -2,7 +2,7 @@
 
 **Adaptive checkpoint loading for large language models.**
 
-Tensora is an open-source framework that applies workload-aware heuristics to select optimal I/O strategies for loading LLM checkpoints. It supports SafeTensors and ServerlessLLM storage layouts with pluggable backends (synchronous POSIX, Tokio async, Linux `io_uring`, memory-mapped) and automatically picks the fastest path based on checkpoint size, shard structure, and platform capabilities.
+Tensora is an open-source framework that applies workload-aware heuristics to select optimal I/O strategies for loading LLM checkpoints. It supports SafeTensors and ServerlessLLM storage layouts with pluggable storage engines (synchronous POSIX, Tokio async, Linux `io_uring`, memory-mapped) and automatically picks the fastest path based on checkpoint size, shard structure, and platform capabilities.
 
 > **Paper:** *Load by Design: Adaptive Heuristics for LLM Checkpoint Loading*
 > — Botir Khaltaev (2026). Sources in [`paper/`](paper/).
@@ -18,7 +18,7 @@ Tensora is an open-source framework that applies workload-aware heuristics to se
 | Range-heavy ServerlessLLM | `async` | Tokio grouped per-file tasks |
 | Large partitioned ServerlessLLM | `io_uring` | Batched submission with coalescing |
 
-The adaptive `default` backend reproduces these crossovers automatically.
+The adaptive `default` storage engine reproduces these crossovers automatically.
 
 ---
 
@@ -31,7 +31,7 @@ cargo build --release
 # Load a model (downloads from HuggingFace Hub on first run)
 cargo run --release --bin profile -- safetensors default --model-id Qwen/Qwen3-0.6B --iterations 1
 
-# Demo all backends
+# Demo all storage engines
 cargo run --release --bin demo -- safetensors all --model-id Qwen/Qwen3-0.6B
 ```
 
@@ -50,7 +50,7 @@ uv run python examples/pytorch.py gpt2 --prompt "Hello"
 ```
 tensora/
 ├── src/
-│   ├── backends/       # I/O backends (sync, async, io_uring, mmap)
+│   ├── storage/        # Storage engines (sync, tokio, io_uring, mmap)
 │   ├── formats/        # Checkpoint formats (SafeTensors, ServerlessLLM)
 │   ├── converters/     # Format conversion pipelines
 │   ├── hf_model.rs     # HuggingFace Hub integration
@@ -114,7 +114,7 @@ sync && echo 3 > /proc/sys/vm/drop_caches
 cargo run --release --bin profile -- safetensors sync --model-id Qwen/Qwen3-8B --iterations 1
 ```
 
-Replication targets **backend ordering and regime behaviour** (e.g., SafeTensors crossover point, ServerlessLLM async advantage), not identical millisecond timings across hardware.
+Replication targets **storage-engine ordering and regime behaviour** (e.g., SafeTensors crossover point, ServerlessLLM async advantage), not identical millisecond timings across hardware.
 
 ---
 

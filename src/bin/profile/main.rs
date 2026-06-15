@@ -18,7 +18,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Print backend availability in the current process/environment
+    /// Print storage-engine availability in the current process/environment
     Capabilities {
         /// Output format
         #[arg(long, value_enum, default_value_t = CapabilityFormat::Text)]
@@ -75,13 +75,13 @@ enum SafeTensorsCase {
     Default,
     /// Synchronous load
     Sync,
-    /// Asynchronous load
-    Async,
+    /// Tokio asynchronous load
+    Tokio,
     /// Memory-mapped open
     Mmap,
     /// Upstream safetensors crate baseline (std::fs::read + deserialize)
     HfNative,
-    /// Explicit io_uring backend (Linux only)
+    /// Explicit io_uring storage engine (Linux only)
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -92,11 +92,11 @@ enum ServerlessLLMCase {
     Default,
     /// Synchronous load
     Sync,
-    /// Asynchronous load
-    Async,
+    /// Tokio asynchronous load
+    Tokio,
     /// Memory-mapped open
     Mmap,
-    /// Explicit io_uring backend (Linux only)
+    /// Explicit io_uring storage engine (Linux only)
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -106,7 +106,7 @@ impl SafeTensorsCase {
         match self {
             Self::Default => "default",
             Self::Sync => "sync",
-            Self::Async => "async",
+            Self::Tokio => "tokio",
             Self::Mmap => "mmap",
             Self::HfNative => "hf-native",
             #[cfg(target_os = "linux")]
@@ -120,7 +120,7 @@ impl ServerlessLLMCase {
         match self {
             Self::Default => "default",
             Self::Sync => "sync",
-            Self::Async => "async",
+            Self::Tokio => "tokio",
             Self::Mmap => "mmap",
             #[cfg(target_os = "linux")]
             Self::IoUring => "io-uring",
@@ -177,7 +177,7 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
             for (kind, availability) in capabilities.iter() {
                 let key = kind.as_str().replace('-', "_").to_ascii_uppercase();
                 println!(
-                    "TENSORA_BACKEND_{key}_AVAILABLE={}",
+                    "TENSORA_ENGINE_{key}_AVAILABLE={}",
                     availability.is_available()
                 );
             }
@@ -224,7 +224,7 @@ mod tests {
     fn case_string_mappings_are_stable() {
         assert_eq!(SafeTensorsCase::Default.as_str(), "default");
         assert_eq!(SafeTensorsCase::Sync.as_str(), "sync");
-        assert_eq!(ServerlessLLMCase::Async.as_str(), "async");
+        assert_eq!(ServerlessLLMCase::Tokio.as_str(), "tokio");
         assert_eq!(ServerlessLLMCase::Mmap.as_str(), "mmap");
     }
 }

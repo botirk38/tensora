@@ -11,13 +11,13 @@ cargo run --bin convert -- <INPUT_DIR> <OUTPUT_DIR> [OPTIONS]
 ### Options
 
 - `-p, --partitions <N>` — Number of partitions (default: auto based on model size)
-- `-b, --backend <BACKEND>` — I/O backend: `default`, `sync`, `async`, `io-uring`
+- `-e, --engine <ENGINE>` — storage engine: `default`, `sync`, `tokio`, `io-uring`
 
 ## Examples
 
 ```bash
 cargo run --bin convert -- ./model_dir ./output
-cargo run --bin convert -- ./model_dir ./output --partitions 8 --backend sync
+cargo run --bin convert -- ./model_dir ./output --partitions 8 --engine sync
 ```
 
 ## Output

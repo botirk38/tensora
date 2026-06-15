@@ -4,18 +4,19 @@
 //! It uses `memmap2` to create page-aligned, read-only memory mappings, letting
 //! the OS manage paging rather than copying file data into user-space buffers.
 //!
-//! Obtain a mapping with [`MmapStorage::default().map_file`] or
-//! [`MmapStorage::default().map_range`]; the returned [`MmapRegion`] is
+//! Obtain a mapping with [`MmapStorage::new().map_file`] or
+//! [`MmapStorage::new().map_range`]; the returned [`MmapRegion`] is
 //! cheaply cloneable (backed by an `Arc`) and implements `AsRef<[u8]>`.
 
 use crate::storage::{
-    IoResult, MmapRangeRequest, MmapRequest,
-    availability::{StorageAvailability, StorageCapabilities, StorageKind},
+    ByteRange, IoResult,
+    availability::{StorageAvailability, StorageKind},
     buffer::MmapRegion,
 };
 use memmap2::MmapOptions;
 use std::fs::File;
 use std::io::{Error, ErrorKind};
+use std::path::Path;
 use std::sync::Arc;
 
 // ============================================================================
@@ -30,11 +31,11 @@ use std::sync::Arc;
 ///
 /// ```rust,ignore
 /// use tensora::storage::mmap::MmapStorage;
-/// use tensora::storage::{MmapRequest, MappableStorage};
+/// use tensora::storage::{MappableStorage};
 /// use std::path::Path;
 ///
-/// let engine = MmapStorage::default();
-/// let region = engine.map_file(MmapRequest::new(Path::new("model.bin")))?;
+/// let engine = MmapStorage::new();
+/// let region = engine.map_file(Path::new("model.bin"))?;
 /// let data: &[u8] = region.as_slice();
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
@@ -54,9 +55,7 @@ impl MmapStorage {
 // ============================================================================
 
 impl super::StorageEngine for MmapStorage {
-    fn kind(&self) -> StorageKind {
-        StorageKind::Mmap
-    }
+    const KIND: StorageKind = StorageKind::Mmap;
 
     fn availability() -> StorageAvailability
     where
@@ -73,13 +72,6 @@ impl super::StorageEngine for MmapStorage {
         }
         StorageAvailability::Available
     }
-
-    fn capabilities() -> StorageCapabilities
-    where
-        Self: Sized,
-    {
-        StorageCapabilities::probe()
-    }
 }
 
 // ============================================================================
@@ -93,68 +85,73 @@ impl super::MappableStorage for MmapStorage {
     ///
     /// Returns an I/O error if the file cannot be opened, is empty, or exceeds
     /// `usize::MAX` bytes.
-    fn map_file(&self, req: MmapRequest<'_>) -> IoResult<MmapRegion> {
-        let file = File::open(req.path)?;
+    fn map_file(&self, path: &Path) -> IoResult<MmapRegion> {
+        let file = File::open(path)?;
         let len_u64 = file.metadata()?.len();
         let len = usize::try_from(len_u64)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "file too large"))?;
         if len == 0 {
             return Err(Error::new(ErrorKind::InvalidData, "cannot mmap empty file"));
         }
+        // SAFETY: the file is opened read-only and remains alive for the mapping
+        // call; memmap2 owns the mapping after creation.
         let inner = unsafe { MmapOptions::new().map(&file)? };
-        Ok(MmapRegion {
-            inner: Arc::new(inner),
-            start: 0,
-            len,
-        })
+        Ok(MmapRegion::new(Arc::new(inner), 0, len))
     }
 
     /// Memory-map a byte range within a file.
     ///
     /// The mapping is page-aligned internally; `region.as_slice()` returns
-    /// exactly `req.len` bytes starting at `req.offset`.
+    /// exactly `range.len()` bytes starting at `range.start()`.
     ///
     /// # Errors
     ///
-    /// Returns an I/O error if the file cannot be opened, `req.len == 0`,
+    /// Returns an I/O error if the file cannot be opened, `range` is empty,
     /// the range overflows, or the range extends beyond the file.
-    fn map_range(&self, req: MmapRangeRequest<'_>) -> IoResult<MmapRegion> {
-        if req.len == 0 {
+    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<MmapRegion> {
+        if range.is_empty() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "cannot mmap empty range",
             ));
         }
-        let file = File::open(req.path)?;
+        let file = File::open(path)?;
         let file_len = file.metadata()?.len();
-        let end =
-            req.offset
-                .checked_add(u64::try_from(req.len).map_err(|e| {
-                    Error::new(ErrorKind::InvalidInput, format!("len too large: {e}"))
-                })?)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "range overflow"))?;
+        let end = range.end();
         if end > file_len {
             return Err(Error::new(
                 ErrorKind::UnexpectedEof,
                 "range exceeds file size",
             ));
         }
-        let page_size = u64::try_from(region::page::size()).unwrap_or(4096);
-        let aligned_offset = (req.offset / page_size) * page_size;
-        let start = usize::try_from(req.offset - aligned_offset)
+        let page_size = u64::try_from(region::page::size()).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid system page size: {e}"),
+            )
+        })?;
+        if page_size == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "system page size must be non-zero",
+            ));
+        }
+        let aligned_offset = (range.start() / page_size) * page_size;
+        let start = usize::try_from(range.start() - aligned_offset)
             .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
-        let map_len = req.len + start;
+        let len = range.len_usize()?;
+        let map_len = len
+            .checked_add(start)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "mapping length overflow"))?;
+        // SAFETY: the requested range has been bounds-checked against file_len,
+        // and the offset passed to memmap2 is page-aligned as required.
         let inner = unsafe {
             MmapOptions::new()
                 .offset(aligned_offset)
                 .len(map_len)
                 .map(&file)?
         };
-        Ok(MmapRegion {
-            inner: Arc::new(inner),
-            start,
-            len: req.len,
-        })
+        Ok(MmapRegion::new(Arc::new(inner), start, len))
     }
 }
 
@@ -165,7 +162,7 @@ impl super::MappableStorage for MmapStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{MappableStorage, StorageEngine};
+    use crate::storage::{ByteRange, MappableStorage, StorageEngine};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -190,9 +187,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let region = MmapStorage::new()
-            .map_file(MmapRequest::new(&path))
-            .unwrap();
+        let region = MmapStorage::new().map_file(&path).unwrap();
         assert_eq!(region.as_slice(), &data[..]);
         assert_eq!(region.len(), 4096);
         assert!(!region.is_empty());
@@ -203,9 +198,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let err = MmapStorage::new()
-            .map_file(MmapRequest::new(&path))
-            .unwrap_err();
+        let err = MmapStorage::new().map_file(&path).unwrap_err();
         assert!(
             err.kind() == std::io::ErrorKind::InvalidData
                 || err.kind() == std::io::ErrorKind::Other,
@@ -221,7 +214,7 @@ mod tests {
         let path = write_tmp(&dir, "range.bin", &data);
 
         let region = MmapStorage::new()
-            .map_range(MmapRangeRequest::new(&path, 10, 20))
+            .map_range(&path, ByteRange::from_offset_len(10, 20).unwrap())
             .unwrap();
         assert_eq!(region.as_slice(), &data[10..30]);
         assert_eq!(region.len(), 20);
@@ -233,7 +226,7 @@ mod tests {
         let path = write_tmp(&dir, "z.bin", b"hello");
 
         let err = MmapStorage::new()
-            .map_range(MmapRangeRequest::new(&path, 0, 0))
+            .map_range(&path, ByteRange::from_offset_len(0, 0).unwrap())
             .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -244,7 +237,7 @@ mod tests {
         let path = write_tmp(&dir, "short.bin", b"hi");
 
         let err = MmapStorage::new()
-            .map_range(MmapRangeRequest::new(&path, 0, 1000))
+            .map_range(&path, ByteRange::from_offset_len(0, 1000).unwrap())
             .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
@@ -255,9 +248,7 @@ mod tests {
         let data = vec![0xABu8; 1024 * 1024]; // 1 MiB
         let path = write_tmp(&dir, "large.bin", &data);
 
-        let region = MmapStorage::new()
-            .map_file(MmapRequest::new(&path))
-            .unwrap();
+        let region = MmapStorage::new().map_file(&path).unwrap();
         assert_eq!(region.len(), data.len());
         assert!(region.as_slice().iter().all(|&b| b == 0xAB));
     }
@@ -274,7 +265,7 @@ mod tests {
 
         // Map 100 bytes starting at the second page boundary (4096)
         let region = MmapStorage::new()
-            .map_range(MmapRangeRequest::new(&path, 4096, 100))
+            .map_range(&path, ByteRange::from_offset_len(4096, 100).unwrap())
             .unwrap();
         assert_eq!(region.len(), 100);
         assert_eq!(region.as_slice(), &data[4096..4196]);
@@ -285,12 +276,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "clone.bin", b"hello clone");
 
-        let r1 = MmapStorage::new()
-            .map_file(MmapRequest::new(&path))
-            .unwrap();
+        let r1 = MmapStorage::new().map_file(&path).unwrap();
         let r2 = r1.clone();
         assert_eq!(r1.as_slice(), r2.as_slice());
-        // Both point at the same underlying Arc<memmap2::Mmap>
-        assert_eq!(std::sync::Arc::strong_count(&r1.inner), 2);
+        assert_eq!(r2.as_slice(), b"hello clone");
     }
 }

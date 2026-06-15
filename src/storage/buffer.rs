@@ -33,9 +33,12 @@ impl AlignedBuffer {
 
     pub fn new(capacity: usize) -> std::io::Result<Self> {
         if capacity == 0 {
+            let layout = std::alloc::Layout::from_size_align(0, 1).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid alloc layout")
+            })?;
             return Ok(Self {
                 ptr: std::ptr::NonNull::dangling(),
-                layout: unsafe { std::alloc::Layout::from_size_align_unchecked(1, 1) },
+                layout,
                 len: 0,
             });
         }
@@ -43,6 +46,8 @@ impl AlignedBuffer {
             std::alloc::Layout::from_size_align(capacity, Self::BLOCK_SIZE).map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid alloc layout")
             })?;
+        // SAFETY: layout was constructed by Layout::from_size_align and is valid
+        // for allocation.
         let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
         if ptr.is_null() {
             std::alloc::handle_alloc_error(layout);
@@ -54,13 +59,17 @@ impl AlignedBuffer {
         })
     }
 
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
         self.ptr.as_ptr()
     }
     pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: ptr is valid for at least self.len bytes, and set_len prevents
+        // exposing bytes beyond the allocated layout size.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: &mut self guarantees unique access, and ptr is valid for
+        // self.len bytes by the same invariant as as_slice.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
     pub fn set_len(&mut self, len: usize) {
@@ -82,6 +91,7 @@ impl AlignedBuffer {
 impl Drop for AlignedBuffer {
     fn drop(&mut self) {
         if self.layout.size() > 0 {
+            // SAFETY: ptr was allocated with this exact layout in AlignedBuffer::new.
             unsafe { std::alloc::dealloc(self.ptr.as_ptr(), self.layout) }
         }
     }
@@ -98,6 +108,9 @@ impl std::fmt::Debug for AlignedBuffer {
 }
 
 #[cfg(target_os = "linux")]
+// SAFETY: AlignedBuffer owns its allocation and only exposes shared/mutable
+// access through Rust references; moving it to another thread transfers
+// ownership of the allocation.
 unsafe impl Send for AlignedBuffer {}
 
 // ============================================================================
@@ -110,21 +123,40 @@ unsafe impl Send for AlignedBuffer {}
 /// `start` within the underlying mapping.
 #[derive(Debug, Clone)]
 pub struct MmapRegion {
-    pub inner: Arc<memmap2::Mmap>,
-    pub start: usize,
-    pub len: usize,
+    inner: Arc<memmap2::Mmap>,
+    start: usize,
+    len: usize,
 }
 
 impl MmapRegion {
+    pub(crate) fn new(inner: Arc<memmap2::Mmap>, start: usize, len: usize) -> Self {
+        debug_assert!(start.checked_add(len).is_some_and(|end| end <= inner.len()));
+        Self { inner, start, len }
+    }
+
     #[inline]
+    #[must_use]
+    pub fn subregion(&self, offset: usize, len: usize) -> Option<Self> {
+        let relative_end = offset.checked_add(len)?;
+        if relative_end > self.len {
+            return None;
+        }
+        let start = self.start.checked_add(offset)?;
+        Some(Self::new(Arc::clone(&self.inner), start, len))
+    }
+
+    #[inline]
+    #[must_use]
     pub fn as_slice(&self) -> &[u8] {
         &self.inner[self.start..self.start + self.len]
     }
     #[inline]
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.len
     }
     #[inline]
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -189,7 +221,7 @@ pub enum OwnedBytes {
     Shared(Arc<[u8]>),
     /// A memory-mapped file region (zero-copy, read-only).
     Mmap(MmapRegion),
-    /// A plain heap-allocated buffer for backends that need mutable storage.
+    /// A plain heap-allocated buffer for storage engines that need mutable storage.
     Vec(Vec<u8>),
 }
 
@@ -250,25 +282,6 @@ impl OwnedBytes {
             Self::Aligned(b) => Some(b.as_mut_slice()),
             Self::Shared(_) | Self::Mmap(_) => None,
             Self::Vec(b) => Some(b.as_mut_slice()),
-        }
-    }
-
-    /// Returns a raw mutable pointer into the buffer for kernel I/O submission.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on [`OwnedBytes::Shared`] or [`OwnedBytes::Mmap`],
-    /// which are immutable.
-    #[inline]
-    #[must_use]
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        match self {
-            Self::Pooled(b) => b.as_mut_ptr(),
-            #[cfg(target_os = "linux")]
-            Self::Aligned(b) => b.as_mut_ptr(),
-            Self::Shared(_) => panic!("OwnedBytes::Shared is not mutable"),
-            Self::Mmap(_) => panic!("OwnedBytes::Mmap is not mutable"),
-            Self::Vec(b) => b.as_mut_ptr(),
         }
     }
 
@@ -349,12 +362,10 @@ mod tests {
         tmp.write_all(b"hello_mmap").unwrap();
         tmp.flush().unwrap();
         let file = std::fs::File::open(tmp.path()).unwrap();
+        // SAFETY: the temp file remains alive for the duration of the mapping
+        // setup, and memmap2 owns the resulting mapping independently.
         let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
-        MmapRegion {
-            inner: Arc::new(mmap),
-            start: 0,
-            len: 10,
-        }
+        MmapRegion::new(Arc::new(mmap), 0, 10)
     }
 
     #[test]
@@ -425,20 +436,6 @@ mod tests {
     fn as_mut_slice_none_for_mmap() {
         let mut ob = OwnedBytes::Mmap(make_mmap_region());
         assert!(ob.as_mut_slice().is_none());
-    }
-
-    #[test]
-    #[should_panic(expected = "Shared is not mutable")]
-    fn as_mut_ptr_panics_on_shared() {
-        let mut ob = OwnedBytes::Shared(Arc::from(vec![1u8]));
-        let _ = ob.as_mut_ptr();
-    }
-
-    #[test]
-    #[should_panic(expected = "Mmap is not mutable")]
-    fn as_mut_ptr_panics_on_mmap() {
-        let mut ob = OwnedBytes::Mmap(make_mmap_region());
-        let _ = ob.as_mut_ptr();
     }
 
     #[test]

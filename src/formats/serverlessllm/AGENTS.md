@@ -6,7 +6,7 @@ ServerlessLLM partitioned tensor format: range-oriented loading for cold-start o
 
 ## Files
 
-- `model.rs` — Loading logic + backend selection heuristics
+- `model.rs` — Loading logic + storage-engine selection heuristics
 - `index.rs` — `metadata.json` parsing (partition assignments, tensor offsets)
 - `serializer.rs` — Write ServerlessLLM layouts
 - `helpers.rs` — Partition count recommendations

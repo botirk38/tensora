@@ -1,4 +1,4 @@
-//! ServerlessLLM benchmarks: all backends, tensor access patterns, mmap page-touch.
+//! ServerlessLLM benchmarks: all storage engines, tensor access patterns, mmap page-touch.
 
 mod bench_util;
 
@@ -8,7 +8,7 @@ use std::time::Duration;
 use tensora::formats::serverlessllm;
 
 // ---------------------------------------------------------------------------
-// Full-model load benchmarks (one per backend)
+// Full-model load benchmarks (one per storage engine)
 // ---------------------------------------------------------------------------
 
 fn bench_default(c: &mut Criterion) {
@@ -56,13 +56,13 @@ fn bench_sync(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_async(c: &mut Criterion) {
+fn bench_tokio(c: &mut Criterion) {
     let (model_id, _st_dir, sllm_dir) = bench_util::resolve_serverlessllm_model();
     let slug = bench_util::model_slug(&model_id);
     let dir_str = sllm_dir.to_str().unwrap().to_string();
     let total_bytes = bench_util::serverlessllm_total_bytes(&sllm_dir);
 
-    let mut group = c.benchmark_group("serverlessllm_async");
+    let mut group = c.benchmark_group("serverlessllm_tokio");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(15));
     group.warm_up_time(Duration::from_secs(3));
@@ -238,7 +238,7 @@ criterion_group!(
     benches,
     bench_default,
     bench_sync,
-    bench_async,
+    bench_tokio,
     bench_io_uring,
     bench_mmap,
     bench_tensor_sequential,
@@ -251,7 +251,7 @@ criterion_group!(
     benches,
     bench_default,
     bench_sync,
-    bench_async,
+    bench_tokio,
     bench_mmap,
     bench_tensor_sequential,
     bench_tensor_random,

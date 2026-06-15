@@ -8,7 +8,7 @@
 //! 4. Index write: produce `tensor_index.json`
 //!
 //! Four converter variants are exposed, all using the same pipeline with different I/O executors:
-//! - `convert_safetensors_to_serverlessllm` — default (adaptive backend choice)
+//! - `convert_safetensors_to_serverlessllm` — default (adaptive storage-engine choice)
 //! - `convert_safetensors_to_serverlessllm_sync` — synchronous I/O
 //! - `convert_safetensors_to_serverlessllm_async` — Tokio async I/O
 //! - `convert_safetensors_to_serverlessllm_io_uring` — Linux io_uring I/O
@@ -17,9 +17,9 @@ use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
 #[cfg(target_os = "linux")]
 use crate::storage::availability::{StorageCapabilities, StorageKind};
-use crate::storage::sync::SyncStorage;
-use crate::storage::tokio::TokioStorage;
-use crate::storage::{RangeReadRequest, ReadableStorage, WritableStorage, WriteAtRequest};
+use crate::storage::sync::{SyncStorage, SyncWriter};
+use crate::storage::tokio::{TokioStorage, TokioWriter};
+use crate::storage::{ByteRange, ReadableStorage, WritableStorage, WriteOptions};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 // Public API — four converter variants
 // ---------------------------------------------------------------------------
 
-/// Convert SafeTensors shards to ServerlessLLM format using adaptive backend choice.
+/// Convert SafeTensors shards to ServerlessLLM format using adaptive storage-engine choice.
 #[inline]
 pub async fn convert_safetensors_to_serverlessllm(
     input_dir: &str,
@@ -43,8 +43,8 @@ pub async fn convert_safetensors_to_serverlessllm(
         ));
     }
     let plan = ConversionPlan::build(input_dir, partition_count).await?;
-    let backend = plan.stats.choose_backend();
-    plan.materialize(output_dir, backend).await
+    let engine = plan.stats.choose_engine();
+    plan.materialize(output_dir, engine).await
 }
 
 /// Convert SafeTensors shards to ServerlessLLM format using synchronous I/O.
@@ -162,7 +162,7 @@ pub struct CopyOp {
     pub size: usize,
 }
 
-/// Statistics about the conversion plan, used for backend selection.
+/// Statistics about the conversion plan, used for storage-engine selection.
 #[derive(Debug, Clone)]
 pub struct ConversionStats {
     pub total_bytes: u64,
@@ -181,11 +181,11 @@ pub struct ConversionStats {
 }
 
 // ---------------------------------------------------------------------------
-// Backend selection
+// Storage-engine selection
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConversionBackend {
+enum ConversionEngine {
     Sync,
     TokioAsync,
     #[cfg(target_os = "linux")]
@@ -195,18 +195,18 @@ enum ConversionBackend {
 const LARGE_CONVERSION_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
 
 impl ConversionStats {
-    fn choose_backend(&self) -> ConversionBackend {
+    fn choose_engine(&self) -> ConversionEngine {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                let capabilities = StorageCapabilities::probe();
+                let capabilities = StorageCapabilities::cached();
                 if capabilities.is_available(StorageKind::IoUring) {
-                    return ConversionBackend::IoUring;
+                    return ConversionEngine::IoUring;
                 }
             }
-            return ConversionBackend::TokioAsync;
+            return ConversionEngine::TokioAsync;
         }
-        ConversionBackend::Sync
+        ConversionEngine::Sync
     }
 }
 
@@ -503,15 +503,15 @@ impl ConversionPlan {
 
     // -- Materialization ----------------------------------------------------
 
-    async fn materialize(&self, output_dir: &str, backend: ConversionBackend) -> WriterResult<()> {
+    async fn materialize(&self, output_dir: &str, engine: ConversionEngine) -> WriterResult<()> {
         let output_dir = Path::new(output_dir);
         tokio::fs::create_dir_all(output_dir).await?;
 
-        match backend {
-            ConversionBackend::Sync => self.materialize_sync_parallel(output_dir)?,
-            ConversionBackend::TokioAsync => self.materialize_async_inner(output_dir).await?,
+        match engine {
+            ConversionEngine::Sync => self.materialize_sync_parallel(output_dir)?,
+            ConversionEngine::TokioAsync => self.materialize_async_inner(output_dir).await?,
             #[cfg(target_os = "linux")]
-            ConversionBackend::IoUring => self.materialize_sync_parallel(output_dir)?,
+            ConversionEngine::IoUring => self.materialize_sync_parallel(output_dir)?,
         }
 
         let index_path = output_dir.join("tensor_index.json");
@@ -592,8 +592,7 @@ impl ConversionPlan {
         }
 
         let engine = TokioStorage::new();
-        let mut writer = engine
-            .create_writer(&path)
+        let mut writer = TokioWriter::create(&path, WriteOptions::create_or_truncate())
             .await
             .map_err(WriterError::from)?;
 
@@ -605,17 +604,20 @@ impl ConversionPlan {
         for (shard_path, shard_ops) in by_shard {
             for op in shard_ops {
                 let data = engine
-                    .read_range(RangeReadRequest::new(shard_path, op.source_offset, op.size))
+                    .read_range(
+                        shard_path,
+                        ByteRange::from_offset_len(op.source_offset, op.size)?,
+                    )
                     .await
                     .map_err(WriterError::from)?;
                 writer
-                    .write_at(WriteAtRequest::new(op.dest_offset, data.as_ref()))
+                    .write_all_at(op.dest_offset, data.as_ref())
                     .await
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.flush().await.map_err(WriterError::from)?;
+        writer.sync_all().await.map_err(WriterError::from)?;
         Ok(())
     }
 
@@ -631,7 +633,8 @@ impl ConversionPlan {
         f.set_len(total_size)?;
 
         let engine = SyncStorage::new();
-        let mut writer = engine.create_writer(&path).map_err(WriterError::from)?;
+        let mut writer = SyncWriter::create(&path, WriteOptions::create_or_truncate())
+            .map_err(WriterError::from)?;
 
         let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
         for op in ops {
@@ -641,15 +644,18 @@ impl ConversionPlan {
         for (shard_path, shard_ops) in by_shard {
             for op in shard_ops {
                 let data = engine
-                    .read_range(RangeReadRequest::new(shard_path, op.source_offset, op.size))
+                    .read_range(
+                        shard_path,
+                        ByteRange::from_offset_len(op.source_offset, op.size)?,
+                    )
                     .map_err(WriterError::from)?;
                 writer
-                    .write_at(WriteAtRequest::new(op.dest_offset, data.as_ref()))
+                    .write_all_at(op.dest_offset, data.as_ref())
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.flush().map_err(WriterError::from)?;
+        writer.sync_all().map_err(WriterError::from)?;
         Ok(())
     }
 }
@@ -936,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_default_backend_roundtrip() {
+    fn convert_default_engine_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out_default");
@@ -951,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_selection_small_single_partition() {
+    fn engine_selection_small_single_partition() {
         let stats = ConversionStats {
             total_bytes: 1024,
             shard_count: 1,
@@ -967,11 +973,11 @@ mod tests {
             mean_copy_size: 1024.0,
             max_copy_size: 1024,
         };
-        assert_eq!(stats.choose_backend(), ConversionBackend::Sync);
+        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
     }
 
     #[test]
-    fn backend_selection_large_multi() {
+    fn engine_selection_large_multi() {
         let stats = ConversionStats {
             total_bytes: 16 * 1024 * 1024 * 1024,
             shard_count: 8,
@@ -987,7 +993,7 @@ mod tests {
             mean_copy_size: 32.0 * 1024.0 * 1024.0,
             max_copy_size: 64 * 1024 * 1024,
         };
-        assert_ne!(stats.choose_backend(), ConversionBackend::Sync);
+        assert_ne!(stats.choose_engine(), ConversionEngine::Sync);
     }
 
     #[test]
@@ -1007,7 +1013,7 @@ mod tests {
             mean_copy_size: 100_000.0,
             max_copy_size: 200_000,
         };
-        assert_eq!(stats.choose_backend(), ConversionBackend::Sync);
+        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
     }
 
     #[test]

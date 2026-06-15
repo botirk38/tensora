@@ -3,25 +3,17 @@
 //! # Traits
 //!
 //! - [`StorageEngine`] — base trait all engines implement (kind, availability)
-//! - [`ReadableStorage`] — file and range reads
-//! - [`WritableStorage`] — write-at and flush
+//! - [`ReadableStorage`] — exact file and range reads
+//! - [`WritableStorage`] — exact positioned writes and durability controls
 //! - [`MappableStorage`] — memory-map a file or range (mmap engine only)
-//! - [`ReadWriteStorage`] — blanket marker for engines that are both readable and writable
 //!
-//! # Request types
+//! # Vocabulary types
 //!
-//! All requests borrow their path as `&Path` to avoid allocation at the call site.
-//!
-//! - [`FileReadRequest`] — read an entire file
-//! - [`RangeReadRequest`] — read a byte range from a file
-//! - [`BatchReadRequest`] — read multiple ranges, possibly from multiple files
-//! - [`WriteAtRequest`] — write bytes at a specific offset in an open file
-//! - [`MmapRequest`] — memory-map an entire file
-//! - [`MmapRangeRequest`] — memory-map a byte range within a file
-//!
-//! # Result types
-//!
-//! - [`RangeReadResult`] — single result from a batch read
+//! - [`ByteRange`] — validated half-open byte range `[start, end)`
+//! - [`FileRange`] — path plus byte range for batch reads
+//! - [`RangeRead`] — single result from a batch read
+//! - [`WriteOptions`] — file creation/truncation/preallocation policy
+//! - [`WriteSlice`] — positioned write entry
 
 pub mod availability;
 pub mod buffer;
@@ -32,294 +24,339 @@ pub mod tokio;
 
 pub use std::io::Result as IoResult;
 
+use std::io::{Error, ErrorKind};
 use std::path::Path;
+use std::sync::Arc;
 
-// ============================================================================
-// FileReadRequest
-// ============================================================================
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteRange {
+    start: u64,
+    end: u64,
+}
 
-/// Request to read an entire file into memory.
+impl ByteRange {
+    #[inline]
+    pub fn new(start: u64, end: u64) -> IoResult<Self> {
+        if end < start {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "byte range end is before start",
+            ));
+        }
+        Ok(Self { start, end })
+    }
+
+    #[inline]
+    pub fn from_offset_len(offset: u64, len: usize) -> IoResult<Self> {
+        let len = u64::try_from(len).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("range length too large: {e}"),
+            )
+        })?;
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "byte range overflow"))?;
+        Self::new(offset, end)
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn start(self) -> u64 {
+        self.start
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn end(self) -> u64 {
+        self.end
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn len(self) -> u64 {
+        self.end - self.start
+    }
+
+    #[inline]
+    pub fn len_usize(self) -> IoResult<usize> {
+        usize::try_from(self.len()).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("range length too large: {e}"),
+            )
+        })
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.start == self.end
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-pub struct FileReadRequest<'a> {
-    /// Path of the file to read.
+pub struct FileRange<'a> {
     pub path: &'a Path,
+    pub range: ByteRange,
 }
 
-impl<'a> FileReadRequest<'a> {
-    /// Create a new file read request.
+impl<'a> FileRange<'a> {
     #[inline]
     #[must_use]
-    pub fn new(path: &'a Path) -> Self {
-        Self { path }
+    pub const fn new(path: &'a Path, range: ByteRange) -> Self {
+        Self { path, range }
     }
 }
 
-// ============================================================================
-// RangeReadRequest
-// ============================================================================
-
-/// Request to read a contiguous byte range from a file.
-#[derive(Debug, Clone, Copy)]
-pub struct RangeReadRequest<'a> {
-    /// Path of the file to read from.
-    pub path: &'a Path,
-    /// Byte offset at which to start reading.
-    pub offset: u64,
-    /// Number of bytes to read.
-    pub len: usize,
-}
-
-impl<'a> RangeReadRequest<'a> {
-    /// Create a new range read request.
-    #[inline]
-    #[must_use]
-    pub fn new(path: &'a Path, offset: u64, len: usize) -> Self {
-        Self { path, offset, len }
-    }
-}
-
-// ============================================================================
-// BatchReadRequest
-// ============================================================================
-
-/// A single range entry within a [`BatchReadRequest`].
-#[derive(Debug, Clone)]
-pub struct BatchRange {
-    /// Byte offset within the file.
-    pub offset: u64,
-    /// Number of bytes to read.
-    pub len: usize,
-}
-
-impl BatchRange {
-    /// Create a new batch range entry.
-    #[inline]
-    #[must_use]
-    pub fn new(offset: u64, len: usize) -> Self {
-        Self { offset, len }
-    }
-}
-
-/// Request to read multiple byte ranges, each tagged with a file path.
-///
-/// All ranges may come from the same file or from different files. Engines
-/// that support coalescing may merge adjacent ranges automatically.
-#[derive(Debug, Clone)]
-pub struct BatchReadRequest<'a> {
-    /// Parallel slices: `paths[i]` is the file for `ranges[i]`.
-    pub paths: &'a [&'a Path],
-    /// Ranges to read; `ranges[i]` corresponds to `paths[i]`.
-    pub ranges: &'a [BatchRange],
-}
-
-impl<'a> BatchReadRequest<'a> {
-    /// Create a new batch read request.
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if `paths.len() != ranges.len()`.
-    #[inline]
-    #[must_use]
-    pub fn new(paths: &'a [&'a Path], ranges: &'a [BatchRange]) -> Self {
-        debug_assert_eq!(
-            paths.len(),
-            ranges.len(),
-            "BatchReadRequest: paths and ranges must have the same length"
-        );
-        Self { paths, ranges }
-    }
-
-    /// Number of ranges in this batch.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.ranges.len()
-    }
-
-    /// Returns `true` if the batch contains no ranges.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
-    }
-}
-
-// ============================================================================
-// RangeReadResult
-// ============================================================================
-
-/// A single result from a [`BatchReadRequest`].
 #[derive(Debug)]
-pub struct RangeReadResult {
-    /// Index into the original [`BatchReadRequest`] this result corresponds to.
+pub struct RangeRead {
     pub request_index: usize,
-    /// The bytes that were read.
-    pub bytes: std::sync::Arc<[u8]>,
-    /// Byte offset within `bytes` where the requested data begins.
-    ///
-    /// Usually `0` for engines that return exactly the requested slice, but
-    /// may be non-zero for engines that return a coalesced super-range.
-    pub logical_offset: usize,
-    /// Number of bytes of requested data starting at `logical_offset`.
-    pub logical_len: usize,
+    pub range: ByteRange,
+    pub bytes: Arc<[u8]>,
 }
 
-impl RangeReadResult {
-    /// Returns the requested data as a byte slice.
+impl RangeRead {
     #[inline]
     #[must_use]
     pub fn data(&self) -> &[u8] {
-        &self.bytes[self.logical_offset..self.logical_offset + self.logical_len]
+        &self.bytes
     }
 }
 
-// ============================================================================
-// WriteAtRequest
-// ============================================================================
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMode {
+    CreateNew,
+    CreateOrTruncate,
+    OpenExisting,
+}
 
-/// Request to write bytes at a specific offset in a file.
-///
-/// The file must already be open for writing by the engine. The engine is
-/// responsible for managing file handles; this request carries only the data
-/// and destination position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteOptions {
+    pub mode: WriteMode,
+    pub create_parent_dirs: bool,
+    pub preallocate: Option<u64>,
+}
+
+impl WriteOptions {
+    #[inline]
+    #[must_use]
+    pub const fn create_new() -> Self {
+        Self {
+            mode: WriteMode::CreateNew,
+            create_parent_dirs: true,
+            preallocate: None,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn create_or_truncate() -> Self {
+        Self {
+            mode: WriteMode::CreateOrTruncate,
+            create_parent_dirs: true,
+            preallocate: None,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn open_existing() -> Self {
+        Self {
+            mode: WriteMode::OpenExisting,
+            create_parent_dirs: false,
+            preallocate: None,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn create_parent_dirs(mut self, enabled: bool) -> Self {
+        self.create_parent_dirs = enabled;
+        self
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn preallocate(mut self, len: u64) -> Self {
+        self.preallocate = Some(len);
+        self
+    }
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        Self::create_or_truncate()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-pub struct WriteAtRequest<'a> {
-    /// Byte offset within the file at which to begin writing.
+pub struct WriteSlice<'a> {
     pub offset: u64,
-    /// Data to write.
     pub data: &'a [u8],
 }
 
-impl<'a> WriteAtRequest<'a> {
-    /// Create a new write-at request.
+impl<'a> WriteSlice<'a> {
     #[inline]
     #[must_use]
-    pub fn new(offset: u64, data: &'a [u8]) -> Self {
+    pub const fn new(offset: u64, data: &'a [u8]) -> Self {
         Self { offset, data }
     }
-}
 
-// ============================================================================
-// MmapRequest / MmapRangeRequest
-// ============================================================================
-
-/// Request to memory-map an entire file.
-#[derive(Debug, Clone, Copy)]
-pub struct MmapRequest<'a> {
-    /// Path of the file to map.
-    pub path: &'a Path,
-}
-
-impl<'a> MmapRequest<'a> {
-    /// Create a new mmap request.
     #[inline]
-    #[must_use]
-    pub fn new(path: &'a Path) -> Self {
-        Self { path }
+    pub fn end_offset(self) -> IoResult<u64> {
+        let len = u64::try_from(self.data.len()).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("write length too large: {e}"),
+            )
+        })?;
+        self.offset
+            .checked_add(len)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "write offset overflow"))
     }
 }
 
-/// Request to memory-map a byte range within a file.
-#[derive(Debug, Clone, Copy)]
-pub struct MmapRangeRequest<'a> {
-    /// Path of the file to map.
-    pub path: &'a Path,
-    /// Byte offset at which the mapping begins.
-    pub offset: u64,
-    /// Length of the mapped region in bytes.
-    pub len: usize,
-}
-
-impl<'a> MmapRangeRequest<'a> {
-    /// Create a new mmap range request.
-    #[inline]
-    #[must_use]
-    pub fn new(path: &'a Path, offset: u64, len: usize) -> Self {
-        Self { path, offset, len }
-    }
-}
-
-// ============================================================================
-// Engine traits
-// ============================================================================
-
-/// Base trait that every storage engine must implement.
+/// Common metadata every storage engine exposes.
 pub trait StorageEngine {
-    /// The kind identifier for this engine.
-    fn kind(&self) -> availability::StorageKind;
+    /// Compile-time kind identifier for this engine.
+    const KIND: availability::StorageKind;
 
-    /// Whether this engine type is available in the current environment.
+    /// Returns the kind identifier for this engine value.
+    fn kind(&self) -> availability::StorageKind {
+        Self::KIND
+    }
+
+    /// Reports whether this engine can run in the current environment.
     fn availability() -> availability::StorageAvailability
     where
         Self: Sized;
-
-    /// Full capability snapshot for the environment.
-    fn capabilities() -> availability::StorageCapabilities
-    where
-        Self: Sized;
 }
 
-/// An engine that can read files and byte ranges.
+/// Blocking storage engine operations for exact reads.
 pub trait ReadableStorage: StorageEngine {
-    /// Read an entire file into an [`buffer::OwnedBytes`] buffer.
-    fn read_file(&self, req: FileReadRequest<'_>) -> IoResult<buffer::OwnedBytes>;
+    /// Reads an entire file into owned bytes.
+    fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
 
-    /// Read a contiguous byte range from a file.
-    fn read_range(&self, req: RangeReadRequest<'_>) -> IoResult<buffer::OwnedBytes>;
-
-    /// Read a batch of byte ranges, possibly from multiple files.
+    /// Reads exactly `range` from `path`.
     ///
-    /// Results are returned in the same order as the input ranges.
-    /// The default implementation issues reads sequentially; engines should
-    /// override this with a parallel or coalescing implementation.
-    fn read_ranges(&self, req: BatchReadRequest<'_>) -> IoResult<Vec<RangeReadResult>> {
-        req.paths
+    /// Empty ranges are valid and return empty bytes.
+    fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+
+    /// Reads a batch of file ranges.
+    ///
+    /// The default implementation reads each range sequentially. Implementors may
+    /// override this for parallel or engine-specific batching, but returned
+    /// results should preserve `request_index`.
+    fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
+        ranges
             .iter()
-            .zip(req.ranges.iter())
             .enumerate()
-            .map(|(request_index, (path, range))| {
-                let bytes =
-                    self.read_range(RangeReadRequest::new(path, range.offset, range.len))?;
-                Ok(RangeReadResult {
+            .map(|(request_index, item)| {
+                let bytes = self.read_range(item.path, item.range)?.into_shared();
+                Ok(RangeRead {
                     request_index,
-                    bytes: bytes.into_shared(),
-                    logical_offset: 0,
-                    logical_len: range.len,
+                    range: item.range,
+                    bytes,
                 })
             })
             .collect()
     }
 }
 
-/// An engine that can write bytes at specified offsets.
-///
-/// Implementors manage their own open file handle. Call [`WritableStorage::flush`]
-/// before dropping to ensure all data is durable.
+/// Async storage engine operations for exact reads.
+#[allow(async_fn_in_trait)]
+pub trait AsyncReadableStorage: StorageEngine {
+    /// Reads an entire file into owned bytes.
+    async fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
+
+    /// Reads exactly `range` from `path`.
+    ///
+    /// Empty ranges are valid and return empty bytes.
+    async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+
+    /// Reads a batch of file ranges.
+    async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
+}
+
+/// Blocking positioned writer operations.
 pub trait WritableStorage: StorageEngine {
-    /// Write `req.data` starting at `req.offset` within the engine's open file.
-    fn write_at(&mut self, req: WriteAtRequest<'_>) -> IoResult<()>;
+    /// Writes all bytes in `data` starting at `offset`.
+    ///
+    /// Implementations must either write the full slice or return an error.
+    fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()>;
 
-    /// Flush buffered data and synchronise to durable storage.
-    fn flush(&mut self) -> IoResult<()>;
+    /// Applies a sequence of positioned writes in order.
+    fn write_slices(&mut self, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        for write in writes {
+            self.write_all_at(write.offset, write.data)?;
+        }
+        Ok(())
+    }
+
+    /// Sets the underlying file length.
+    fn set_len(&mut self, len: u64) -> IoResult<()>;
+
+    /// Synchronizes file data to durable storage when supported.
+    fn sync_data(&mut self) -> IoResult<()>;
+
+    /// Synchronizes file data and metadata to durable storage.
+    fn sync_all(&mut self) -> IoResult<()>;
+
+    /// Completes the writer by performing a full durability sync.
+    fn finish(mut self) -> IoResult<()>
+    where
+        Self: Sized,
+    {
+        self.sync_all()
+    }
 }
 
-/// An engine that can memory-map files or byte ranges.
+/// Async positioned writer operations.
+#[allow(async_fn_in_trait)]
+pub trait AsyncWritableStorage: StorageEngine {
+    /// Writes all bytes in `data` starting at `offset`.
+    ///
+    /// Implementations must either write the full slice or return an error.
+    async fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()>;
+
+    /// Applies a sequence of positioned writes in order.
+    async fn write_slices(&mut self, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        for write in writes {
+            self.write_all_at(write.offset, write.data).await?;
+        }
+        Ok(())
+    }
+
+    /// Sets the underlying file length.
+    async fn set_len(&mut self, len: u64) -> IoResult<()>;
+
+    /// Synchronizes file data to durable storage when supported.
+    async fn sync_data(&mut self) -> IoResult<()>;
+
+    /// Synchronizes file data and metadata to durable storage.
+    async fn sync_all(&mut self) -> IoResult<()>;
+
+    /// Completes the writer by performing a full durability sync.
+    async fn finish(mut self) -> IoResult<()>
+    where
+        Self: Sized,
+    {
+        self.sync_all().await
+    }
+}
+
+/// Storage engine operations for memory mapping files.
 pub trait MappableStorage: StorageEngine {
-    /// Memory-map an entire file.
-    fn map_file(&self, req: MmapRequest<'_>) -> IoResult<buffer::MmapRegion>;
+    /// Maps the entire file at `path`.
+    fn map_file(&self, path: &Path) -> IoResult<buffer::MmapRegion>;
 
-    /// Memory-map a byte range within a file.
-    fn map_range(&self, req: MmapRangeRequest<'_>) -> IoResult<buffer::MmapRegion>;
+    /// Maps exactly `range` from `path`.
+    ///
+    /// Empty ranges are rejected because zero-length memory maps are not
+    /// portable.
+    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::MmapRegion>;
 }
-
-/// Blanket marker for engines that implement both [`ReadableStorage`] and
-/// [`WritableStorage`].
-pub trait ReadWriteStorage: ReadableStorage + WritableStorage {}
-impl<T: ReadableStorage + WritableStorage> ReadWriteStorage for T {}
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -327,75 +364,68 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn file_read_request_stores_path() {
-        let p = Path::new("/tmp/model.safetensors");
-        let req = FileReadRequest::new(p);
-        assert_eq!(req.path, p);
+    fn byte_range_new_validates_order() {
+        let range = ByteRange::new(10, 20).unwrap();
+        assert_eq!(range.start(), 10);
+        assert_eq!(range.end(), 20);
+        assert_eq!(range.len(), 10);
+        assert!(!range.is_empty());
+        assert!(ByteRange::new(20, 10).is_err());
     }
 
     #[test]
-    fn range_read_request_fields() {
-        let p = Path::new("/tmp/shard.bin");
-        let req = RangeReadRequest::new(p, 1024, 512);
-        assert_eq!(req.path, p);
-        assert_eq!(req.offset, 1024);
-        assert_eq!(req.len, 512);
+    fn byte_range_from_offset_len_validates_overflow() {
+        let range = ByteRange::from_offset_len(10, 5).unwrap();
+        assert_eq!(range, ByteRange::new(10, 15).unwrap());
+        assert!(ByteRange::from_offset_len(u64::MAX, 1).is_err());
     }
 
     #[test]
-    fn batch_read_request_len_and_is_empty() {
-        let p = Path::new("/tmp/x");
-        let paths = [p];
-        let ranges = [BatchRange::new(0, 64)];
-        let req = BatchReadRequest::new(&paths, &ranges);
-        assert_eq!(req.len(), 1);
-        assert!(!req.is_empty());
-
-        let empty = BatchReadRequest::new(&[], &[]);
-        assert!(empty.is_empty());
-        assert_eq!(empty.len(), 0);
+    fn byte_range_allows_empty_reads() {
+        let range = ByteRange::from_offset_len(42, 0).unwrap();
+        assert!(range.is_empty());
+        assert_eq!(range.len_usize().unwrap(), 0);
     }
 
     #[test]
-    fn range_read_result_data_slice() {
-        let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![0u8, 1, 2, 3, 4, 5]);
-        let result = RangeReadResult {
+    fn file_range_stores_path_and_range() {
+        let path = Path::new("/tmp/shard.bin");
+        let range = ByteRange::new(1, 4).unwrap();
+        let file_range = FileRange::new(path, range);
+        assert_eq!(file_range.path, path);
+        assert_eq!(file_range.range, range);
+    }
+
+    #[test]
+    fn range_read_data_slice() {
+        let bytes: Arc<[u8]> = Arc::from(vec![2u8, 3, 4]);
+        let range = ByteRange::new(0, 3).unwrap();
+        let result = RangeRead {
             request_index: 0,
+            range,
             bytes,
-            logical_offset: 2,
-            logical_len: 3,
         };
         assert_eq!(result.data(), &[2, 3, 4]);
     }
 
     #[test]
-    fn write_at_request_fields() {
-        let data = b"hello";
-        let req = WriteAtRequest::new(4096, data);
-        assert_eq!(req.offset, 4096);
-        assert_eq!(req.data, b"hello");
+    fn write_options_constructors() {
+        assert_eq!(WriteOptions::default().mode, WriteMode::CreateOrTruncate);
+        assert!(WriteOptions::default().create_parent_dirs);
+        assert_eq!(WriteOptions::create_new().mode, WriteMode::CreateNew);
+        assert_eq!(WriteOptions::open_existing().mode, WriteMode::OpenExisting);
+        assert!(!WriteOptions::open_existing().create_parent_dirs);
+        assert_eq!(WriteOptions::default().preallocate(8).preallocate, Some(8));
+        assert!(
+            !WriteOptions::default()
+                .create_parent_dirs(false)
+                .create_parent_dirs
+        );
     }
 
     #[test]
-    fn mmap_request_stores_path() {
-        let p = Path::new("/tmp/weights.bin");
-        let req = MmapRequest::new(p);
-        assert_eq!(req.path, p);
-    }
-
-    #[test]
-    fn mmap_range_request_fields() {
-        let p = Path::new("/tmp/partition_0");
-        let req = MmapRangeRequest::new(p, 512, 4096);
-        assert_eq!(req.path, p);
-        assert_eq!(req.offset, 512);
-        assert_eq!(req.len, 4096);
-    }
-
-    #[test]
-    fn batch_range_new() {
-        let r = BatchRange::new(8192, 1024);
-        assert_eq!(r.offset, 8192);
-        assert_eq!(r.len, 1024);
+    fn write_slice_end_offset_validates_overflow() {
+        assert_eq!(WriteSlice::new(10, b"abc").end_offset().unwrap(), 13);
+        assert!(WriteSlice::new(u64::MAX, b"x").end_offset().is_err());
     }
 }

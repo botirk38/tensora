@@ -20,16 +20,16 @@ cargo clippy --lib --locked -- -D warnings
 - **Error handling:** Use `thiserror` for library errors; `ReaderError`/`WriterError` in `formats::error`
 - **Async runtime:** Tokio (multi-thread) for all async paths
 - **Platform gating:** Use `#[cfg(target_os = "linux")]` for io_uring and O_DIRECT code
-- **No `unsafe`** outside of platform-specific backend internals
+- **No `unsafe`** outside of platform-specific storage engine internals
 - **Tests:** Unit tests inline (`#[cfg(test)]`), integration tests under `tests/` if needed
 - **Naming:** Modules match their directory structure; public re-exports in `lib.rs`
 
 ## Architecture Rules
 
-1. **Backends** handle raw I/O only — no format awareness
+1. **Storage engines** handle raw I/O only — no format awareness
 2. **Formats** parse and serialize — no I/O strategy decisions
-3. **Converters** orchestrate full pipelines — use formats + backends together
-4. **Heuristics** live in the format `model.rs` files (backend selection logic)
+3. **Converters** orchestrate full pipelines — use formats + storage engines together
+4. **Heuristics** live in the format `model.rs` files (storage-engine selection logic)
 
 ## File Organization
 
