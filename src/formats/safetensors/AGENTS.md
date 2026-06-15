@@ -6,7 +6,7 @@ HuggingFace SafeTensors format: single-file and multi-shard eager loading.
 
 ## Files
 
-- `model.rs` — All loading logic + backend selection heuristics
+- `model.rs` — All loading logic + storage-engine selection heuristics
 - `serializer.rs` — Write SafeTensors files
 - `mod.rs` — Public re-exports
 

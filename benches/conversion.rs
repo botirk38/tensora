@@ -1,7 +1,7 @@
 //! SafeTensors → ServerlessLLM conversion pipeline benchmarks.
 //!
 //! Measures the full conversion pipeline (metadata scan → planning → materialization → index write)
-//! for each I/O backend variant. Uses a fresh temp directory per iteration to avoid stale artifacts.
+//! for each storage-engine variant. Uses a fresh temp directory per iteration to avoid stale artifacts.
 
 mod bench_util;
 
@@ -71,14 +71,14 @@ fn bench_conversion_sync(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_conversion_async(c: &mut Criterion) {
+fn bench_conversion_tokio(c: &mut Criterion) {
     let (model_id, st_dir) = bench_util::resolve_safetensors_model();
     let slug = bench_util::model_slug(&model_id);
     let total_bytes = bench_util::safetensors_total_bytes(&st_dir);
     let input_dir = st_dir.to_str().unwrap().to_string();
     let partition_count = tensora::recommended_partition_count(total_bytes).max(1);
 
-    let mut group = c.benchmark_group("conversion_async");
+    let mut group = c.benchmark_group("conversion_tokio");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(15));
     group.warm_up_time(Duration::from_secs(3));
@@ -142,7 +142,7 @@ criterion_group!(
     benches,
     bench_conversion_default,
     bench_conversion_sync,
-    bench_conversion_async,
+    bench_conversion_tokio,
     bench_conversion_io_uring,
 );
 
@@ -151,7 +151,7 @@ criterion_group!(
     benches,
     bench_conversion_default,
     bench_conversion_sync,
-    bench_conversion_async,
+    bench_conversion_tokio,
 );
 
 criterion_main!(benches);

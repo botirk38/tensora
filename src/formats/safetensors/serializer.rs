@@ -25,9 +25,10 @@
 //! writer.write_to_file_async([("weight", tensor)], None, "model.safetensors").await.unwrap();
 //! ```
 
-use crate::backends;
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
+use crate::storage::WriteOptions;
+use crate::storage::tokio::TokioWriter;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
@@ -143,7 +144,7 @@ impl Writer {
 
     /// Serialize tensors directly to a `.safetensors` file on disk (asynchronous).
     ///
-    /// This serializes to a buffer first, then uses the optimized backends module
+    /// This serializes to a buffer first, then uses the Tokio storage engine
     /// for async file writing.
     ///
     /// # Arguments
@@ -168,16 +169,15 @@ impl Writer {
         P: AsRef<Path>,
     {
         let path_ref = path.as_ref();
-        if let Some(parent) = path_ref.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let mut writer = backends::AsyncWriter::create(path_ref)
+        let mut writer = TokioWriter::create(path_ref, WriteOptions::create_or_truncate())
             .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writer.write_all(&buffer).await.map_err(WriterError::from)
+            .map_err(WriterError::from)?;
+        writer
+            .write_all_at(0, &buffer)
+            .await
+            .map_err(WriterError::from)?;
+        writer.sync_all().await.map_err(WriterError::from)
     }
 }
 
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn write_to_file_async_uses_backends() {
+    fn write_to_file_async_uses_storage_engine() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("async").join("model.safetensors");
         let writer = Writer::new();
@@ -338,8 +338,7 @@ mod tests {
     #[test]
     fn dtype_mapping_all_known() {
         let known = [
-            "BOOL", "U8", "I8", "I16", "I32", "I64", "U32", "U64",
-            "F16", "F32", "F64", "BF16",
+            "BOOL", "U8", "I8", "I16", "I32", "I64", "U32", "U64", "F16", "F32", "F64", "BF16",
         ];
         for k in &known {
             assert!(dtype_from_str(k).is_ok(), "failed for {k}");

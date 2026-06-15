@@ -15,6 +15,7 @@
 //! ```
 
 use std::fmt;
+use std::sync::OnceLock;
 
 // ============================================================================
 // StorageKind
@@ -23,7 +24,7 @@ use std::fmt;
 /// Identifies a storage engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StorageKind {
-    /// Synchronous blocking I/O (O_DIRECT on Linux, buffered elsewhere).
+    /// Synchronous blocking I/O (O_DIRECT on Linux, buffered std::fs on macOS).
     Sync,
     /// Tokio async I/O.
     Tokio,
@@ -223,6 +224,16 @@ impl StorageCapabilities {
         }
     }
 
+    /// Returns a process-wide cached capability snapshot.
+    ///
+    /// Use this for format heuristics and hot paths. Use [`StorageCapabilities::probe`]
+    /// only when a fresh environment probe is explicitly required.
+    #[must_use]
+    pub fn cached() -> &'static Self {
+        static CAPABILITIES: OnceLock<StorageCapabilities> = OnceLock::new();
+        CAPABILITIES.get_or_init(Self::probe)
+    }
+
     fn probe_mmap() -> StorageAvailability {
         let page_size = region::page::size();
         if page_size == 0 {
@@ -278,35 +289,66 @@ mod tests {
 
     #[test]
     fn storage_kind_display_matches_as_str() {
-        for kind in [StorageKind::Sync, StorageKind::Tokio, StorageKind::Mmap, StorageKind::IoUring]
-        {
+        for kind in [
+            StorageKind::Sync,
+            StorageKind::Tokio,
+            StorageKind::Mmap,
+            StorageKind::IoUring,
+        ] {
             assert_eq!(format!("{kind}"), kind.as_str());
         }
     }
 
     #[test]
     fn unavailable_reason_codes() {
-        assert_eq!(UnavailableReason::UnsupportedPlatform.code(), "unsupported-platform");
-        assert_eq!(UnavailableReason::PermissionDenied.code(), "permission-denied");
-        assert_eq!(UnavailableReason::MissingKernelFeature.code(), "missing-kernel-feature");
+        assert_eq!(
+            UnavailableReason::UnsupportedPlatform.code(),
+            "unsupported-platform"
+        );
+        assert_eq!(
+            UnavailableReason::PermissionDenied.code(),
+            "permission-denied"
+        );
+        assert_eq!(
+            UnavailableReason::MissingKernelFeature.code(),
+            "missing-kernel-feature"
+        );
         assert_eq!(
             UnavailableReason::InvalidKernelConfiguration.code(),
             "invalid-kernel-configuration"
         );
-        assert_eq!(UnavailableReason::MissingDependency.code(), "missing-dependency");
-        assert_eq!(UnavailableReason::FilesystemUnsupported.code(), "filesystem-unsupported");
+        assert_eq!(
+            UnavailableReason::MissingDependency.code(),
+            "missing-dependency"
+        );
+        assert_eq!(
+            UnavailableReason::FilesystemUnsupported.code(),
+            "filesystem-unsupported"
+        );
         assert_eq!(UnavailableReason::Other("x".into()).code(), "other");
     }
 
     #[test]
     fn unavailable_reason_display() {
         let cases = [
-            (UnavailableReason::UnsupportedPlatform, "unsupported platform"),
+            (
+                UnavailableReason::UnsupportedPlatform,
+                "unsupported platform",
+            ),
             (UnavailableReason::PermissionDenied, "permission denied"),
-            (UnavailableReason::MissingKernelFeature, "missing kernel feature"),
-            (UnavailableReason::InvalidKernelConfiguration, "invalid kernel configuration"),
+            (
+                UnavailableReason::MissingKernelFeature,
+                "missing kernel feature",
+            ),
+            (
+                UnavailableReason::InvalidKernelConfiguration,
+                "invalid kernel configuration",
+            ),
             (UnavailableReason::MissingDependency, "missing dependency"),
-            (UnavailableReason::FilesystemUnsupported, "filesystem unsupported"),
+            (
+                UnavailableReason::FilesystemUnsupported,
+                "filesystem unsupported",
+            ),
             (UnavailableReason::Other("custom msg".into()), "custom msg"),
         ];
         for (reason, expected) in cases {
@@ -317,7 +359,10 @@ mod tests {
     #[test]
     fn storage_availability_is_available() {
         assert!(StorageAvailability::Available.is_available());
-        assert!(!StorageAvailability::unavailable(UnavailableReason::PermissionDenied, "").is_available());
+        assert!(
+            !StorageAvailability::unavailable(UnavailableReason::PermissionDenied, "")
+                .is_available()
+        );
     }
 
     #[test]
@@ -331,7 +376,10 @@ mod tests {
             UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         );
-        assert_eq!(s.to_string(), "unavailable: permission denied (io_uring_setup returned EPERM)");
+        assert_eq!(
+            s.to_string(),
+            "unavailable: permission denied (io_uring_setup returned EPERM)"
+        );
     }
 
     #[test]

@@ -14,10 +14,10 @@ High-level format conversion pipelines between checkpoint layouts.
 ```rust
 use tensora::convert_safetensors_to_serverlessllm;
 
-// Adaptive (picks best I/O backend)
+// Adaptive (picks best storage engine)
 convert_safetensors_to_serverlessllm("input_dir", "output_dir", 8).await?;
 
-// Explicit backends
+// Explicit storage engines
 convert_safetensors_to_serverlessllm_sync("input_dir", "output_dir", 8)?;
 convert_safetensors_to_serverlessllm_async("input_dir", "output_dir", 8).await?;
 ```

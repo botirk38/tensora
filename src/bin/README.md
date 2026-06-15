@@ -6,7 +6,7 @@ Command-line tools for profiling, demonstrating, and converting LLM checkpoints.
 
 | Binary | Purpose |
 |--------|---------|
-| [`profile/`](profile/) | Performance measurement harness for all backends |
+| [`profile/`](profile/) | Performance measurement harness for all storage engines |
 | [`demo/`](demo/) | Interactive demonstrations of loading strategies |
 | [`convert/`](convert/) | SafeTensors → ServerlessLLM format conversion |
 

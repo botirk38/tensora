@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Criterion.rs benchmarks measuring I/O backend performance on real model checkpoints.
+Criterion.rs benchmarks measuring storage-engine performance on real model checkpoints.
 
 ## Running
 

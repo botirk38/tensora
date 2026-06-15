@@ -115,7 +115,7 @@ fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
     let iterations = config.normalized_iterations();
     let total_bytes = total_file_bytes(&dir)?;
     let mut durations = Vec::with_capacity(iterations);
-    let case_label = if default { "default" } else { "async" };
+    let case_label = if default { "default" } else { "tokio" };
 
     println!(
         "Running {case_label} safetensors load for '{}' ({iterations}x)",
@@ -219,8 +219,8 @@ fn profile_load_hf_native(config: &ProfileConfig) -> ProfileResult {
                 continue;
             }
             let data = fs::read(&path)?;
-            let tensors =
-                ::safetensors::SafeTensors::deserialize(&data).map_err(|e| ProfileError::new(e.to_string()))?;
+            let tensors = ::safetensors::SafeTensors::deserialize(&data)
+                .map_err(|e| ProfileError::new(e.to_string()))?;
             tensor_count += tensors.len();
             black_box(&tensors);
         }
@@ -252,7 +252,7 @@ pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "default" => profile_load_async(config, true),
         "sync" => profile_load_sync(config),
-        "async" => profile_load_async(config, false),
+        "tokio" => profile_load_async(config, false),
         "mmap" => profile_load_mmap(config),
         "hf-native" => profile_load_hf_native(config),
         #[cfg(target_os = "linux")]

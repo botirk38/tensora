@@ -50,16 +50,16 @@ struct Args {
     #[arg(short, long)]
     partitions: Option<usize>,
 
-    /// Backend to use for conversion (default: adaptive)
+    /// Storage engine to use for conversion (default: adaptive)
     #[arg(short, long, default_value = "default")]
-    backend: Backend,
+    engine: Engine,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
-enum Backend {
+enum Engine {
     Default,
     Sync,
-    Async,
+    Tokio,
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -81,12 +81,12 @@ fn main() {
     println!("  Input: {}", args.input_dir);
     println!("  Output: {}", args.output_dir);
     println!("  Partitions: {}", partition_count);
-    println!("  Backend: {:?}", args.backend);
+    println!("  Engine: {:?}", args.engine);
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(async {
-        match args.backend {
-            Backend::Default => {
+        match args.engine {
+            Engine::Default => {
                 tensora::convert_safetensors_to_serverlessllm(
                     &args.input_dir,
                     &args.output_dir,
@@ -94,12 +94,12 @@ fn main() {
                 )
                 .await
             }
-            Backend::Sync => tensora::convert_safetensors_to_serverlessllm_sync(
+            Engine::Sync => tensora::convert_safetensors_to_serverlessllm_sync(
                 &args.input_dir,
                 &args.output_dir,
                 partition_count,
             ),
-            Backend::Async => {
+            Engine::Tokio => {
                 tensora::convert_safetensors_to_serverlessllm_async(
                     &args.input_dir,
                     &args.output_dir,
@@ -108,7 +108,7 @@ fn main() {
                 .await
             }
             #[cfg(target_os = "linux")]
-            Backend::IoUring => tensora::convert_safetensors_to_serverlessllm_io_uring(
+            Engine::IoUring => tensora::convert_safetensors_to_serverlessllm_io_uring(
                 &args.input_dir,
                 &args.output_dir,
                 partition_count,
@@ -145,14 +145,14 @@ mod tests {
         let help = cmd.render_long_help().to_string();
         assert!(help.contains("Convert SafeTensors to ServerlessLLM format"));
         assert!(help.contains("--partitions"));
-        assert!(help.contains("--backend"));
+        assert!(help.contains("--engine"));
     }
 
     #[test]
-    fn backend_value_variants_include_core_choices() {
+    fn engine_value_variants_include_core_choices() {
         use clap::ValueEnum;
 
-        let mut names = Backend::value_variants()
+        let mut names = Engine::value_variants()
             .iter()
             .filter_map(|variant| variant.to_possible_value())
             .map(|value| value.get_name().to_string())
@@ -161,6 +161,6 @@ mod tests {
 
         assert!(names.contains(&"default".to_string()));
         assert!(names.contains(&"sync".to_string()));
-        assert!(names.contains(&"async".to_string()));
+        assert!(names.contains(&"tokio".to_string()));
     }
 }

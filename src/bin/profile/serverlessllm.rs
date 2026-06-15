@@ -101,7 +101,7 @@ fn profile_load_async(config: &ProfileConfig, default: bool) -> ProfileResult {
     let rt = tokio::runtime::Runtime::new()?;
     let iterations = config.normalized_iterations();
     let mut durations = Vec::with_capacity(iterations);
-    let case_label = if default { "default" } else { "async" };
+    let case_label = if default { "default" } else { "tokio" };
 
     println!(
         "Running {case_label} serverlessllm load for '{}' ({iterations}x)",
@@ -184,7 +184,7 @@ pub fn run(case: &str, config: &ProfileConfig) -> ProfileResult {
     match case {
         "default" => profile_load_async(config, true),
         "sync" => profile_load_sync(config),
-        "async" => profile_load_async(config, false),
+        "tokio" => profile_load_async(config, false),
         "mmap" => profile_load_mmap(config),
         #[cfg(target_os = "linux")]
         "io-uring" => profile_load_io_uring(config),

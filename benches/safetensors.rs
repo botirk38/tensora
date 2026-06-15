@@ -1,4 +1,4 @@
-//! SafeTensors benchmarks: all backends, tensor access patterns, and native baselines.
+//! SafeTensors benchmarks: all storage engines, tensor access patterns, and native baselines.
 
 mod bench_util;
 
@@ -9,7 +9,7 @@ use tensora::formats::safetensors;
 use tensora::formats::traits::TensorView;
 
 // ---------------------------------------------------------------------------
-// Full-model load benchmarks (one per backend)
+// Full-model load benchmarks (one per storage engine)
 // ---------------------------------------------------------------------------
 
 fn bench_default(c: &mut Criterion) {
@@ -53,13 +53,13 @@ fn bench_sync(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_async(c: &mut Criterion) {
+fn bench_tokio(c: &mut Criterion) {
     let (model_id, dir) = bench_util::resolve_safetensors_model();
     let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
     let total_bytes = bench_util::safetensors_total_bytes(&dir);
 
-    let mut group = c.benchmark_group("safetensors_async");
+    let mut group = c.benchmark_group("safetensors_tokio");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(15));
     group.warm_up_time(Duration::from_secs(3));
@@ -67,7 +67,9 @@ fn bench_async(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = safetensors::Model::load_async(black_box(&dir_str)).await.unwrap();
+            let model = safetensors::Model::load_async(black_box(&dir_str))
+                .await
+                .unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -221,7 +223,7 @@ criterion_group!(
     benches,
     bench_default,
     bench_sync,
-    bench_async,
+    bench_tokio,
     bench_io_uring,
     bench_mmap,
     bench_tensor_sequential,
@@ -234,7 +236,7 @@ criterion_group!(
     benches,
     bench_default,
     bench_sync,
-    bench_async,
+    bench_tokio,
     bench_mmap,
     bench_tensor_sequential,
     bench_tensor_random,

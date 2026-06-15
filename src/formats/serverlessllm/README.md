@@ -1,6 +1,6 @@
 # ServerlessLLM Format
 
-Partitioned tensor loading for range-oriented access patterns with adaptive backend selection.
+Partitioned tensor loading for range-oriented access patterns with adaptive storage-engine selection.
 
 ## Files
 
@@ -35,7 +35,7 @@ for name in model.tensor_names() {
 }
 ```
 
-## Backend Selection
+## Storage-Engine Selection
 
 - Range-heavy workloads → `async`
 - Large partitioned workloads → `io_uring`

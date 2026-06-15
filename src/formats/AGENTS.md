@@ -12,7 +12,7 @@ Parse and serialize checkpoint formats. Each format module provides a `Model` ty
 
 ## Conventions
 
-- Backend selection heuristics live in each format's `model.rs`
+- Storage-engine selection heuristics live in each format's `model.rs`
 - Error types are unified in `error.rs` (`ReaderError`, `WriterError`)
 - Multi-shard discovery is automatic (glob for shard patterns)
 - `MmapModel` variants provide lazy loading without full materialization

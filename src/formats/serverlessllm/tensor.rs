@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::backends;
 use crate::formats::traits::TensorView;
+use crate::storage::buffer::MmapRegion;
 
 use super::index::TensorDescriptor;
 
@@ -109,7 +109,7 @@ impl TensorView for &Tensor {
 /// View into a memory-mapped tensor with metadata access (lazy loading).
 #[derive(Debug)]
 pub struct TensorMmap {
-    mmap: backends::mmap::Mmap,
+    mmap: MmapRegion,
     desc: Arc<TensorDescriptor>,
 }
 
@@ -117,7 +117,7 @@ impl TensorMmap {
     /// Creates a new TensorMmap from memory-mapped data.
     #[inline]
     #[must_use]
-    pub fn new(mmap: backends::mmap::Mmap, desc: Arc<TensorDescriptor>) -> Self {
+    pub fn new(mmap: MmapRegion, desc: Arc<TensorDescriptor>) -> Self {
         Self { mmap, desc }
     }
 
