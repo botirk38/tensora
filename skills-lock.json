@@ -1,0 +1,323 @@
+{
+  "version": 1,
+  "skills": {
+    "modal-classes-lifecycle": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-classes-lifecycle/SKILL.md",
+      "computedHash": "8d2e2e3143a480fb6c85b6a1104b339014c46628e032659df9e4d5a041c87a1e"
+    },
+    "modal-container-images": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-container-images/SKILL.md",
+      "computedHash": "3fc3513cc10d915c9c0672e2620e7f48a9dea972267fde856f582ce6a6eb5e25"
+    },
+    "modal-dicts-queues": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-dicts-queues/SKILL.md",
+      "computedHash": "429f4be3fc42def67494fcc4e4162b826b0bfe56531c89e42040517ee545922d"
+    },
+    "modal-fundamentals": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-fundamentals/SKILL.md",
+      "computedHash": "fc0073f37851ba51315abf388d53ef462820b53a58a23109f6abfe5c64f9d847"
+    },
+    "modal-gpu-compute": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-gpu-compute/SKILL.md",
+      "computedHash": "5d0f43d77dfc6fef14e16b962ce3eaea50b2706fd2358efbde63402fa8456708"
+    },
+    "modal-networking": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-networking/SKILL.md",
+      "computedHash": "95db49a23b1cfbfc0b3ee4da21780e042d5be5114f0b98e780acbaa61775d86f"
+    },
+    "modal-observability": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-observability/SKILL.md",
+      "computedHash": "33d5446c2ea36c17f884022939b0140bffcac78f8f594720df035f004e296441"
+    },
+    "modal-parallel-execution": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-parallel-execution/SKILL.md",
+      "computedHash": "0003ee16ee72e76aadd7a96948242222db9233aaf7e89ab52ae7df23a600f6a0"
+    },
+    "modal-sandboxes": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-sandboxes/SKILL.md",
+      "computedHash": "eaa046ded004bc9a32ce37b995663a6ac92e133f6e686806e8b6df543fb92ce3"
+    },
+    "modal-scaling-performance": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-scaling-performance/SKILL.md",
+      "computedHash": "dd2d3f55f165a7979841980a9b3166253b50547ba2735b13c678b38abbb1f08c"
+    },
+    "modal-scheduling": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-scheduling/SKILL.md",
+      "computedHash": "f8bf2cda11722212fbf9c1e1baa5f426382d8e8e2f5ed820cdc313b688b558b0"
+    },
+    "modal-secrets": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-secrets/SKILL.md",
+      "computedHash": "adba9a841cbddad065dca14bcdb2a0406f8154b8b2a2a54e7103be6e44b9bc68"
+    },
+    "modal-storage": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-storage/SKILL.md",
+      "computedHash": "63efed6857efcb393805e7f2c0afe9e9a31374afd02c0dadb83d4844891507ba"
+    },
+    "modal-web-serving": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-web-serving/SKILL.md",
+      "computedHash": "df7d5440a4f7f8a40da0b6bb4834275394a6e9d09ad8f54d9631237b04a86917"
+    },
+    "modal-workspace-admin": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/modal-workspace-admin/SKILL.md",
+      "computedHash": "2888025530fbc0cf6b4b55f839b0abd7d4b70c52d2474c763cb06070b9fdbabb"
+    },
+    "rust-api-design": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-api-design/SKILL.md",
+      "computedHash": "046e3041041f811d6f5a08893b9f1a8505465c1ebc8c101f96e73d3932e26738"
+    },
+    "rust-async-programming": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-async-programming/SKILL.md",
+      "computedHash": "101d5f316b3c9ff5f979404f9ff0e7239f3bae61bfb791fefc3638e95497f2bd"
+    },
+    "rust-cargo-mastery": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-cargo-mastery/SKILL.md",
+      "computedHash": "b5c9da46ba6b80381a7dc82d9c8cb78fa2083b9aa4936c7e127ca841dad0a930"
+    },
+    "rust-cli-applications": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-cli-applications/SKILL.md",
+      "computedHash": "6e461a6a8874d07edb25ac01e57ef3ddddae7c9d60a5d150b35afc44dd9e2309"
+    },
+    "rust-clippy-lints": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-clippy-lints/SKILL.md",
+      "computedHash": "011e512145a5914c73b98ca301214452669fe6482794dcedf2fcc9a2d5adbfde"
+    },
+    "rust-closures-iterators": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-closures-iterators/SKILL.md",
+      "computedHash": "61de7f5cf7f002175629607d1b4fe78b1551612229e3d0571a1e5931ffb30703"
+    },
+    "rust-compiler-internals": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-compiler-internals/SKILL.md",
+      "computedHash": "0e5e3862547e79ea44eee67ae66d73861bd4576a1ce8af42c54ba7066103d154"
+    },
+    "rust-concurrency": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-concurrency/SKILL.md",
+      "computedHash": "f46f3c005909b29d33ead8b8aa02dc4948c75aa508b5a25046d3189adebbb025"
+    },
+    "rust-design-patterns": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-design-patterns/SKILL.md",
+      "computedHash": "e101e2d346802fe4ca67252f66feee86192deedac04134a16bdd61f0234b57a8"
+    },
+    "rust-editions": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-editions/SKILL.md",
+      "computedHash": "60f4faa3d0a770b18cc47a3145b63783526cca0fe62926860a052cae27b1f4d0"
+    },
+    "rust-embedded": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-embedded/SKILL.md",
+      "computedHash": "d7f4fb575990852b5e357b82000def30990a32572b38e61cc1bb4d3a5c5a357b"
+    },
+    "rust-error-handling": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-error-handling/SKILL.md",
+      "computedHash": "19c918ead7dfa824a0a6a2da82744a13da6b2790d9bc2f8fef97096c0245cd19"
+    },
+    "rust-game-development": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-game-development/SKILL.md",
+      "computedHash": "218a22314fa1b10eb8af31379f27a4fa65a32cee2c97582bd8e2df9f4042c67d"
+    },
+    "rust-lifetimes-borrowing": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-lifetimes-borrowing/SKILL.md",
+      "computedHash": "06b890997717c808b4932a0a428f285031d2e1c6992e4888ab3617cbf45cc900"
+    },
+    "rust-macros": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-macros/SKILL.md",
+      "computedHash": "12854208abe5640c4c15a75ed5c7bfd2966f55c263d0f0bb8c8f5fa27eefe1d1"
+    },
+    "rust-performance": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-performance/SKILL.md",
+      "computedHash": "3d338acbe311c7b5013a2ce76be2b2ba72c155d418f4784a6db20b3532a75be7"
+    },
+    "rust-rustdoc": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-rustdoc/SKILL.md",
+      "computedHash": "4520713686503b4733bdb25ee7b44901b0afe0713c9139d7e25df5c8a3f12793"
+    },
+    "rust-rustup-toolchain": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-rustup-toolchain/SKILL.md",
+      "computedHash": "7dab69bd4c690dfcac6356049e7d3e2954440a0b03c2e72705cc646dccb2ff44"
+    },
+    "rust-smart-pointers": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-smart-pointers/SKILL.md",
+      "computedHash": "aea420993f7c784aed31197b97c6131b4f58cf2c110ca3b56cc877c4671b51a8"
+    },
+    "rust-testing-benchmarking": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-testing-benchmarking/SKILL.md",
+      "computedHash": "c5726c83008063bea3d7519ae863609e96b97ef05d8a126091417d38d29142df"
+    },
+    "rust-type-system": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-type-system/SKILL.md",
+      "computedHash": "3b7be4f8982f71505e4c33261bcbec31cada3854cbecc45c9755bb41d63aeb01"
+    },
+    "rust-unsafe-ffi": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-unsafe-ffi/SKILL.md",
+      "computedHash": "0b4dfffdc5bccfd0981ae326e41fc613290ece10eed9018f4f2eac4e6868f5b7"
+    },
+    "rust-wasm": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-wasm/SKILL.md",
+      "computedHash": "f692ca173ad00bfbbe3eda472cbdf65999de99fe41a0464526337829c688aae7"
+    },
+    "zig-assembly": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-assembly/SKILL.md",
+      "computedHash": "b53295152fbadb709914d70666e1b163a06c093c1044c97e0c9887921fdb37ac"
+    },
+    "zig-build-system": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-build-system/SKILL.md",
+      "computedHash": "ad5c1005f11a70b833a93b44e13403205804cd289637ad8085c7b928b351acd8"
+    },
+    "zig-builtin-functions": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-builtin-functions/SKILL.md",
+      "computedHash": "6329bc4b4e3695da880bb4cf26e53e706ded2ef534d124080efa0b8c5a657a28"
+    },
+    "zig-c-interop": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-c-interop/SKILL.md",
+      "computedHash": "453ec8a76b78bbbaa378c76e759980296b707f5d8005391655c161f599ffcd71"
+    },
+    "zig-comptime": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-comptime/SKILL.md",
+      "computedHash": "2c3f3a967276d3063356c69e99802807c62e7dcdb51d09aa834913ffb1f3cb75"
+    },
+    "zig-concurrency": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-concurrency/SKILL.md",
+      "computedHash": "c7e908d42404a4f99620e0af901da0c44bdb4a02a519a7875f84c7270709ddde"
+    },
+    "zig-control-flow": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-control-flow/SKILL.md",
+      "computedHash": "57569105ebb0fc3c908c52c45e9ff6e895fb1354c3bf1e271f226b1e602d50ef"
+    },
+    "zig-cross-compilation": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-cross-compilation/SKILL.md",
+      "computedHash": "a055e8e5691936fe9712969d8b17eb4e304f34e01979345f5e9ebe4b2c5cad45"
+    },
+    "zig-error-handling": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-error-handling/SKILL.md",
+      "computedHash": "bf82c82078debe2b98540617fda095fecb8b50aa3f700c7654862f0119aa8cf8"
+    },
+    "zig-functions": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-functions/SKILL.md",
+      "computedHash": "01ec494eb3f9cad791326f6f11f6177e2c2f7490d264758c9b602e2f2a8b6928"
+    },
+    "zig-fundamentals": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-fundamentals/SKILL.md",
+      "computedHash": "a6e14d564736d2bd7f0cf0d1a70f4c55d1a0e8d6d76fd2107910ee05cfb17749"
+    },
+    "zig-memory-management": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-memory-management/SKILL.md",
+      "computedHash": "e808308a116f64b10c12569797e6f0247b24d81e01cc60d077726ee96962e746"
+    },
+    "zig-style-guide": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-style-guide/SKILL.md",
+      "computedHash": "c11afce812f10f931fbedaea5b6789322a93258f08f47177f212e3f05ecb0343"
+    },
+    "zig-testing": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-testing/SKILL.md",
+      "computedHash": "20b798fa148ca91fd7601474f6064ccb674e73806071258b01cc923eef7c286c"
+    },
+    "zig-type-system": {
+      "source": "botirk38/botir-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zig-type-system/SKILL.md",
+      "computedHash": "aa3d2e61dff2cd16dbff1ad066378cc304acc2737e32edf1e5ebe655e1a89d69"
+    }
+  }
+}
