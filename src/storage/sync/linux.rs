@@ -14,6 +14,14 @@ const BLOCK_SIZE: usize = 4096;
 const BLOCK_SIZE_U64: u64 = 4096;
 const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
 
+/// Wrapper around a raw mutable pointer to a disjoint buffer slice so we can
+/// move it into `std::thread::spawn`. The caller must guarantee that no two
+/// `SendSlice` values alias the same memory and that all threads are joined
+/// before the backing buffer is accessed or dropped.
+struct SendSlice(*mut u8, usize);
+// SAFETY: see per-callsite comments in `load_chunked`.
+unsafe impl Send for SendSlice {}
+
 // ============================================================================
 // SyncStorage
 // ============================================================================
@@ -79,11 +87,9 @@ impl SyncStorage {
             let aligned_total = Self::round_up_to_block(file_size);
             let mut final_buf = AlignedBuffer::new(aligned_total)?;
             final_buf.set_len(aligned_total);
-            struct SendSlice(*mut u8, usize);
             // SAFETY: each SendSlice points to a distinct, non-overlapping region of
             // final_buf, and all spawned threads are joined before final_buf is read
             // or dropped.
-            unsafe impl Send for SendSlice {}
             let handles: Vec<_> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;
@@ -117,11 +123,9 @@ impl SyncStorage {
             Ok(OwnedBytes::Aligned(final_buf))
         } else {
             let mut final_buf = get_buffer_pool().get(file_size);
-            struct SendSlice(*mut u8, usize);
             // SAFETY: each SendSlice points to a distinct, non-overlapping region of
             // final_buf, and all spawned threads are joined before final_buf is read
             // or dropped.
-            unsafe impl Send for SendSlice {}
             let handles: Vec<_> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;

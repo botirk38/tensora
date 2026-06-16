@@ -9,7 +9,7 @@ use std::sync::Arc;
 use io_uring::{IoUring, opcode, types};
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, WritableStorage, WriteSlice,
+    ByteRange, FileRange, IoResult, RangeRead, StorageEngine,
     availability::{StorageAvailability, StorageKind},
     buffer::OwnedBytes,
 };
