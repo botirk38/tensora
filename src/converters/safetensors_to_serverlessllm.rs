@@ -21,6 +21,7 @@ use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
 use crate::storage::{
     AsyncReadableStorage, AsyncWritableStorage, ByteRange, ReadableStorage, WritableStorage,
+    WriteSlices,
 };
 use futures::future::try_join_all;
 use rayon::prelude::*;
@@ -607,7 +608,7 @@ impl ConversionPlan {
             .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
             .collect();
         engine
-            .write_positioned_file(&path, total_size, &write_slices)
+            .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
             .await
             .map_err(WriterError::from)?;
         engine.sync_all(&path).await.map_err(WriterError::from)
@@ -639,7 +640,7 @@ impl ConversionPlan {
             .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
             .collect();
         engine
-            .write_positioned_file(&path, total_size, &write_slices)
+            .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
             .map_err(WriterError::from)?;
         engine.sync_all(&path).map_err(WriterError::from)
     }

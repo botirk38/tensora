@@ -166,6 +166,61 @@ impl<'a> WriteSlice<'a> {
     }
 }
 
+/// A validated, non-overlapping slice of [`WriteSlice`] entries.
+///
+/// Construct with [`WriteSlices::new`], which validates that no two entries
+/// overlap and that no entry overflows `u64`.  Backends receive `WriteSlices`
+/// and can assume the invariant holds without re-checking.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteSlices<'a>(pub &'a [WriteSlice<'a>]);
+
+impl<'a> WriteSlices<'a> {
+    /// Validates `slices` and wraps them.
+    ///
+    /// Returns `InvalidInput` if any slice overflows `u64` or if any two
+    /// slices have overlapping byte ranges.  An empty slice is always valid.
+    pub fn new(slices: &'a [WriteSlice<'a>]) -> IoResult<Self> {
+        let mut sorted: Vec<(u64, u64)> = slices
+            .iter()
+            .map(|w| w.end_offset().map(|end| (w.offset, end)))
+            .collect::<IoResult<_>>()?;
+        sorted.sort_unstable_by_key(|&(s, _)| s);
+        for pair in sorted.windows(2) {
+            if pair[0].1 > pair[1].0 {
+                return Err(Error::new(ErrorKind::InvalidInput, "write slices overlap"));
+            }
+        }
+        Ok(Self(slices))
+    }
+
+    /// Wraps `slices` without validation.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the slices are non-overlapping and that
+    /// no slice overflows `u64`.  Violating this is not UB but will cause
+    /// incorrect (non-deterministic) writes when backends parallelize.
+    #[inline]
+    #[must_use]
+    pub unsafe fn new_unchecked(slices: &'a [WriteSlice<'a>]) -> Self {
+        Self(slices)
+    }
+
+    /// Returns the inner slice.  Guaranteed non-overlapping.
+    #[inline]
+    #[must_use]
+    pub fn as_slice(self) -> &'a [WriteSlice<'a>] {
+        self.0
+    }
+
+    /// Returns `true` if there are no slices.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// Common metadata every storage engine exposes.
 pub trait StorageEngine {
     /// Compile-time kind identifier for this engine.
@@ -192,25 +247,12 @@ pub trait ReadableStorage: StorageEngine {
     /// Empty ranges are valid and return empty bytes.
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
 
-    /// Reads a batch of file ranges.
+    /// Reads a batch of file ranges concurrently.
     ///
-    /// The default implementation reads each range sequentially. Implementors may
-    /// override this for parallel or engine-specific batching, but returned
-    /// results should preserve `request_index`.
-    fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
-        ranges
-            .iter()
-            .enumerate()
-            .map(|(request_index, item)| {
-                let bytes = self.read_range(item.path, item.range)?.into_shared();
-                Ok(RangeRead {
-                    request_index,
-                    range: item.range,
-                    bytes,
-                })
-            })
-            .collect()
-    }
+    /// Each backend uses its own parallel strategy (Rayon, io_uring ring
+    /// saturation, etc.).  Results preserve the original `request_index` of
+    /// each entry.
+    fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
 }
 
 /// Async storage engine operations for exact reads.
@@ -249,15 +291,11 @@ pub trait WritableStorage: StorageEngine {
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
     /// Creates or truncates `path`, sets its length to `len`, then applies
-    /// every [`WriteSlice`] in `writes`.
+    /// every slice in `writes` in parallel.
     ///
-    /// The file is opened once for all writes.  Does not sync.
-    fn write_positioned_file(
-        &self,
-        path: &Path,
-        len: u64,
-        writes: &[WriteSlice<'_>],
-    ) -> IoResult<()>;
+    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not sync.
+    fn write_positioned_file(&self, path: &Path, len: u64, writes: WriteSlices<'_>)
+    -> IoResult<()>;
 
     /// Opens an existing file at `path` and writes `data` starting at `offset`.
     ///
@@ -265,16 +303,12 @@ pub trait WritableStorage: StorageEngine {
     /// return an error.
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
 
-    /// Opens an existing file at `path` and applies each [`WriteSlice`] in order.
+    /// Opens an existing file at `path` and applies every slice in `writes`
+    /// in parallel.
     ///
-    /// Default implementation delegates to [`write_at`](WritableStorage::write_at)
-    /// per slice.  Backends may override to open once.
-    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
-        for w in writes {
-            self.write_at(path, w.offset, w.data)?;
-        }
-        Ok(())
-    }
+    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not
+    /// create or truncate the file.
+    fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()>;
 
     /// Syncs file data (but not metadata) to durable storage.
     fn sync_data(&self, path: &Path) -> IoResult<()>;
@@ -293,24 +327,25 @@ pub trait AsyncWritableStorage: StorageEngine {
     async fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
     /// Creates or truncates `path`, sets its length to `len`, then applies
-    /// every [`WriteSlice`] in `writes`.
+    /// every slice in `writes` concurrently.
+    ///
+    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not sync.
     async fn write_positioned_file(
         &self,
         path: &Path,
         len: u64,
-        writes: &[WriteSlice<'_>],
+        writes: WriteSlices<'_>,
     ) -> IoResult<()>;
 
     /// Opens an existing file at `path` and writes `data` starting at `offset`.
     async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
 
-    /// Opens an existing file at `path` and applies each [`WriteSlice`] in order.
-    async fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
-        for w in writes {
-            self.write_at(path, w.offset, w.data).await?;
-        }
-        Ok(())
-    }
+    /// Opens an existing file at `path` and applies every slice in `writes`
+    /// concurrently.
+    ///
+    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not
+    /// create or truncate the file.
+    async fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()>;
 
     /// Syncs file data (but not metadata) to durable storage.
     async fn sync_data(&self, path: &Path) -> IoResult<()>;
@@ -385,5 +420,49 @@ mod tests {
     fn write_slice_end_offset_validates_overflow() {
         assert_eq!(WriteSlice::new(10, b"abc").end_offset().unwrap(), 13);
         assert!(WriteSlice::new(u64::MAX, b"x").end_offset().is_err());
+    }
+
+    #[test]
+    fn write_slices_empty_is_valid() {
+        assert!(WriteSlices::new(&[]).is_ok());
+    }
+
+    #[test]
+    fn write_slices_non_overlapping_is_valid() {
+        let a = WriteSlice::new(0, b"HELLO");
+        let b = WriteSlice::new(10, b"WORLD");
+        assert!(WriteSlices::new(&[a, b]).is_ok());
+    }
+
+    #[test]
+    fn write_slices_adjacent_is_valid() {
+        // end of first == start of second: not overlapping
+        let a = WriteSlice::new(0, b"HELLO");
+        let b = WriteSlice::new(5, b"WORLD");
+        assert!(WriteSlices::new(&[a, b]).is_ok());
+    }
+
+    #[test]
+    fn write_slices_overlapping_is_err() {
+        let a = WriteSlice::new(0, b"AAAAA");
+        let b = WriteSlice::new(3, b"BBBBB");
+        let err = WriteSlices::new(&[a, b]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn write_slices_overflow_is_err() {
+        let a = WriteSlice::new(u64::MAX, b"x");
+        assert!(WriteSlices::new(&[a]).is_err());
+    }
+
+    #[test]
+    fn write_slices_order_independent_validation() {
+        // provided in reverse order — sort should still detect overlap
+        let a = WriteSlice::new(5, b"BBBBB");
+        let b = WriteSlice::new(2, b"AAAAA");
+        // b spans [2,7), a spans [5,10) — overlap
+        let err = WriteSlices::new(&[a, b]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
     }
 }

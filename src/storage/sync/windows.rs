@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, WriteSlice,
+    ByteRange, FileRange, IoResult, RangeRead, WriteSlice, WriteSlices,
     availability::{StorageAvailability, StorageKind},
     buffer::{OwnedBytes, get_buffer_pool},
 };
@@ -139,14 +139,18 @@ impl super::super::WritableStorage for SyncStorage {
         &self,
         path: &Path,
         len: u64,
-        writes: &[WriteSlice<'_>],
+        writes: WriteSlices<'_>,
     ) -> IoResult<()> {
         let file = Self::open_create_truncate(path)?;
         file.set_len(len)?;
-        for w in writes {
-            Self::write_all_at_file(&file, w.offset, w.data)?;
+        if writes.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        use rayon::prelude::*;
+        writes
+            .as_slice()
+            .par_iter()
+            .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
@@ -154,12 +158,16 @@ impl super::super::WritableStorage for SyncStorage {
         Self::write_all_at_file(&file, offset, data)
     }
 
-    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
-        let file = Self::open_write_existing(path)?;
-        for w in writes {
-            Self::write_all_at_file(&file, w.offset, w.data)?;
+    fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
+        if writes.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let file = Self::open_write_existing(path)?;
+        use rayon::prelude::*;
+        writes
+            .as_slice()
+            .par_iter()
+            .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
     }
 
     fn sync_data(&self, path: &Path) -> IoResult<()> {
@@ -184,7 +192,9 @@ impl super::super::WritableStorage for SyncStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage};
+    use crate::storage::{
+        ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage, WriteSlices,
+    };
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -313,7 +323,7 @@ mod tests {
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
         SyncStorage::new()
-            .write_positioned_file(&path, 15, &writes)
+            .write_positioned_file(&path, 15, WriteSlices::new(&writes).unwrap())
             .unwrap();
         let result = SyncStorage::new().read_file(&path).unwrap();
         assert_eq!(result.len(), 15);
@@ -326,9 +336,47 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        SyncStorage::new().write_slices(&path, &writes).unwrap();
+        SyncStorage::new()
+            .write_slices(&path, WriteSlices::new(&writes).unwrap())
+            .unwrap();
         let result = SyncStorage::new().read_file(&path).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
+    }
+
+    #[test]
+    fn write_slices_empty_batch_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = write_tmp(&dir, "noop.bin", b"unchanged");
+        SyncStorage::new()
+            .write_slices(&path, WriteSlices::new(&[]).unwrap())
+            .unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), b"unchanged");
+    }
+
+    #[test]
+    fn write_slices_rejects_overlap() {
+        let writes = [WriteSlice::new(0, b"AAAAA"), WriteSlice::new(3, b"BBBBB")];
+        let err = WriteSlices::new(&writes).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn write_positioned_file_rejects_overlap() {
+        let writes = [WriteSlice::new(0, b"AAAAA"), WriteSlice::new(3, b"BBBBB")];
+        let err = WriteSlices::new(&writes).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn write_positioned_file_empty_batch_creates_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty_pos.bin");
+        SyncStorage::new()
+            .write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap())
+            .unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.len(), 16);
     }
 }
