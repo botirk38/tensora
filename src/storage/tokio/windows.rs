@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::storage::{
     AsyncReadableStorage, AsyncWritableStorage, ByteRange, FileRange, IoResult, RangeRead,
+    ReadableStorage,
     availability::{StorageAvailability, StorageKind},
     buffer::OwnedBytes,
     sync::SyncStorage,
