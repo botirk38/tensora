@@ -87,10 +87,13 @@ impl SyncStorage {
             let aligned_total = Self::round_up_to_block(file_size);
             let mut final_buf = AlignedBuffer::new(aligned_total)?;
             final_buf.set_len(aligned_total);
-            // SAFETY: each SendSlice points to a distinct, non-overlapping region of
-            // final_buf, and all spawned threads are joined before final_buf is read
-            // or dropped.
-            let handles: Vec<_> = (0..chunks)
+
+            // Collect (ptr, actual_len, start, path) tuples while we hold &mut
+            // final_buf, then drop the borrow before spawning threads.
+            // SAFETY: each SendSlice points to a distinct, non-overlapping
+            // region of final_buf; all threads are joined before final_buf is
+            // accessed or dropped.
+            let tasks: Vec<(SendSlice, usize, u64, std::path::PathBuf)> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;
                     let end = std::cmp::min(start + chunk_size, file_size);
@@ -100,19 +103,25 @@ impl SyncStorage {
                     let read_len = Self::round_up_to_block(end - start);
                     let buf_end = std::cmp::min(start + read_len, aligned_total);
                     let slice = final_buf.as_mut_slice().get_mut(start..buf_end)?;
-                    let ptr = SendSlice(slice.as_mut_ptr(), slice.len());
-                    let actual_len = end - start;
-                    let path_clone = path.to_path_buf();
-                    Some(std::thread::spawn(move || {
-                        // SAFETY: ptr and len came from a live mutable slice of
-                        // final_buf; ownership of this disjoint slice is transferred
-                        // to this thread until it joins.
+                    Some((
+                        SendSlice(slice.as_mut_ptr(), slice.len()),
+                        end - start,
+                        start as u64,
+                        path.to_path_buf(),
+                    ))
+                })
+                .collect();
+
+            let handles: Vec<_> = tasks
+                .into_iter()
+                .map(|(ptr, actual_len, start_off, path_clone)| {
+                    std::thread::spawn(move || {
                         let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
                         let (mut f, _) = Self::open_prefer_direct(&path_clone)?;
-                        f.seek(SeekFrom::Start(start as u64))?;
+                        f.seek(SeekFrom::Start(start_off))?;
                         Self::read_direct(&mut f, buf, actual_len)?;
                         std::io::Result::Ok(())
-                    }))
+                    })
                 })
                 .collect();
             for h in handles {
@@ -123,10 +132,12 @@ impl SyncStorage {
             Ok(OwnedBytes::Aligned(final_buf))
         } else {
             let mut final_buf = get_buffer_pool().get(file_size);
-            // SAFETY: each SendSlice points to a distinct, non-overlapping region of
-            // final_buf, and all spawned threads are joined before final_buf is read
-            // or dropped.
-            let handles: Vec<_> = (0..chunks)
+
+            // Same two-phase approach: collect SendSlice handles first, then spawn.
+            // SAFETY: each SendSlice points to a distinct, non-overlapping
+            // region of final_buf; all threads are joined before final_buf is
+            // accessed or dropped.
+            let tasks: Vec<(SendSlice, u64, std::path::PathBuf)> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;
                     let end = std::cmp::min(start + chunk_size, file_size);
@@ -134,18 +145,24 @@ impl SyncStorage {
                         return None;
                     }
                     let slice = final_buf.as_mut_slice().get_mut(start..end)?;
-                    let ptr = SendSlice(slice.as_mut_ptr(), slice.len());
-                    let path_clone = path.to_path_buf();
-                    Some(std::thread::spawn(move || {
-                        // SAFETY: ptr and len came from a live mutable slice of
-                        // final_buf; ownership of this disjoint slice is transferred
-                        // to this thread until it joins.
+                    Some((
+                        SendSlice(slice.as_mut_ptr(), slice.len()),
+                        start as u64,
+                        path.to_path_buf(),
+                    ))
+                })
+                .collect();
+
+            let handles: Vec<_> = tasks
+                .into_iter()
+                .map(|(ptr, start_off, path_clone)| {
+                    std::thread::spawn(move || {
                         let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
                         let mut f = std::fs::File::open(&path_clone)?;
-                        f.seek(SeekFrom::Start(start as u64))?;
+                        f.seek(SeekFrom::Start(start_off))?;
                         f.read_exact(buf)?;
                         std::io::Result::Ok(())
-                    }))
+                    })
                 })
                 .collect();
             for h in handles {
