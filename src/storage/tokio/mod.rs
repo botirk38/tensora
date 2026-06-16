@@ -1,13 +1,16 @@
 //! Tokio async storage engine.
 //!
-//! [`TokioStorage`] implements [`AsyncReadableStorage`] and [`AsyncWritableStorage`].
-//! Each OS has an explicit implementation:
-//! - Linux: O_DIRECT-aware reads via spawn_blocking; positioned async writes.
-//! - macOS: spawn_blocking over macOS SyncStorage reads; positioned async writes.
-//! - Windows: spawn_blocking over Windows SyncStorage reads; positioned async writes.
+//! All platforms share the same implementation in `shared.rs` — each method
+//! offloads to the platform [`SyncStorage`] via `spawn_blocking`.  The
+//! per-platform files (`linux.rs`, `macos.rs`, `windows.rs`) are thin
+//! re-exports kept so callers can continue to write
+//! `use tensora::storage::tokio::TokioStorage`.
 //!
+//! [`SyncStorage`]: crate::storage::sync::SyncStorage
 //! [`AsyncReadableStorage`]: crate::storage::AsyncReadableStorage
 //! [`AsyncWritableStorage`]: crate::storage::AsyncWritableStorage
+
+mod shared;
 
 #[cfg(target_os = "linux")]
 mod linux;
