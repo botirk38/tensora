@@ -12,7 +12,9 @@ use crate::storage::io_uring::IoUringStorage;
 use crate::storage::mmap::MmapStorage;
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
-use crate::storage::{ByteRange, FileRange, MappableStorage, RangeRead, ReadableStorage};
+use crate::storage::{
+    AsyncReadableStorage, ByteRange, FileRange, MappableStorage, RangeRead, ReadableStorage,
+};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -3,6 +3,7 @@
 //! Redesigned for compiled metadata - all partition info computed once at parse time.
 
 use crate::formats::error::{ReaderError, ReaderResult};
+use crate::storage::AsyncReadableStorage;
 use crate::storage::tokio::TokioStorage;
 use std::collections::HashMap;
 use std::path::Path;

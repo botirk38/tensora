@@ -15,7 +15,7 @@ use tensora::storage::io_uring::IoUringStorage;
 use tensora::storage::mmap::MmapStorage;
 use tensora::storage::sync::SyncStorage;
 use tensora::storage::tokio::TokioStorage;
-use tensora::storage::{ByteRange, FileRange, MappableStorage, ReadableStorage};
+use tensora::storage::{AsyncReadableStorage, ByteRange, FileRange, MappableStorage, ReadableStorage};
 
 // ---------------------------------------------------------------------------
 // Full-file load (single shard)

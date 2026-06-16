@@ -4,9 +4,9 @@
 //!
 //! - [`StorageEngine`] — base trait all engines implement (kind, availability)
 //! - [`ReadableStorage`] — exact file and range reads
-//! - [`WritableStorage`] — exact positioned writes and durability controls
+//! - [`WritableStorage`] — path-based writes and durability controls
 //! - [`AsyncReadableStorage`] — async exact file and range reads
-//! - [`AsyncWritableStorage`] — async exact positioned writes and durability controls
+//! - [`AsyncWritableStorage`] — async path-based writes and durability controls
 //! - [`MappableStorage`] — memory-map a file or range (mmap engine only)
 //!
 //! # Vocabulary types
@@ -18,9 +18,16 @@
 //!
 //! # Writing
 //!
-//! Callers own the file handle. Open/create/truncate it with `std::fs::File`
-//! or `OpenOptions`, then pass `&file` to the storage engine write methods.
-//! The storage engine is responsible only for exact positioned writes.
+//! Callers pass a path; the engine owns file-handle lifetime. Methods divide
+//! into two groups:
+//!
+//! - **Creating files**: [`WritableStorage::write_file`] and
+//!   [`WritableStorage::write_positioned_file`] create or truncate the path.
+//! - **Updating files**: [`WritableStorage::write_at`] and
+//!   [`WritableStorage::write_slices`] open an existing file without truncating.
+//!
+//! Durability is explicit: call [`WritableStorage::sync_data`] or
+//! [`WritableStorage::sync_all`] after writes that must survive a crash.
 
 pub mod availability;
 pub mod buffer;
@@ -221,57 +228,95 @@ pub trait AsyncReadableStorage: StorageEngine {
     async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
 }
 
-/// Blocking positioned write operations over a caller-owned file.
+/// Blocking path-based write operations.
 ///
-/// Callers are responsible for opening, creating, and closing the file.
-/// The engine performs only exact positioned writes and durability syncs.
+/// The engine owns file-handle lifetime for every operation.  Callers never
+/// open or close files; they only supply paths and byte slices.
+///
+/// ## Creating vs. updating
+///
+/// - [`write_file`](WritableStorage::write_file) and
+///   [`write_positioned_file`](WritableStorage::write_positioned_file) always
+///   create or truncate the target path.
+/// - [`write_at`](WritableStorage::write_at) and
+///   [`write_slices`](WritableStorage::write_slices) open an existing file and
+///   write without truncating.  They do not create the file if it is absent.
 pub trait WritableStorage: StorageEngine {
-    /// Writes all bytes in `data` starting at `offset`.
+    /// Creates or truncates `path` and writes all of `data` at offset 0.
     ///
-    /// Must write the full slice or return an error; partial writes are not
-    /// acceptable.
-    fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()>;
+    /// Does not sync; call [`sync_data`](WritableStorage::sync_data) or
+    /// [`sync_all`](WritableStorage::sync_all) when durability is required.
+    fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
-    /// Applies a sequence of positioned writes in order.
-    fn write_slices(&self, file: &std::fs::File, writes: &[WriteSlice<'_>]) -> IoResult<()> {
-        for write in writes {
-            self.write_all_at(file, write.offset, write.data)?;
+    /// Creates or truncates `path`, sets its length to `len`, then applies
+    /// every [`WriteSlice`] in `writes`.
+    ///
+    /// The file is opened once for all writes.  Does not sync.
+    fn write_positioned_file(
+        &self,
+        path: &Path,
+        len: u64,
+        writes: &[WriteSlice<'_>],
+    ) -> IoResult<()>;
+
+    /// Opens an existing file at `path` and writes `data` starting at `offset`.
+    ///
+    /// Does not create or truncate the file.  Must write the full slice or
+    /// return an error.
+    fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
+
+    /// Opens an existing file at `path` and applies each [`WriteSlice`] in order.
+    ///
+    /// Default implementation delegates to [`write_at`](WritableStorage::write_at)
+    /// per slice.  Backends may override to open once.
+    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        for w in writes {
+            self.write_at(path, w.offset, w.data)?;
         }
         Ok(())
     }
 
-    /// Synchronizes file data to durable storage.
-    fn sync_data(&self, file: &std::fs::File) -> IoResult<()>;
+    /// Syncs file data (but not metadata) to durable storage.
+    fn sync_data(&self, path: &Path) -> IoResult<()>;
 
-    /// Synchronizes file data and metadata to durable storage.
-    fn sync_all(&self, file: &std::fs::File) -> IoResult<()>;
+    /// Syncs file data and metadata to durable storage.
+    fn sync_all(&self, path: &Path) -> IoResult<()>;
 }
 
-/// Async positioned write operations over a caller-owned file.
+/// Async path-based write operations.
 ///
-/// Callers are responsible for opening, creating, and closing the file.
-/// The engine performs only exact positioned writes and durability syncs.
+/// Mirrors [`WritableStorage`] with async methods.  The engine owns
+/// file-handle lifetime; callers never open or close files.
 #[allow(async_fn_in_trait)]
 pub trait AsyncWritableStorage: StorageEngine {
-    /// Writes all bytes in `data` starting at `offset`.
-    ///
-    /// Must write the full slice or return an error; partial writes are not
-    /// acceptable.
-    async fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()>;
+    /// Creates or truncates `path` and writes all of `data` at offset 0.
+    async fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
-    /// Applies a sequence of positioned writes in order.
-    async fn write_slices(&self, file: &std::fs::File, writes: &[WriteSlice<'_>]) -> IoResult<()> {
-        for write in writes {
-            self.write_all_at(file, write.offset, write.data).await?;
+    /// Creates or truncates `path`, sets its length to `len`, then applies
+    /// every [`WriteSlice`] in `writes`.
+    async fn write_positioned_file(
+        &self,
+        path: &Path,
+        len: u64,
+        writes: &[WriteSlice<'_>],
+    ) -> IoResult<()>;
+
+    /// Opens an existing file at `path` and writes `data` starting at `offset`.
+    async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
+
+    /// Opens an existing file at `path` and applies each [`WriteSlice`] in order.
+    async fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        for w in writes {
+            self.write_at(path, w.offset, w.data).await?;
         }
         Ok(())
     }
 
-    /// Synchronizes file data to durable storage.
-    async fn sync_data(&self, file: &std::fs::File) -> IoResult<()>;
+    /// Syncs file data (but not metadata) to durable storage.
+    async fn sync_data(&self, path: &Path) -> IoResult<()>;
 
-    /// Synchronizes file data and metadata to durable storage.
-    async fn sync_all(&self, file: &std::fs::File) -> IoResult<()>;
+    /// Syncs file data and metadata to durable storage.
+    async fn sync_all(&self, path: &Path) -> IoResult<()>;
 }
 
 /// Storage engine operations for memory mapping files.

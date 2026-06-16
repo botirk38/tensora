@@ -13,7 +13,7 @@ use crate::storage::io_uring::IoUringStorage;
 use crate::storage::mmap::MmapStorage;
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
-use crate::storage::{MappableStorage, ReadableStorage};
+use crate::storage::{AsyncReadableStorage, MappableStorage, ReadableStorage};
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};

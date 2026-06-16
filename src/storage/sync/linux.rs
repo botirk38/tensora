@@ -1,11 +1,12 @@
 //! Linux O_DIRECT-aware synchronous storage implementation.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead,
+    ByteRange, FileRange, IoResult, RangeRead, WriteSlice,
     availability::{StorageAvailability, StorageKind},
     buffer::{AlignedBuffer, OwnedBytes, get_buffer_pool},
 };
@@ -13,14 +14,6 @@ use crate::storage::{
 const BLOCK_SIZE: usize = 4096;
 const BLOCK_SIZE_U64: u64 = 4096;
 const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
-
-/// Wrapper around a raw mutable pointer to a disjoint buffer slice so we can
-/// move it into `std::thread::spawn`. The caller must guarantee that no two
-/// `SendSlice` values alias the same memory and that all threads are joined
-/// before the backing buffer is accessed or dropped.
-struct SendSlice(*mut u8, usize);
-// SAFETY: see per-callsite comments in `load_chunked`.
-unsafe impl Send for SendSlice {}
 
 // ============================================================================
 // SyncStorage
@@ -88,90 +81,131 @@ impl SyncStorage {
             let mut final_buf = AlignedBuffer::new(aligned_total)?;
             final_buf.set_len(aligned_total);
 
-            // Collect (ptr, actual_len, start, path) tuples while we hold &mut
-            // final_buf, then drop the borrow before spawning threads.
-            // SAFETY: each SendSlice points to a distinct, non-overlapping
-            // region of final_buf; all threads are joined before final_buf is
-            // accessed or dropped.
-            let tasks: Vec<(SendSlice, usize, u64, std::path::PathBuf)> = (0..chunks)
+            // Build (start_in_buf, buf_len, actual_len) metadata before
+            // borrowing final_buf as a mutable slice.
+            let task_meta: Vec<(usize, usize, usize)> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;
-                    let end = std::cmp::min(start + chunk_size, file_size);
+                    let end = start
+                        .checked_add(chunk_size)
+                        .map_or(file_size, |e| e.min(file_size));
                     if start >= end {
                         return None;
                     }
-                    let read_len = Self::round_up_to_block(end - start);
-                    let buf_end = std::cmp::min(start + read_len, aligned_total);
-                    let slice = final_buf.as_mut_slice().get_mut(start..buf_end)?;
-                    Some((
-                        SendSlice(slice.as_mut_ptr(), slice.len()),
-                        end - start,
-                        start as u64,
-                        path.to_path_buf(),
-                    ))
+                    let actual_len = end - start;
+                    let read_len = Self::round_up_to_block(actual_len);
+                    let buf_len = read_len.min(aligned_total - start);
+                    Some((start, buf_len, actual_len))
                 })
                 .collect();
 
-            let mut handles = Vec::with_capacity(tasks.len());
-            for (ptr, actual_len, start_off, path_clone) in tasks {
-                handles.push(std::thread::spawn(move || {
-                    // SAFETY: ptr is a distinct non-overlapping region of
-                    // final_buf; this thread is joined before final_buf is used.
-                    let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
-                    let (mut f, _) = Self::open_prefer_direct(&path_clone)?;
-                    f.seek(SeekFrom::Start(start_off))?;
-                    Self::read_direct(&mut f, buf, actual_len)?;
-                    std::io::Result::Ok(())
-                }));
-            }
-            for h in handles {
-                h.join()
-                    .map_err(|_| std::io::Error::other("thread panicked"))??
-            }
+            // Hand disjoint sub-slices to scoped threads via split_at_mut.
+            // `std::thread::scope` joins every thread before `final_buf`
+            // is accessed again — no unsafe needed.
+            let path_ref: &Path = path;
+            std::thread::scope(|s| -> IoResult<()> {
+                let mut rest: &mut [u8] = final_buf.as_mut_slice();
+                let mut consumed = 0usize;
+                let mut handles = Vec::with_capacity(task_meta.len());
+
+                for &(start, buf_len, actual_len) in &task_meta {
+                    let (_, tail) = rest.split_at_mut(start - consumed);
+                    let (chunk_slice, tail2) = tail.split_at_mut(buf_len);
+                    rest = tail2;
+                    consumed = start + buf_len;
+
+                    let start_off = start as u64;
+                    handles.push(s.spawn(move || -> IoResult<()> {
+                        let (mut f, _) = Self::open_prefer_direct(path_ref)?;
+                        f.seek(SeekFrom::Start(start_off))?;
+                        Self::read_direct(&mut f, chunk_slice, actual_len)
+                    }));
+                }
+
+                for h in handles {
+                    h.join()
+                        .map_err(|_| std::io::Error::other("thread panicked"))??;
+                }
+                Ok(())
+            })?;
+
             final_buf.set_len(file_size);
             Ok(OwnedBytes::Aligned(final_buf))
         } else {
             let mut final_buf = get_buffer_pool().get(file_size);
 
-            // Same two-phase approach: collect SendSlice handles first, then spawn.
-            // SAFETY: each SendSlice points to a distinct, non-overlapping
-            // region of final_buf; all threads are joined before final_buf is
-            // accessed or dropped.
-            let tasks: Vec<(SendSlice, u64, std::path::PathBuf)> = (0..chunks)
+            let task_meta: Vec<(usize, usize)> = (0..chunks)
                 .filter_map(|i| {
                     let start = i * chunk_size;
-                    let end = std::cmp::min(start + chunk_size, file_size);
+                    let end = start
+                        .checked_add(chunk_size)
+                        .map_or(file_size, |e| e.min(file_size));
                     if start >= end {
                         return None;
                     }
-                    let slice = final_buf.as_mut_slice().get_mut(start..end)?;
-                    Some((
-                        SendSlice(slice.as_mut_ptr(), slice.len()),
-                        start as u64,
-                        path.to_path_buf(),
-                    ))
+                    Some((start, end - start))
                 })
                 .collect();
 
-            let mut handles = Vec::with_capacity(tasks.len());
-            for (ptr, start_off, path_clone) in tasks {
-                handles.push(std::thread::spawn(move || {
-                    // SAFETY: ptr is a distinct non-overlapping region of
-                    // final_buf; this thread is joined before final_buf is used.
-                    let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
-                    let mut f = std::fs::File::open(&path_clone)?;
-                    f.seek(SeekFrom::Start(start_off))?;
-                    f.read_exact(buf)?;
-                    std::io::Result::Ok(())
-                }));
-            }
-            for h in handles {
-                h.join()
-                    .map_err(|_| std::io::Error::other("thread panicked"))??
-            }
+            let path_ref: &Path = path;
+            std::thread::scope(|s| -> IoResult<()> {
+                let mut rest: &mut [u8] = final_buf.as_mut_slice();
+                let mut consumed = 0usize;
+                let mut handles = Vec::with_capacity(task_meta.len());
+
+                for &(start, len) in &task_meta {
+                    let (_, tail) = rest.split_at_mut(start - consumed);
+                    let (chunk_slice, tail2) = tail.split_at_mut(len);
+                    rest = tail2;
+                    consumed = start + len;
+
+                    let start_off = start as u64;
+                    handles.push(s.spawn(move || -> IoResult<()> {
+                        let mut f = std::fs::File::open(path_ref)?;
+                        f.seek(SeekFrom::Start(start_off))?;
+                        f.read_exact(chunk_slice)
+                    }));
+                }
+
+                for h in handles {
+                    h.join()
+                        .map_err(|_| std::io::Error::other("thread panicked"))??;
+                }
+                Ok(())
+            })?;
+
             final_buf.truncate(file_size);
             Ok(OwnedBytes::Pooled(final_buf))
         }
+    }
+
+    // -- Write helpers -------------------------------------------------------
+
+    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+    }
+
+    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
+        std::fs::OpenOptions::new().write(true).open(path)
+    }
+
+    fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+        let mut written = 0usize;
+        while written < data.len() {
+            let n = file.write_at(&data[written..], offset + written as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "write_at returned zero bytes",
+                ));
+            }
+            written += n;
+        }
+        Ok(())
     }
 }
 
@@ -218,14 +252,17 @@ impl super::super::ReadableStorage for SyncStorage {
         }
         let len = range.len_usize()?;
         let offset = range.start();
+
         let (mut file, direct) = Self::open_prefer_direct(path)?;
+
         if direct {
-            let aligned_offset = offset & !(BLOCK_SIZE_U64 - 1);
-            let head_skip = (offset - aligned_offset) as usize;
+            let head_skip =
+                usize::try_from(offset % BLOCK_SIZE_U64).expect("block size fits in usize");
+            let aligned_offset = offset - head_skip as u64;
             let aligned_len = Self::round_up_to_block(head_skip + len);
-            file.seek(SeekFrom::Start(aligned_offset))?;
             let mut buf = AlignedBuffer::new(aligned_len)?;
             buf.set_len(aligned_len);
+            file.seek(SeekFrom::Start(aligned_offset))?;
             Self::read_direct(&mut file, buf.as_mut_slice(), head_skip + len)?;
             if head_skip == 0 {
                 buf.set_len(len);
@@ -259,28 +296,50 @@ impl super::super::ReadableStorage for SyncStorage {
 }
 
 impl super::super::WritableStorage for SyncStorage {
-    fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        use std::os::unix::fs::FileExt;
-        let mut written = 0usize;
-        while written < data.len() {
-            let n = file.write_at(&data[written..], offset + written as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "write_at returned zero bytes",
-                ));
-            }
-            written += n;
+    fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
+        let mut file = Self::open_create_truncate(path)?;
+        file.write_all(data)
+    }
+
+    fn write_positioned_file(
+        &self,
+        path: &Path,
+        len: u64,
+        writes: &[WriteSlice<'_>],
+    ) -> IoResult<()> {
+        let file = Self::open_create_truncate(path)?;
+        file.set_len(len)?;
+        for w in writes {
+            Self::write_all_at_file(&file, w.offset, w.data)?;
         }
         Ok(())
     }
 
-    fn sync_data(&self, file: &std::fs::File) -> IoResult<()> {
-        file.sync_data()
+    fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
+        let file = Self::open_write_existing(path)?;
+        Self::write_all_at_file(&file, offset, data)
     }
 
-    fn sync_all(&self, file: &std::fs::File) -> IoResult<()> {
-        file.sync_all()
+    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        let file = Self::open_write_existing(path)?;
+        for w in writes {
+            Self::write_all_at_file(&file, w.offset, w.data)?;
+        }
+        Ok(())
+    }
+
+    fn sync_data(&self, path: &Path) -> IoResult<()> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_data()
+    }
+
+    fn sync_all(&self, path: &Path) -> IoResult<()> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_all()
     }
 }
 
@@ -394,15 +453,58 @@ mod tests {
     }
 
     #[test]
-    fn write_and_read_roundtrip() {
+    fn write_file_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello linux sync";
-        let file = std::fs::File::create(&path).unwrap();
-        SyncStorage::new().write_all_at(&file, 0, data).unwrap();
-        SyncStorage::new().sync_all(&file).unwrap();
-        drop(file);
+        SyncStorage::new().write_file(&path, data).unwrap();
+        SyncStorage::new().sync_all(&path).unwrap();
         let result = SyncStorage::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
+    }
+
+    #[test]
+    fn write_file_truncates_existing() {
+        let dir = TempDir::new().unwrap();
+        let path = write_tmp(&dir, "trunc.bin", b"old content here");
+        SyncStorage::new().write_file(&path, b"new").unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), b"new");
+    }
+
+    #[test]
+    fn write_at_preserves_surrounding_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut data = b"AAABBBCCC".to_vec();
+        let path = write_tmp(&dir, "patch.bin", &data);
+        SyncStorage::new().write_at(&path, 3, b"XXX").unwrap();
+        data[3..6].copy_from_slice(b"XXX");
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data);
+    }
+
+    #[test]
+    fn write_positioned_file_creates_exact_length() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("pos.bin");
+        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
+        SyncStorage::new()
+            .write_positioned_file(&path, 15, &writes)
+            .unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.len(), 15);
+        assert_eq!(&result.as_ref()[0..5], b"HELLO");
+        assert_eq!(&result.as_ref()[10..15], b"WORLD");
+    }
+
+    #[test]
+    fn write_slices_batches_into_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
+        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
+        SyncStorage::new().write_slices(&path, &writes).unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(&result.as_ref()[0..5], b"HELLO");
+        assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
 }

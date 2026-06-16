@@ -9,7 +9,7 @@ use std::sync::Arc;
 use io_uring::{IoUring, opcode, types};
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, StorageEngine,
+    ByteRange, FileRange, IoResult, RangeRead, StorageEngine, WriteSlice,
     availability::{StorageAvailability, StorageKind},
     buffer::OwnedBytes,
 };
@@ -38,6 +38,18 @@ impl IoUringStorage {
             StorageAvailability::Available => Ok(()),
             unavailable => Err(Error::other(format!("io_uring storage is {unavailable}"))),
         }
+    }
+
+    fn open_create_truncate(path: &Path) -> IoResult<File> {
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+    }
+
+    fn open_write_existing(path: &Path) -> IoResult<File> {
+        OpenOptions::new().write(true).open(path)
     }
 
     fn read_exact_at(file: &File, offset: u64, mut buf: &mut [u8]) -> IoResult<()> {
@@ -72,6 +84,43 @@ impl IoUringStorage {
                 .checked_add(chunk.len() as u64)
                 .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "read offset overflow"))?;
             buf = rest;
+        }
+
+        Ok(())
+    }
+
+    fn write_exact_at(file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+        let mut ring = IoUring::new(RING_DEPTH)?;
+        let mut absolute_offset = offset;
+
+        while !data.is_empty() {
+            let chunk_len = data.len().min(MAX_IO_LEN);
+            let (chunk, rest) = data.split_at(chunk_len);
+            let mut written = 0usize;
+
+            while written < chunk.len() {
+                let len = (chunk.len() - written).min(MAX_IO_LEN);
+                // SAFETY: `written < chunk.len()` and `len` is bounded by the
+                // remaining bytes, so the resulting pointer stays within
+                // `chunk` for the submitted write.
+                let ptr = unsafe { chunk.as_ptr().add(written) };
+                let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
+                    .offset(absolute_offset + written as u64)
+                    .build()
+                    .user_data(0);
+
+                Self::submit_one(&mut ring, &entry)?;
+                let result = Self::wait_one(&mut ring)?;
+                if result == 0 {
+                    return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
+                }
+                written += result;
+            }
+
+            absolute_offset = absolute_offset
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "write offset overflow"))?;
+            data = rest;
         }
 
         Ok(())
@@ -161,52 +210,50 @@ impl super::ReadableStorage for IoUringStorage {
 }
 
 impl super::WritableStorage for IoUringStorage {
-    fn write_all_at(&self, file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+    fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
-        let mut ring = IoUring::new(RING_DEPTH)?;
-        let mut absolute_offset = offset;
+        let file = Self::open_create_truncate(path)?;
+        Self::write_exact_at(&file, 0, data)
+    }
 
-        while !data.is_empty() {
-            let chunk_len = data.len().min(MAX_IO_LEN);
-            let (chunk, rest) = data.split_at(chunk_len);
-            let mut written = 0usize;
-
-            while written < chunk.len() {
-                let len = (chunk.len() - written).min(MAX_IO_LEN);
-                // SAFETY: `written < chunk.len()` and `len` is bounded by the
-                // remaining bytes, so the resulting pointer stays within
-                // `chunk` for the submitted write.
-                let ptr = unsafe { chunk.as_ptr().add(written) };
-                let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
-                    .offset(absolute_offset + written as u64)
-                    .build()
-                    .user_data(0);
-
-                Self::submit_one(&mut ring, &entry)?;
-                let result = Self::wait_one(&mut ring)?;
-                if result == 0 {
-                    return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
-                }
-                written += result;
-            }
-
-            absolute_offset = absolute_offset
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "write offset overflow"))?;
-            data = rest;
+    fn write_positioned_file(
+        &self,
+        path: &Path,
+        len: u64,
+        writes: &[WriteSlice<'_>],
+    ) -> IoResult<()> {
+        Self::ensure_available()?;
+        let file = Self::open_create_truncate(path)?;
+        file.set_len(len)?;
+        for w in writes {
+            Self::write_exact_at(&file, w.offset, w.data)?;
         }
-
         Ok(())
     }
 
-    fn sync_data(&self, file: &File) -> IoResult<()> {
+    fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
-        file.sync_data()
+        let file = Self::open_write_existing(path)?;
+        Self::write_exact_at(&file, offset, data)
     }
 
-    fn sync_all(&self, file: &File) -> IoResult<()> {
+    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
         Self::ensure_available()?;
-        file.sync_all()
+        let file = Self::open_write_existing(path)?;
+        for w in writes {
+            Self::write_exact_at(&file, w.offset, w.data)?;
+        }
+        Ok(())
+    }
+
+    fn sync_data(&self, path: &Path) -> IoResult<()> {
+        Self::ensure_available()?;
+        OpenOptions::new().write(true).open(path)?.sync_data()
+    }
+
+    fn sync_all(&self, path: &Path) -> IoResult<()> {
+        Self::ensure_available()?;
+        OpenOptions::new().write(true).open(path)?.sync_all()
     }
 }
 
@@ -217,9 +264,7 @@ impl super::WritableStorage for IoUringStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{
-        ByteRange, FileRange, MappableStorage, ReadableStorage, StorageEngine, WritableStorage,
-    };
+    use crate::storage::{ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -348,19 +393,33 @@ mod tests {
     }
 
     #[test]
-    fn write_and_read_roundtrip() {
+    fn write_file_roundtrip() {
         if skip_if_unavailable() {
             return;
         }
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello io_uring write";
-        {
-            let file = std::fs::File::create(&path).unwrap();
-            IoUringStorage::new().write_all_at(&file, 0, data).unwrap();
-            IoUringStorage::new().sync_all(&file).unwrap();
-        }
+        IoUringStorage::new().write_file(&path, data).unwrap();
+        IoUringStorage::new().sync_all(&path).unwrap();
         let result = IoUringStorage::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
+    }
+
+    #[test]
+    fn write_positioned_file_creates_exact_length() {
+        if skip_if_unavailable() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("pos.bin");
+        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
+        IoUringStorage::new()
+            .write_positioned_file(&path, 15, &writes)
+            .unwrap();
+        let result = IoUringStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.len(), 15);
+        assert_eq!(&result.as_ref()[0..5], b"HELLO");
+        assert_eq!(&result.as_ref()[10..15], b"WORLD");
     }
 }

@@ -175,18 +175,12 @@ impl Writer {
             tokio::fs::create_dir_all(parent).await?;
         }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path_ref)
-            .map_err(WriterError::from)?;
         let engine = TokioStorage::new();
         engine
-            .write_all_at(&file, 0, &buffer)
+            .write_file(path_ref, &buffer)
             .await
             .map_err(WriterError::from)?;
-        engine.sync_all(&file).await.map_err(WriterError::from)
+        engine.sync_all(path_ref).await.map_err(WriterError::from)
     }
 }
 

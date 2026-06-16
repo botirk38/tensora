@@ -1,5 +1,6 @@
 //! Windows std::fs synchronous storage implementation.
 
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,6 +23,34 @@ impl SyncStorage {
     #[must_use]
     pub const fn new() -> Self {
         Self
+    }
+
+    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+    }
+
+    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
+        std::fs::OpenOptions::new().write(true).open(path)
+    }
+
+    fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+        use std::os::windows::fs::FileExt;
+        let mut written = 0usize;
+        while written < data.len() {
+            let n = file.seek_write(&data[written..], offset + written as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "seek_write returned zero bytes",
+                ));
+            }
+            written += n;
+        }
+        Ok(())
     }
 }
 
@@ -101,28 +130,50 @@ impl super::super::ReadableStorage for SyncStorage {
 }
 
 impl super::super::WritableStorage for SyncStorage {
-    fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        use std::os::windows::fs::FileExt;
-        let mut written = 0usize;
-        while written < data.len() {
-            let n = file.seek_write(&data[written..], offset + written as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "seek_write returned zero bytes",
-                ));
-            }
-            written += n;
+    fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
+        let mut file = Self::open_create_truncate(path)?;
+        file.write_all(data)
+    }
+
+    fn write_positioned_file(
+        &self,
+        path: &Path,
+        len: u64,
+        writes: &[WriteSlice<'_>],
+    ) -> IoResult<()> {
+        let file = Self::open_create_truncate(path)?;
+        file.set_len(len)?;
+        for w in writes {
+            Self::write_all_at_file(&file, w.offset, w.data)?;
         }
         Ok(())
     }
 
-    fn sync_data(&self, file: &std::fs::File) -> IoResult<()> {
-        file.sync_data()
+    fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
+        let file = Self::open_write_existing(path)?;
+        Self::write_all_at_file(&file, offset, data)
     }
 
-    fn sync_all(&self, file: &std::fs::File) -> IoResult<()> {
-        file.sync_all()
+    fn write_slices(&self, path: &Path, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+        let file = Self::open_write_existing(path)?;
+        for w in writes {
+            Self::write_all_at_file(&file, w.offset, w.data)?;
+        }
+        Ok(())
+    }
+
+    fn sync_data(&self, path: &Path) -> IoResult<()> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_data()
+    }
+
+    fn sync_all(&self, path: &Path) -> IoResult<()> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_all()
     }
 }
 
@@ -226,15 +277,58 @@ mod tests {
     }
 
     #[test]
-    fn write_and_read_roundtrip() {
+    fn write_file_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello windows sync";
-        let file = std::fs::File::create(&path).unwrap();
-        SyncStorage::new().write_all_at(&file, 0, data).unwrap();
-        SyncStorage::new().sync_all(&file).unwrap();
-        drop(file);
+        SyncStorage::new().write_file(&path, data).unwrap();
+        SyncStorage::new().sync_all(&path).unwrap();
         let result = SyncStorage::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
+    }
+
+    #[test]
+    fn write_file_truncates_existing() {
+        let dir = TempDir::new().unwrap();
+        let path = write_tmp(&dir, "trunc.bin", b"old content here");
+        SyncStorage::new().write_file(&path, b"new").unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), b"new");
+    }
+
+    #[test]
+    fn write_at_preserves_surrounding_bytes() {
+        let dir = TempDir::new().unwrap();
+        let mut data = b"AAABBBCCC".to_vec();
+        let path = write_tmp(&dir, "patch.bin", &data);
+        SyncStorage::new().write_at(&path, 3, b"XXX").unwrap();
+        data[3..6].copy_from_slice(b"XXX");
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data);
+    }
+
+    #[test]
+    fn write_positioned_file_creates_exact_length() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("pos.bin");
+        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
+        SyncStorage::new()
+            .write_positioned_file(&path, 15, &writes)
+            .unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.len(), 15);
+        assert_eq!(&result.as_ref()[0..5], b"HELLO");
+        assert_eq!(&result.as_ref()[10..15], b"WORLD");
+    }
+
+    #[test]
+    fn write_slices_batches_into_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
+        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
+        SyncStorage::new().write_slices(&path, &writes).unwrap();
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(&result.as_ref()[0..5], b"HELLO");
+        assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
 }

@@ -19,7 +19,9 @@ use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, w
 use crate::storage::availability::{StorageCapabilities, StorageKind};
 use crate::storage::sync::SyncStorage;
 use crate::storage::tokio::TokioStorage;
-use crate::storage::{AsyncWritableStorage, ByteRange, ReadableStorage, WritableStorage};
+use crate::storage::{
+    AsyncReadableStorage, AsyncWritableStorage, ByteRange, ReadableStorage, WritableStorage,
+};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -584,40 +586,31 @@ impl ConversionPlan {
         ops: &[&CopyOp],
     ) -> WriterResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
-
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = TokioStorage::new();
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .map_err(WriterError::from)?;
-        file.set_len(total_size).map_err(WriterError::from)?;
 
-        let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
+        // Read all source ranges, then write everything in one positioned open.
+        let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
         for op in ops {
-            by_shard.entry(&op.shard_path).or_default().push(op);
+            let data = engine
+                .read_range(
+                    &op.shard_path,
+                    ByteRange::from_offset_len(op.source_offset, op.size)?,
+                )
+                .await
+                .map_err(WriterError::from)?;
+            writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        for (shard_path, shard_ops) in by_shard {
-            for op in shard_ops {
-                let data = engine
-                    .read_range(
-                        shard_path,
-                        ByteRange::from_offset_len(op.source_offset, op.size)?,
-                    )
-                    .await
-                    .map_err(WriterError::from)?;
-                engine
-                    .write_all_at(&file, op.dest_offset, data.as_ref())
-                    .await
-                    .map_err(WriterError::from)?;
-            }
-        }
-
-        engine.sync_all(&file).await.map_err(WriterError::from)?;
-        Ok(())
+        let write_slices: Vec<crate::storage::WriteSlice<'_>> = writes
+            .iter()
+            .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
+            .collect();
+        engine
+            .write_positioned_file(&path, total_size, &write_slices)
+            .await
+            .map_err(WriterError::from)?;
+        engine.sync_all(&path).await.map_err(WriterError::from)
     }
 
     fn write_partition_sync(
@@ -626,38 +619,29 @@ impl ConversionPlan {
         ops: &[&CopyOp],
     ) -> WriterResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
-
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = SyncStorage::new();
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .map_err(WriterError::from)?;
-        file.set_len(total_size).map_err(WriterError::from)?;
 
-        let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
+        // Read all source ranges, then write everything in one positioned open.
+        let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
         for op in ops {
-            by_shard.entry(&op.shard_path).or_default().push(op);
+            let data = engine
+                .read_range(
+                    &op.shard_path,
+                    ByteRange::from_offset_len(op.source_offset, op.size)?,
+                )
+                .map_err(WriterError::from)?;
+            writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        for (shard_path, shard_ops) in by_shard {
-            for op in shard_ops {
-                let data = engine
-                    .read_range(
-                        shard_path,
-                        ByteRange::from_offset_len(op.source_offset, op.size)?,
-                    )
-                    .map_err(WriterError::from)?;
-                engine
-                    .write_all_at(&file, op.dest_offset, data.as_ref())
-                    .map_err(WriterError::from)?;
-            }
-        }
-
-        engine.sync_all(&file).map_err(WriterError::from)?;
-        Ok(())
+        let write_slices: Vec<crate::storage::WriteSlice<'_>> = writes
+            .iter()
+            .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
+            .collect();
+        engine
+            .write_positioned_file(&path, total_size, &write_slices)
+            .map_err(WriterError::from)?;
+        engine.sync_all(&path).map_err(WriterError::from)
     }
 }
 
