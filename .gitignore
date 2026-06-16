@@ -25,6 +25,12 @@ criterion/
 # IDE and editor files
 .vscode/
 .idea/
+.cursor/
+
+# Tool-specific scratch dirs
+.firecrawl/
+.sisyphus/
+.opencode/
 *.swp
 *.swo
 *~
