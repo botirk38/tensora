@@ -1,4 +1,4 @@
-//! Linux Tokio async storage implementation.
+//! Windows Tokio async storage implementation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use crate::storage::{
     sync::SyncStorage,
 };
 
-/// Tokio async storage engine (Linux implementation).
+/// Tokio async storage engine (Windows implementation).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokioStorage;
 
@@ -99,14 +99,14 @@ impl AsyncWritableStorage for TokioStorage {
         let file = file.try_clone()?;
         let data = data.to_vec();
         tokio::task::spawn_blocking(move || {
-            use std::os::unix::fs::FileExt;
+            use std::os::windows::fs::FileExt;
             let mut written = 0usize;
             while written < data.len() {
-                let n = file.write_at(&data[written..], offset + written as u64)?;
+                let n = file.seek_write(&data[written..], offset + written as u64)?;
                 if n == 0 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
-                        "write_at returned zero bytes",
+                        "seek_write returned zero bytes",
                     ));
                 }
                 written += n;
@@ -129,5 +129,80 @@ impl AsyncWritableStorage for TokioStorage {
         tokio::task::spawn_blocking(move || file.sync_all())
             .await
             .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{AsyncReadableStorage, AsyncWritableStorage, ByteRange, FileRange};
+    use crate::test_utils::run_async;
+    use tempfile::TempDir;
+
+    fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, data).unwrap();
+        path
+    }
+
+    #[test]
+    fn read_file() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+        let path = write_tmp(&dir, "file.bin", &data);
+
+        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn read_range() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..100).collect();
+        let path = write_tmp(&dir, "range.bin", &data);
+
+        let result = run_async(
+            TokioStorage::new().read_range(&path, ByteRange::from_offset_len(10, 20).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(result.as_ref(), &data[10..30]);
+    }
+
+    #[test]
+    fn read_ranges() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).collect();
+        let path = write_tmp(&dir, "multi.bin", &data);
+
+        let entries = [
+            FileRange::new(&path, ByteRange::from_offset_len(0, 10).unwrap()),
+            FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
+            FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
+        ];
+        let results = run_async(TokioStorage::new().read_ranges(&entries)).unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].data(), &data[0..10]);
+        assert_eq!(results[1].data(), &data[20..30]);
+        assert_eq!(results[2].data(), &data[100..105]);
+    }
+
+    #[test]
+    fn write_and_read_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("out.bin");
+        let data = b"hello windows tokio";
+
+        let file = std::fs::File::create(&path).unwrap();
+        run_async(TokioStorage::new().write_all_at(&file, 0, data)).unwrap();
+        run_async(TokioStorage::new().sync_all(&file)).unwrap();
+        drop(file);
+
+        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        assert_eq!(result.as_ref(), data);
     }
 }

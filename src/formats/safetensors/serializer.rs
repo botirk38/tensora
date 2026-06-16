@@ -27,8 +27,8 @@
 
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
-use crate::storage::WriteOptions;
-use crate::storage::tokio::TokioWriter;
+use crate::storage::AsyncWritableStorage;
+use crate::storage::tokio::TokioStorage;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
@@ -169,15 +169,24 @@ impl Writer {
         P: AsRef<Path>,
     {
         let path_ref = path.as_ref();
+        if let Some(parent) = path_ref.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let mut writer = TokioWriter::create(path_ref, WriteOptions::create_or_truncate())
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path_ref)
+            .map_err(WriterError::from)?;
+        let engine = TokioStorage::new();
+        engine
+            .write_all_at(&file, 0, &buffer)
             .await
             .map_err(WriterError::from)?;
-        writer
-            .write_all_at(0, &buffer)
-            .await
-            .map_err(WriterError::from)?;
-        writer.sync_all().await.map_err(WriterError::from)
+        engine.sync_all(&file).await.map_err(WriterError::from)
     }
 }
 

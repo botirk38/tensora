@@ -22,15 +22,27 @@ use std::sync::OnceLock;
 // ============================================================================
 
 /// Identifies a storage engine.
+///
+/// Sync and Tokio have explicit implementations for Linux, macOS, and Windows.
+/// IoUring is Linux-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StorageKind {
-    /// Synchronous blocking I/O (O_DIRECT on Linux, buffered std::fs on macOS).
+    /// Synchronous blocking I/O.
+    ///
+    /// Linux: O_DIRECT-aware chunked reads with `write_at` positioned writes.
+    /// macOS: `std::os::unix::fs::FileExt` positioned I/O.
+    /// Windows: `std::os::windows::fs::FileExt` positioned I/O.
     Sync,
     /// Tokio async I/O.
+    ///
+    /// All platforms delegate reads to `SyncStorage` via `spawn_blocking`.
+    /// Writes clone the caller-supplied file and write via `spawn_blocking`.
     Tokio,
     /// Memory-mapped file access.
     Mmap,
-    /// Linux io_uring multi-worker I/O.
+    /// Linux io_uring multi-worker I/O (Linux only).
+    ///
+    /// Always reports `Unavailable` on non-Linux platforms.
     IoUring,
 }
 

@@ -17,9 +17,9 @@ use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
 #[cfg(target_os = "linux")]
 use crate::storage::availability::{StorageCapabilities, StorageKind};
-use crate::storage::sync::{SyncStorage, SyncWriter};
-use crate::storage::tokio::{TokioStorage, TokioWriter};
-use crate::storage::{ByteRange, ReadableStorage, WritableStorage, WriteOptions};
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{AsyncWritableStorage, ByteRange, ReadableStorage, WritableStorage};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -586,15 +586,14 @@ impl ConversionPlan {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
 
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        {
-            let f = std::fs::File::create(&path)?;
-            f.set_len(total_size)?;
-        }
-
         let engine = TokioStorage::new();
-        let mut writer = TokioWriter::create(&path, WriteOptions::create_or_truncate())
-            .await
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
             .map_err(WriterError::from)?;
+        file.set_len(total_size).map_err(WriterError::from)?;
 
         let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
         for op in ops {
@@ -610,14 +609,14 @@ impl ConversionPlan {
                     )
                     .await
                     .map_err(WriterError::from)?;
-                writer
-                    .write_all_at(op.dest_offset, data.as_ref())
+                engine
+                    .write_all_at(&file, op.dest_offset, data.as_ref())
                     .await
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.sync_all().await.map_err(WriterError::from)?;
+        engine.sync_all(&file).await.map_err(WriterError::from)?;
         Ok(())
     }
 
@@ -629,12 +628,14 @@ impl ConversionPlan {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
 
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let f = std::fs::File::create(&path)?;
-        f.set_len(total_size)?;
-
         let engine = SyncStorage::new();
-        let mut writer = SyncWriter::create(&path, WriteOptions::create_or_truncate())
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
             .map_err(WriterError::from)?;
+        file.set_len(total_size).map_err(WriterError::from)?;
 
         let mut by_shard: HashMap<&PathBuf, Vec<&&CopyOp>> = HashMap::new();
         for op in ops {
@@ -649,13 +650,13 @@ impl ConversionPlan {
                         ByteRange::from_offset_len(op.source_offset, op.size)?,
                     )
                     .map_err(WriterError::from)?;
-                writer
-                    .write_all_at(op.dest_offset, data.as_ref())
+                engine
+                    .write_all_at(&file, op.dest_offset, data.as_ref())
                     .map_err(WriterError::from)?;
             }
         }
 
-        writer.sync_all().map_err(WriterError::from)?;
+        engine.sync_all(&file).map_err(WriterError::from)?;
         Ok(())
     }
 }

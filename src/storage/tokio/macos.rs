@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::storage::{
     AsyncReadableStorage, AsyncWritableStorage, ByteRange, FileRange, IoResult, RangeRead,
-    ReadableStorage, WriteMode, WriteOptions,
+    ReadableStorage,
     availability::{StorageAvailability, StorageKind},
     buffer::OwnedBytes,
     sync::SyncStorage,
@@ -95,83 +95,40 @@ impl AsyncReadableStorage for TokioStorage {
     }
 }
 
-/// A file handle opened for async writes.
-pub struct TokioWriter {
-    file: tokio::fs::File,
-}
-
-impl std::fmt::Debug for TokioWriter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TokioWriter").finish_non_exhaustive()
-    }
-}
-
-impl TokioWriter {
-    pub async fn create(path: &Path, options: WriteOptions) -> IoResult<Self> {
-        if options.create_parent_dirs
-            && let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        let mut open = tokio::fs::OpenOptions::new();
-        open.write(true);
-        match options.mode {
-            WriteMode::CreateNew => {
-                open.create_new(true);
+impl AsyncWritableStorage for TokioStorage {
+    async fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+        let file = file.try_clone()?;
+        let data = data.to_vec();
+        tokio::task::spawn_blocking(move || {
+            use std::os::unix::fs::FileExt;
+            let mut written = 0usize;
+            while written < data.len() {
+                let n = file.write_at(&data[written..], offset + written as u64)?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "write_at returned zero bytes",
+                    ));
+                }
+                written += n;
             }
-            WriteMode::CreateOrTruncate => {
-                open.create(true).truncate(true);
-            }
-            WriteMode::OpenExisting => {}
-        }
-        let file = open.open(path).await?;
-        if let Some(len) = options.preallocate {
-            file.set_len(len).await?;
-        }
-        Ok(Self { file })
+            Ok(())
+        })
+        .await
+        .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
-    pub async fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()> {
-        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-        self.file.seek(std::io::SeekFrom::Start(offset)).await?;
-        self.file.write_all(data).await
+    async fn sync_data(&self, file: &std::fs::File) -> IoResult<()> {
+        let file = file.try_clone()?;
+        tokio::task::spawn_blocking(move || file.sync_data())
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 
-    pub async fn sync_data(&mut self) -> IoResult<()> {
-        self.file.sync_data().await
-    }
-
-    pub async fn sync_all(&mut self) -> IoResult<()> {
-        self.file.sync_all().await
-    }
-}
-
-impl super::super::StorageEngine for TokioWriter {
-    const KIND: StorageKind = StorageKind::Tokio;
-
-    fn availability() -> StorageAvailability
-    where
-        Self: Sized,
-    {
-        StorageAvailability::Available
-    }
-}
-
-impl AsyncWritableStorage for TokioWriter {
-    async fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()> {
-        TokioWriter::write_all_at(self, offset, data).await
-    }
-
-    async fn set_len(&mut self, len: u64) -> IoResult<()> {
-        self.file.set_len(len).await
-    }
-
-    async fn sync_data(&mut self) -> IoResult<()> {
-        TokioWriter::sync_data(self).await
-    }
-
-    async fn sync_all(&mut self) -> IoResult<()> {
-        TokioWriter::sync_all(self).await
+    async fn sync_all(&self, file: &std::fs::File) -> IoResult<()> {
+        let file = file.try_clone()?;
+        tokio::task::spawn_blocking(move || file.sync_all())
+            .await
+            .map_err(|_| std::io::Error::other("spawn_blocking panicked"))?
     }
 }

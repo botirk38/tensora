@@ -1,11 +1,11 @@
 //! Linux O_DIRECT-aware synchronous storage implementation.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, WriteMode, WriteOptions,
+    ByteRange, FileRange, IoResult, RangeRead,
     availability::{StorageAvailability, StorageKind},
     buffer::{AlignedBuffer, OwnedBytes, get_buffer_pool},
 };
@@ -237,75 +237,29 @@ impl super::super::ReadableStorage for SyncStorage {
     }
 }
 
-// ============================================================================
-// SyncWriter
-// ============================================================================
-
-/// A file handle opened for synchronous writes.
-pub struct SyncWriter {
-    file: std::fs::File,
-}
-
-impl SyncWriter {
-    pub fn create(path: &Path, options: WriteOptions) -> IoResult<Self> {
-        if options.create_parent_dirs
-            && let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut open = std::fs::OpenOptions::new();
-        open.write(true);
-        match options.mode {
-            WriteMode::CreateNew => {
-                open.create_new(true);
+impl super::super::WritableStorage for SyncStorage {
+    fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+        use std::os::unix::fs::FileExt;
+        let mut written = 0usize;
+        while written < data.len() {
+            let n = file.write_at(&data[written..], offset + written as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "write_at returned zero bytes",
+                ));
             }
-            WriteMode::CreateOrTruncate => {
-                open.create(true).truncate(true);
-            }
-            WriteMode::OpenExisting => {}
+            written += n;
         }
-        let file = open.open(path)?;
-        if let Some(len) = options.preallocate {
-            file.set_len(len)?;
-        }
-        Ok(Self { file })
-    }
-}
-
-impl std::fmt::Debug for SyncWriter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SyncWriter").finish_non_exhaustive()
-    }
-}
-
-impl super::super::StorageEngine for SyncWriter {
-    const KIND: StorageKind = StorageKind::Sync;
-
-    fn availability() -> StorageAvailability
-    where
-        Self: Sized,
-    {
-        StorageAvailability::Available
-    }
-}
-
-impl super::super::WritableStorage for SyncWriter {
-    fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()> {
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(data)
+        Ok(())
     }
 
-    fn set_len(&mut self, len: u64) -> IoResult<()> {
-        self.file.set_len(len)
+    fn sync_data(&self, file: &std::fs::File) -> IoResult<()> {
+        file.sync_data()
     }
 
-    fn sync_data(&mut self) -> IoResult<()> {
-        self.file.sync_data()
-    }
-
-    fn sync_all(&mut self) -> IoResult<()> {
-        self.file.sync_all()
+    fn sync_all(&self, file: &std::fs::File) -> IoResult<()> {
+        file.sync_all()
     }
 }
 
@@ -316,9 +270,7 @@ impl super::super::WritableStorage for SyncWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{
-        ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage, WriteOptions,
-    };
+    use crate::storage::{ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -421,12 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn write_at_and_flush_roundtrip() {
+    fn write_and_read_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
-        let mut writer = SyncWriter::create(&path, WriteOptions::create_or_truncate()).unwrap();
-        writer.write_all_at(0, b"hello world").unwrap();
-        writer.sync_all().unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"hello world");
+        let data = b"hello linux sync";
+        let file = std::fs::File::create(&path).unwrap();
+        SyncStorage::new().write_all_at(&file, 0, data).unwrap();
+        SyncStorage::new().sync_all(&file).unwrap();
+        drop(file);
+        let result = SyncStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), data);
     }
 }

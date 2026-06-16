@@ -1,20 +1,25 @@
 //! Synchronous blocking storage engine.
 //!
-//! [`SyncStorage`] implements [`ReadableStorage`] and [`StorageEngine`].
-//! On Linux it uses O_DIRECT where possible; on macOS it uses buffered `std::fs` I/O.
-//!
-//! Write access is obtained by constructing a [`SyncWriter`] directly with
-//! [`SyncWriter::create`].
+//! [`SyncStorage`] implements [`ReadableStorage`] and [`WritableStorage`].
+//! Each OS has an explicit implementation:
+//! - Linux: O_DIRECT-aware chunked reads with `write_at` positioned writes.
+//! - macOS: `std::os::unix::fs::FileExt` positioned I/O.
+//! - Windows: `std::os::windows::fs::FileExt` positioned I/O.
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{SyncStorage, SyncWriter};
+pub use linux::SyncStorage;
 
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{SyncStorage, SyncWriter};
+pub use macos::SyncStorage;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!("tensora storage::sync currently has explicit implementations for Linux and macOS");
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::SyncStorage;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("tensora storage::sync supports Linux, macOS, and Windows only");

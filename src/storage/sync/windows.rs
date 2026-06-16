@@ -1,12 +1,10 @@
-//! macOS std::fs synchronous storage implementation.
+//! Windows std::fs synchronous storage implementation.
 
-use std::io::Read;
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead,
+    ByteRange, FileRange, IoResult, RangeRead, WriteSlice,
     availability::{StorageAvailability, StorageKind},
     buffer::{OwnedBytes, get_buffer_pool},
 };
@@ -15,7 +13,7 @@ use crate::storage::{
 // SyncStorage
 // ============================================================================
 
-/// Synchronous blocking storage engine (macOS std::fs implementation).
+/// Synchronous blocking storage engine (Windows std::fs implementation).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SyncStorage;
 
@@ -40,24 +38,48 @@ impl super::super::StorageEngine for SyncStorage {
 
 impl super::super::ReadableStorage for SyncStorage {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let mut file = std::fs::File::open(path)?;
+        use std::os::windows::fs::FileExt;
+        let file = std::fs::File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
         let mut buf = get_buffer_pool().get(len);
-        file.read_exact(&mut buf[..])?;
+        let mut read = 0usize;
+        while read < len {
+            let n = file.seek_read(&mut buf[read..], read as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "seek_read returned zero bytes before end of file",
+                ));
+            }
+            read += n;
+        }
         Ok(OwnedBytes::Pooled(buf))
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
+        use std::os::windows::fs::FileExt;
         if range.is_empty() {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
         let file = std::fs::File::open(path)?;
         let mut buf = get_buffer_pool().get(range.len_usize()?);
-        file.read_exact_at(&mut buf[..], range.start())?;
+        let mut read = 0usize;
+        let start_offset = range.start();
+        let len = range.len_usize()?;
+        while read < len {
+            let n = file.seek_read(&mut buf[read..], start_offset + read as u64)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "seek_read returned zero bytes before end of range",
+                ));
+            }
+            read += n;
+        }
         Ok(OwnedBytes::Pooled(buf))
     }
 
@@ -80,14 +102,14 @@ impl super::super::ReadableStorage for SyncStorage {
 
 impl super::super::WritableStorage for SyncStorage {
     fn write_all_at(&self, file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        use std::os::unix::fs::FileExt;
+        use std::os::windows::fs::FileExt;
         let mut written = 0usize;
         while written < data.len() {
-            let n = file.write_at(&data[written..], offset + written as u64)?;
+            let n = file.seek_write(&data[written..], offset + written as u64)?;
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
-                    "write_at returned zero bytes",
+                    "seek_write returned zero bytes",
                 ));
             }
             written += n;
@@ -204,20 +226,10 @@ mod tests {
     }
 
     #[test]
-    fn kind_is_sync() {
-        assert_eq!(SyncStorage::new().kind(), StorageKind::Sync);
-    }
-
-    #[test]
-    fn availability_is_available() {
-        assert!(SyncStorage::availability().is_available());
-    }
-
-    #[test]
     fn write_and_read_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
-        let data = b"hello macos sync";
+        let data = b"hello windows sync";
         let file = std::fs::File::create(&path).unwrap();
         SyncStorage::new().write_all_at(&file, 0, data).unwrap();
         SyncStorage::new().sync_all(&file).unwrap();

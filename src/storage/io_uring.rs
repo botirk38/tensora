@@ -9,7 +9,7 @@ use std::sync::Arc;
 use io_uring::{IoUring, opcode, types};
 
 use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, WriteMode, WriteOptions,
+    ByteRange, FileRange, IoResult, RangeRead, WritableStorage, WriteSlice,
     availability::{StorageAvailability, StorageKind},
     buffer::OwnedBytes,
 };
@@ -105,7 +105,7 @@ impl IoUringStorage {
     }
 }
 
-impl super::super::StorageEngine for IoUringStorage {
+impl super::StorageEngine for IoUringStorage {
     const KIND: StorageKind = StorageKind::IoUring;
 
     fn availability() -> StorageAvailability
@@ -118,7 +118,7 @@ impl super::super::StorageEngine for IoUringStorage {
     }
 }
 
-impl super::super::ReadableStorage for IoUringStorage {
+impl super::ReadableStorage for IoUringStorage {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         Self::ensure_available()?;
         let file = OpenOptions::new().read(true).open(path)?;
@@ -160,43 +160,9 @@ impl super::super::ReadableStorage for IoUringStorage {
     }
 }
 
-// ============================================================================
-// IoUringWriter
-// ============================================================================
-
-/// A file opened for io_uring writes.
-pub struct IoUringWriter {
-    file: File,
-}
-
-impl IoUringWriter {
-    pub fn create(path: &Path, options: WriteOptions) -> IoResult<Self> {
-        IoUringStorage::ensure_available()?;
-        if options.create_parent_dirs
-            && let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut open = OpenOptions::new();
-        open.write(true);
-        match options.mode {
-            WriteMode::CreateNew => {
-                open.create_new(true);
-            }
-            WriteMode::CreateOrTruncate => {
-                open.create(true).truncate(true);
-            }
-            WriteMode::OpenExisting => {}
-        }
-        let file = open.open(path)?;
-        if let Some(len) = options.preallocate {
-            file.set_len(len)?;
-        }
-        Ok(Self { file })
-    }
-
-    fn write_all_at(file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+impl super::WritableStorage for IoUringStorage {
+    fn write_all_at(&self, file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+        Self::ensure_available()?;
         let mut ring = IoUring::new(RING_DEPTH)?;
         let mut absolute_offset = offset;
 
@@ -216,8 +182,8 @@ impl IoUringWriter {
                     .build()
                     .user_data(0);
 
-                IoUringStorage::submit_one(&mut ring, &entry)?;
-                let result = IoUringStorage::wait_one(&mut ring)?;
+                Self::submit_one(&mut ring, &entry)?;
+                let result = Self::wait_one(&mut ring)?;
                 if result == 0 {
                     return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
                 }
@@ -232,41 +198,15 @@ impl IoUringWriter {
 
         Ok(())
     }
-}
 
-impl std::fmt::Debug for IoUringWriter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IoUringWriter").finish_non_exhaustive()
-    }
-}
-
-impl super::super::StorageEngine for IoUringWriter {
-    const KIND: StorageKind = StorageKind::IoUring;
-
-    fn availability() -> StorageAvailability
-    where
-        Self: Sized,
-    {
-        IoUringStorage::availability()
-    }
-}
-
-impl super::super::WritableStorage for IoUringWriter {
-    fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()> {
-        IoUringStorage::ensure_available()?;
-        Self::write_all_at(&self.file, offset, data)
+    fn sync_data(&self, file: &File) -> IoResult<()> {
+        Self::ensure_available()?;
+        file.sync_data()
     }
 
-    fn set_len(&mut self, len: u64) -> IoResult<()> {
-        self.file.set_len(len)
-    }
-
-    fn sync_data(&mut self) -> IoResult<()> {
-        self.file.sync_data()
-    }
-
-    fn sync_all(&mut self) -> IoResult<()> {
-        self.file.sync_all()
+    fn sync_all(&self, file: &File) -> IoResult<()> {
+        Self::ensure_available()?;
+        file.sync_all()
     }
 }
 
@@ -279,7 +219,6 @@ mod tests {
     use super::*;
     use crate::storage::{
         ByteRange, FileRange, MappableStorage, ReadableStorage, StorageEngine, WritableStorage,
-        WriteOptions,
     };
     use tempfile::TempDir;
 
@@ -409,29 +348,19 @@ mod tests {
     }
 
     #[test]
-    fn write_at_and_flush_roundtrip() {
+    fn write_and_read_roundtrip() {
         if skip_if_unavailable() {
             return;
         }
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("write.bin");
-
-        let mut writer = IoUringWriter::create(&path, WriteOptions::create_or_truncate()).unwrap();
-        writer.write_all_at(0, b"hello io_uring").unwrap();
-        writer.sync_all().unwrap();
-        drop(writer);
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"hello io_uring");
-    }
-
-    #[test]
-    fn writer_kind_is_io_uring() {
-        if skip_if_unavailable() {
-            return;
+        let path = dir.path().join("out.bin");
+        let data = b"hello io_uring write";
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            IoUringStorage::new().write_all_at(&file, 0, data).unwrap();
+            IoUringStorage::new().sync_all(&file).unwrap();
         }
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("w.bin");
-        let writer = IoUringWriter::create(&path, WriteOptions::create_or_truncate()).unwrap();
-        assert_eq!(writer.kind(), StorageKind::IoUring);
+        let result = IoUringStorage::new().read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), data);
     }
 }

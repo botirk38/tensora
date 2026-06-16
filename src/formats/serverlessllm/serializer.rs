@@ -19,9 +19,9 @@
 
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
-use crate::storage::sync::SyncWriter;
-use crate::storage::tokio::TokioWriter;
-use crate::storage::{WritableStorage, WriteOptions};
+use crate::storage::sync::SyncStorage;
+use crate::storage::tokio::TokioStorage;
+use crate::storage::{AsyncWritableStorage, WritableStorage};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -119,15 +119,26 @@ pub async fn write_index(
     tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(WriterError::from)?;
+    }
     let json = serialize_index(tensors)?;
-    let mut writer = TokioWriter::create(path, WriteOptions::create_or_truncate())
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(WriterError::from)?;
+    let engine = TokioStorage::new();
+    engine
+        .write_all_at(&file, 0, &json)
         .await
         .map_err(WriterError::from)?;
-    writer
-        .write_all_at(0, &json)
-        .await
-        .map_err(WriterError::from)?;
-    writer.sync_all().await.map_err(WriterError::from)
+    engine.sync_all(&file).await.map_err(WriterError::from)
 }
 
 pub fn write_index_sync(
@@ -135,11 +146,23 @@ pub fn write_index_sync(
     tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(WriterError::from)?;
+    }
     let json = serialize_index(tensors)?;
-    let mut writer =
-        SyncWriter::create(path, WriteOptions::create_or_truncate()).map_err(WriterError::from)?;
-    writer.write_all_at(0, &json).map_err(WriterError::from)?;
-    writer.sync_all().map_err(WriterError::from)
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(WriterError::from)?;
+    let engine = SyncStorage::new();
+    engine
+        .write_all_at(&file, 0, &json)
+        .map_err(WriterError::from)?;
+    engine.sync_all(&file).map_err(WriterError::from)
 }
 
 fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<Vec<u8>> {
@@ -165,22 +188,45 @@ fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<
 
 pub async fn write_partition(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
-    let mut writer = TokioWriter::create(path, WriteOptions::create_or_truncate())
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(WriterError::from)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(WriterError::from)?;
+    let engine = TokioStorage::new();
+    engine
+        .write_all_at(&file, 0, data)
         .await
         .map_err(WriterError::from)?;
-    writer
-        .write_all_at(0, data)
-        .await
-        .map_err(WriterError::from)?;
-    writer.sync_all().await.map_err(WriterError::from)
+    engine.sync_all(&file).await.map_err(WriterError::from)
 }
 
 pub fn write_partition_sync(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
-    let mut writer =
-        SyncWriter::create(path, WriteOptions::create_or_truncate()).map_err(WriterError::from)?;
-    writer.write_all_at(0, data).map_err(WriterError::from)?;
-    writer.sync_all().map_err(WriterError::from)
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(WriterError::from)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(WriterError::from)?;
+    let engine = SyncStorage::new();
+    engine
+        .write_all_at(&file, 0, data)
+        .map_err(WriterError::from)?;
+    engine.sync_all(&file).map_err(WriterError::from)
 }
 
 // ---------------------------------------------------------------------------

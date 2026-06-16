@@ -110,3 +110,4 @@ results/h100/vllm/raw/
 
 # Report tree (LaTeX/PDF); diary.md at repo root is tracked
 report/
+.agents/
