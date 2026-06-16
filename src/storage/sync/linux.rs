@@ -112,18 +112,18 @@ impl SyncStorage {
                 })
                 .collect();
 
-            let handles: Vec<_> = tasks
-                .into_iter()
-                .map(|(ptr, actual_len, start_off, path_clone)| {
-                    std::thread::spawn(move || {
-                        let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
-                        let (mut f, _) = Self::open_prefer_direct(&path_clone)?;
-                        f.seek(SeekFrom::Start(start_off))?;
-                        Self::read_direct(&mut f, buf, actual_len)?;
-                        std::io::Result::Ok(())
-                    })
-                })
-                .collect();
+            let mut handles = Vec::with_capacity(tasks.len());
+            for (ptr, actual_len, start_off, path_clone) in tasks {
+                handles.push(std::thread::spawn(move || {
+                    // SAFETY: ptr is a distinct non-overlapping region of
+                    // final_buf; this thread is joined before final_buf is used.
+                    let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
+                    let (mut f, _) = Self::open_prefer_direct(&path_clone)?;
+                    f.seek(SeekFrom::Start(start_off))?;
+                    Self::read_direct(&mut f, buf, actual_len)?;
+                    std::io::Result::Ok(())
+                }));
+            }
             for h in handles {
                 h.join()
                     .map_err(|_| std::io::Error::other("thread panicked"))??
@@ -153,18 +153,18 @@ impl SyncStorage {
                 })
                 .collect();
 
-            let handles: Vec<_> = tasks
-                .into_iter()
-                .map(|(ptr, start_off, path_clone)| {
-                    std::thread::spawn(move || {
-                        let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
-                        let mut f = std::fs::File::open(&path_clone)?;
-                        f.seek(SeekFrom::Start(start_off))?;
-                        f.read_exact(buf)?;
-                        std::io::Result::Ok(())
-                    })
-                })
-                .collect();
+            let mut handles = Vec::with_capacity(tasks.len());
+            for (ptr, start_off, path_clone) in tasks {
+                handles.push(std::thread::spawn(move || {
+                    // SAFETY: ptr is a distinct non-overlapping region of
+                    // final_buf; this thread is joined before final_buf is used.
+                    let buf = unsafe { std::slice::from_raw_parts_mut(ptr.0, ptr.1) };
+                    let mut f = std::fs::File::open(&path_clone)?;
+                    f.seek(SeekFrom::Start(start_off))?;
+                    f.read_exact(buf)?;
+                    std::io::Result::Ok(())
+                }));
+            }
             for h in handles {
                 h.join()
                     .map_err(|_| std::io::Error::other("thread panicked"))??
