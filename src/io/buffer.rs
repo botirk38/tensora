@@ -60,6 +60,7 @@ impl AlignedBuffer {
     }
 
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
         self.ptr.as_ptr()
     }
