@@ -27,8 +27,8 @@
 
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
-use crate::storage::AsyncWritableStorage;
-use crate::storage::tokio::TokioStorage;
+use crate::io::AsyncIo;
+use crate::io::tokio::Tokio;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
@@ -144,7 +144,7 @@ impl Writer {
 
     /// Serialize tensors directly to a `.safetensors` file on disk (asynchronous).
     ///
-    /// This serializes to a buffer first, then uses the Tokio storage engine
+    /// This serializes to a buffer first, then uses the Tokio I/O backend
     /// for async file writing.
     ///
     /// # Arguments
@@ -175,7 +175,7 @@ impl Writer {
             tokio::fs::create_dir_all(parent).await?;
         }
         let buffer = safetensors::serialize(tensors, metadata)?;
-        let engine = TokioStorage::new();
+        let engine = Tokio::new();
         engine
             .write_file(path_ref, &buffer)
             .await

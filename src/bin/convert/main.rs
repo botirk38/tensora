@@ -50,7 +50,7 @@ struct Args {
     #[arg(short, long)]
     partitions: Option<usize>,
 
-    /// Storage engine to use for conversion (default: adaptive)
+    /// I/O backend to use for conversion (default: adaptive)
     #[arg(short, long, default_value = "default")]
     engine: Engine,
 }

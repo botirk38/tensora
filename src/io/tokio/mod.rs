@@ -1,59 +1,90 @@
-//! Tokio async storage engine.
+//! Tokio async I/O backend.
 //!
-//! [`TokioStorage`] implements [`AsyncReadableStorage`] and [`AsyncWritableStorage`]
-//! using direct `tokio::fs` I/O — no blocking thread delegation.
+//! [`Tokio`] implements [`AsyncIo`] using direct `tokio::fs` I/O.
+//! Batch methods use bounded concurrency configured by [`TokioOptions`].
 //!
-//! Batch methods use bounded concurrency: up to [`BATCH_CONCURRENCY`] tasks run
-//! simultaneously so that large batches do not saturate the executor.
-//!
-//! [`AsyncReadableStorage`]: crate::storage::AsyncReadableStorage
-//! [`AsyncWritableStorage`]: crate::storage::AsyncWritableStorage
+//! [`AsyncIo`]: crate::io::AsyncIo
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ::tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use futures::StreamExt;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-use crate::storage::{
-    AsyncReadableStorage, AsyncWritableStorage, ByteRange, FileRange, IoResult, RangeRead,
-    WriteSlices,
-    availability::{StorageAvailability, StorageKind},
+use crate::io::{
+    AsyncIo, ByteRange, FileRange, IoResult, RangeRead, WriteSlices,
+    availability::{IoAvailability, IoKind},
     buffer::OwnedBytes,
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("tensora storage::tokio supports Linux, macOS, and Windows only");
+compile_error!("tensora io::tokio supports Linux, macOS, and Windows only");
 
-/// Maximum number of concurrent tasks for batch read/write operations.
-const BATCH_CONCURRENCY: usize = 64;
+const DEFAULT_BATCH_CONCURRENCY: usize = 64;
 
-/// Tokio async storage engine.
+/// Options for the Tokio async I/O backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokioOptions {
+    /// Maximum number of concurrent tasks for batch reads/writes.
+    pub batch_concurrency: usize,
+}
+
+impl Default for TokioOptions {
+    fn default() -> Self {
+        Self {
+            batch_concurrency: DEFAULT_BATCH_CONCURRENCY,
+        }
+    }
+}
+
+/// Tokio async I/O backend.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TokioStorage;
+pub struct Tokio {
+    options: TokioOptions,
+}
 
-impl TokioStorage {
+impl Tokio {
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            options: TokioOptions {
+                batch_concurrency: DEFAULT_BATCH_CONCURRENCY,
+            },
+        }
+    }
+
+    pub fn with_options(options: TokioOptions) -> IoResult<Self> {
+        if options.batch_concurrency == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "batch_concurrency must be greater than zero",
+            ));
+        }
+        Ok(Self { options })
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn options(&self) -> &TokioOptions {
+        &self.options
     }
 }
 
-impl super::StorageEngine for TokioStorage {
-    const KIND: StorageKind = StorageKind::Tokio;
+impl super::Io for Tokio {
+    const KIND: IoKind = IoKind::Tokio;
 
-    fn availability() -> StorageAvailability
+    fn availability() -> IoAvailability
     where
         Self: Sized,
     {
-        StorageAvailability::Available
+        IoAvailability::Available
     }
 }
 
-impl AsyncReadableStorage for TokioStorage {
+impl AsyncIo for Tokio {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let bytes = tokio::fs::read(path).await?;
+        let bytes = ::tokio::fs::read(path).await?;
         Ok(OwnedBytes::Vec(bytes))
     }
 
@@ -61,7 +92,7 @@ impl AsyncReadableStorage for TokioStorage {
         if range.is_empty() {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
-        let mut file = tokio::fs::File::open(path).await?;
+        let mut file = ::tokio::fs::File::open(path).await?;
         file.seek(std::io::SeekFrom::Start(range.start())).await?;
         let mut buf = vec![0u8; range.len_usize()?];
         file.read_exact(&mut buf).await?;
@@ -79,7 +110,7 @@ impl AsyncReadableStorage for TokioStorage {
             .collect();
 
         let stream = futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
-            let mut file = tokio::fs::File::open(&path).await?;
+            let mut file = ::tokio::fs::File::open(&path).await?;
             file.seek(std::io::SeekFrom::Start(range.start())).await?;
             let mut buf = vec![0u8; range.len_usize()?];
             file.read_exact(&mut buf).await?;
@@ -91,10 +122,8 @@ impl AsyncReadableStorage for TokioStorage {
             })
         });
 
-        // Collect preserving original order. buffer_unordered completes in
-        // arrival order, so we sort by request_index after collection.
         let mut results: Vec<RangeRead> = stream
-            .buffer_unordered(BATCH_CONCURRENCY)
+            .buffer_unordered(self.options.batch_concurrency)
             .collect::<Vec<IoResult<RangeRead>>>()
             .await
             .into_iter()
@@ -102,11 +131,9 @@ impl AsyncReadableStorage for TokioStorage {
         results.sort_unstable_by_key(|r| r.request_index);
         Ok(results)
     }
-}
 
-impl AsyncWritableStorage for TokioStorage {
     async fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
-        tokio::fs::write(path, data).await
+        ::tokio::fs::write(path, data).await
     }
 
     async fn write_positioned_file(
@@ -115,9 +142,8 @@ impl AsyncWritableStorage for TokioStorage {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        // Create/truncate and set length first — must be sequential.
         {
-            let file = tokio::fs::OpenOptions::new()
+            let file = ::tokio::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
@@ -128,7 +154,6 @@ impl AsyncWritableStorage for TokioStorage {
         if writes.is_empty() {
             return Ok(());
         }
-        // Each concurrent task opens its own file handle for positioned writes.
         let tasks: Vec<(PathBuf, u64, Vec<u8>)> = writes
             .as_slice()
             .iter()
@@ -137,14 +162,14 @@ impl AsyncWritableStorage for TokioStorage {
 
         futures::stream::iter(tasks)
             .map(|(path, offset, data)| async move {
-                let mut file = tokio::fs::OpenOptions::new()
+                let mut file = ::tokio::fs::OpenOptions::new()
                     .write(true)
                     .open(&path)
                     .await?;
                 file.seek(std::io::SeekFrom::Start(offset)).await?;
                 file.write_all(&data).await
             })
-            .buffer_unordered(BATCH_CONCURRENCY)
+            .buffer_unordered(self.options.batch_concurrency)
             .collect::<Vec<IoResult<()>>>()
             .await
             .into_iter()
@@ -152,7 +177,10 @@ impl AsyncWritableStorage for TokioStorage {
     }
 
     async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let mut file = tokio::fs::OpenOptions::new().write(true).open(path).await?;
+        let mut file = ::tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .await?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
         file.write_all(data).await
     }
@@ -169,14 +197,14 @@ impl AsyncWritableStorage for TokioStorage {
 
         futures::stream::iter(tasks)
             .map(|(path, offset, data)| async move {
-                let mut file = tokio::fs::OpenOptions::new()
+                let mut file = ::tokio::fs::OpenOptions::new()
                     .write(true)
                     .open(&path)
                     .await?;
                 file.seek(std::io::SeekFrom::Start(offset)).await?;
                 file.write_all(&data).await
             })
-            .buffer_unordered(BATCH_CONCURRENCY)
+            .buffer_unordered(self.options.batch_concurrency)
             .collect::<Vec<IoResult<()>>>()
             .await
             .into_iter()
@@ -184,7 +212,7 @@ impl AsyncWritableStorage for TokioStorage {
     }
 
     async fn sync_data(&self, path: &Path) -> IoResult<()> {
-        tokio::fs::OpenOptions::new()
+        ::tokio::fs::OpenOptions::new()
             .write(true)
             .open(path)
             .await?
@@ -193,7 +221,7 @@ impl AsyncWritableStorage for TokioStorage {
     }
 
     async fn sync_all(&self, path: &Path) -> IoResult<()> {
-        tokio::fs::OpenOptions::new()
+        ::tokio::fs::OpenOptions::new()
             .write(true)
             .open(path)
             .await?
@@ -205,9 +233,7 @@ impl AsyncWritableStorage for TokioStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{
-        AsyncReadableStorage, AsyncWritableStorage, ByteRange, FileRange, WriteSlice, WriteSlices,
-    };
+    use crate::io::{AsyncIo, ByteRange, FileRange, WriteSlice, WriteSlices};
     use crate::test_utils::run_async;
     use tempfile::TempDir;
 
@@ -222,7 +248,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -230,7 +256,7 @@ mod tests {
     fn read_file_empty() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert!(result.is_empty());
     }
 
@@ -239,10 +265,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
-        let result = run_async(
-            TokioStorage::new().read_range(&path, ByteRange::from_offset_len(10, 20).unwrap()),
-        )
-        .unwrap();
+        let result =
+            run_async(Tokio::new().read_range(&path, ByteRange::from_offset_len(10, 20).unwrap()))
+                .unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
     }
 
@@ -250,16 +275,15 @@ mod tests {
     fn read_range_zero_len() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
-        let result = run_async(
-            TokioStorage::new().read_range(&path, ByteRange::from_offset_len(0, 0).unwrap()),
-        )
-        .unwrap();
+        let result =
+            run_async(Tokio::new().read_range(&path, ByteRange::from_offset_len(0, 0).unwrap()))
+                .unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn read_ranges_empty() {
-        let results = run_async(TokioStorage::new().read_ranges(&[])).unwrap();
+        let results = run_async(Tokio::new().read_ranges(&[])).unwrap();
         assert!(results.is_empty());
     }
 
@@ -273,7 +297,7 @@ mod tests {
             FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
             FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
         ];
-        let results = run_async(TokioStorage::new().read_ranges(&entries)).unwrap();
+        let results = run_async(Tokio::new().read_ranges(&entries)).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
         assert_eq!(results[1].data(), &data[20..30]);
@@ -285,9 +309,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello tokio";
-        run_async(TokioStorage::new().write_file(&path, data)).unwrap();
-        run_async(TokioStorage::new().sync_all(&path)).unwrap();
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        run_async(Tokio::new().write_file(&path, data)).unwrap();
+        run_async(Tokio::new().sync_all(&path)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), data);
     }
 
@@ -295,8 +319,8 @@ mod tests {
     fn write_file_truncates_existing() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "trunc.bin", b"old content here");
-        run_async(TokioStorage::new().write_file(&path, b"new")).unwrap();
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        run_async(Tokio::new().write_file(&path, b"new")).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), b"new");
     }
 
@@ -305,9 +329,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut data = b"AAABBBCCC".to_vec();
         let path = write_tmp(&dir, "patch.bin", &data);
-        run_async(TokioStorage::new().write_at(&path, 3, b"XXX")).unwrap();
+        run_async(Tokio::new().write_at(&path, 3, b"XXX")).unwrap();
         data[3..6].copy_from_slice(b"XXX");
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), &data);
     }
 
@@ -316,13 +340,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        run_async(TokioStorage::new().write_positioned_file(
+        run_async(Tokio::new().write_positioned_file(
             &path,
             15,
             WriteSlices::new(&writes).unwrap(),
         ))
         .unwrap();
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.len(), 15);
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[10..15], b"WORLD");
@@ -332,12 +356,8 @@ mod tests {
     fn write_positioned_file_empty_batch_creates_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty_pos.bin");
-        run_async(TokioStorage::new().write_positioned_file(
-            &path,
-            16,
-            WriteSlices::new(&[]).unwrap(),
-        ))
-        .unwrap();
+        run_async(Tokio::new().write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap()))
+            .unwrap();
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!(meta.len(), 16);
     }
@@ -347,9 +367,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        run_async(TokioStorage::new().write_slices(&path, WriteSlices::new(&writes).unwrap()))
-            .unwrap();
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        run_async(Tokio::new().write_slices(&path, WriteSlices::new(&writes).unwrap())).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
@@ -358,8 +377,8 @@ mod tests {
     fn write_slices_empty_batch_is_noop() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        run_async(TokioStorage::new().write_slices(&path, WriteSlices::new(&[]).unwrap())).unwrap();
-        let result = run_async(TokioStorage::new().read_file(&path)).unwrap();
+        run_async(Tokio::new().write_slices(&path, WriteSlices::new(&[]).unwrap())).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
     }
 }

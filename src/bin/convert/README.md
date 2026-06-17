@@ -11,7 +11,7 @@ cargo run --bin convert -- <INPUT_DIR> <OUTPUT_DIR> [OPTIONS]
 ### Options
 
 - `-p, --partitions <N>` — Number of partitions (default: auto based on model size)
-- `-e, --engine <ENGINE>` — storage engine: `default`, `sync`, `tokio`, `io-uring`
+- `-e, --engine <ENGINE>` — I/O backend: `default`, `sync`, `tokio`, `io-uring`
 
 ## Examples
 

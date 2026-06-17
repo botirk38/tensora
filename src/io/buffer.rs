@@ -221,7 +221,7 @@ pub enum OwnedBytes {
     Shared(Arc<[u8]>),
     /// A memory-mapped file region (zero-copy, read-only).
     Mmap(MmapRegion),
-    /// A plain heap-allocated buffer for storage engines that need mutable storage.
+    /// A plain heap-allocated buffer for I/O backends that need mutable storage.
     Vec(Vec<u8>),
 }
 

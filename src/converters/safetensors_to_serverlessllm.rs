@@ -16,13 +16,10 @@
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
 #[cfg(target_os = "linux")]
-use crate::storage::availability::{StorageCapabilities, StorageKind};
-use crate::storage::sync::SyncStorage;
-use crate::storage::tokio::TokioStorage;
-use crate::storage::{
-    AsyncReadableStorage, AsyncWritableStorage, ByteRange, ReadableStorage, WritableStorage,
-    WriteSlices,
-};
+use crate::io::availability::{IoCapabilities, IoKind};
+use crate::io::sync::Sync;
+use crate::io::tokio::Tokio;
+use crate::io::{AsyncIo, BlockingIo, ByteRange, WriteSlices};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -202,8 +199,8 @@ impl ConversionStats {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                let capabilities = StorageCapabilities::cached();
-                if capabilities.is_available(StorageKind::IoUring) {
+                let capabilities = IoCapabilities::cached();
+                if capabilities.is_available(IoKind::IoUring) {
                     return ConversionEngine::IoUring;
                 }
             }
@@ -588,7 +585,7 @@ impl ConversionPlan {
     ) -> WriterResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let engine = TokioStorage::new();
+        let engine = Tokio::new();
 
         // Read all source ranges, then write everything in one positioned open.
         let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
@@ -603,9 +600,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::storage::WriteSlice<'_>> = writes
+        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
@@ -621,7 +618,7 @@ impl ConversionPlan {
     ) -> WriterResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let engine = SyncStorage::new();
+        let engine = Sync::new();
 
         // Read all source ranges, then write everything in one positioned open.
         let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
@@ -635,9 +632,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::storage::WriteSlice<'_>> = writes
+        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::storage::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)

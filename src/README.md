@@ -6,7 +6,7 @@ Core Rust library for Tensora.
 
 | Module | Description |
 |--------|-------------|
-| [`storage/`](storage/) | Storage engines — sync, Tokio, io_uring, mmap |
+| [`storage/`](storage/) | I/O backends — sync, Tokio, io_uring, mmap |
 | [`formats/`](formats/) | Checkpoint format parsers and serializers |
 | [`converters/`](converters/) | Format-to-format conversion pipelines |
 | [`hf_model.rs`](hf_model.rs) | HuggingFace Hub model resolution |

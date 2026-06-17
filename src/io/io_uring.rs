@@ -2,7 +2,7 @@
 //!
 //! Single-range and single-slice operations use a dedicated ring per call.
 //! Batch operations (`read_ranges`, `write_positioned_file`, `write_slices`)
-//! saturate a shared ring: up to `RING_DEPTH` ops are in-flight at once,
+//! saturate a shared ring: up to `ring_depth` ops are in-flight at once,
 //! completions are drained in a tight loop, and partial results are
 //! immediately resubmitted.
 
@@ -12,38 +12,74 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
 
-use io_uring::{IoUring, opcode, types};
+use io_uring::{IoUring as Uring, opcode, types};
 
-use crate::storage::{
-    ByteRange, FileRange, IoResult, RangeRead, StorageEngine, WriteSlice, WriteSlices,
-    availability::{StorageAvailability, StorageKind},
+use crate::io::{
+    ByteRange, FileRange, Io, IoResult, RangeRead, WriteSlice, WriteSlices,
+    availability::{IoAvailability, IoKind},
     buffer::OwnedBytes,
 };
 
-/// Depth of each io_uring instance.
-const RING_DEPTH: u32 = 256;
+const DEFAULT_RING_DEPTH: u32 = 256;
 /// Maximum single-op transfer size (io_uring length field is u32).
 const MAX_IO_LEN: usize = u32::MAX as usize;
 
 // ============================================================================
-// IoUringStorage
+// IoUring
 // ============================================================================
 
-/// High-throughput io_uring storage engine (Linux only).
+/// High-throughput io_uring I/O backend (Linux only).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct IoUringStorage;
+pub struct IoUring {
+    options: IoUringOptions,
+}
 
-impl IoUringStorage {
-    /// Create a new `IoUringStorage` engine.
+/// Options for the io_uring I/O backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoUringOptions {
+    /// Depth of each io_uring instance. Also caps batch in-flight operations.
+    pub ring_depth: u32,
+}
+
+impl Default for IoUringOptions {
+    fn default() -> Self {
+        Self {
+            ring_depth: DEFAULT_RING_DEPTH,
+        }
+    }
+}
+
+impl IoUring {
+    /// Create a new `IoUring` backend with default options.
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            options: IoUringOptions {
+                ring_depth: DEFAULT_RING_DEPTH,
+            },
+        }
+    }
+
+    pub fn with_options(options: IoUringOptions) -> IoResult<Self> {
+        if options.ring_depth == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "ring_depth must be greater than zero",
+            ));
+        }
+        Ok(Self { options })
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn options(&self) -> &IoUringOptions {
+        &self.options
     }
 
     fn ensure_available() -> IoResult<()> {
-        match IoUringStorage::availability() {
-            StorageAvailability::Available => Ok(()),
+        match IoUring::availability() {
+            IoAvailability::Available => Ok(()),
             unavailable => Err(Error::other(format!("io_uring storage is {unavailable}"))),
         }
     }
@@ -60,8 +96,8 @@ impl IoUringStorage {
         OpenOptions::new().write(true).open(path)
     }
 
-    fn read_exact_at(file: &File, offset: u64, mut buf: &mut [u8]) -> IoResult<()> {
-        let mut ring = IoUring::new(RING_DEPTH)?;
+    fn read_exact_at(&self, file: &File, offset: u64, mut buf: &mut [u8]) -> IoResult<()> {
+        let mut ring = Uring::new(self.options.ring_depth)?;
         let mut absolute_offset = offset;
 
         while !buf.is_empty() {
@@ -97,8 +133,8 @@ impl IoUringStorage {
         Ok(())
     }
 
-    fn write_exact_at(file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
-        let mut ring = IoUring::new(RING_DEPTH)?;
+    fn write_exact_at(&self, file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
+        let mut ring = Uring::new(self.options.ring_depth)?;
         let mut absolute_offset = offset;
 
         while !data.is_empty() {
@@ -136,21 +172,21 @@ impl IoUringStorage {
 
     /// Writes every slice in `writes` to `file` using a saturated io_uring ring.
     ///
-    /// Submits up to `RING_DEPTH` ops simultaneously.  Partial writes are
+    /// Submits up to `ring_depth` ops simultaneously.  Partial writes are
     /// resubmitted immediately.  `writes` must be non-overlapping (guaranteed
     /// by [`WriteSlices`]).
-    fn ring_batch_writes(file: &File, writes: &[WriteSlice<'_>]) -> IoResult<()> {
+    fn ring_batch_writes(&self, file: &File, writes: &[WriteSlice<'_>]) -> IoResult<()> {
         if writes.is_empty() {
             return Ok(());
         }
         let n = writes.len();
         let mut done = vec![0usize; n];
-        let mut ring = IoUring::new(RING_DEPTH)?;
+        let mut ring = Uring::new(self.options.ring_depth)?;
         let mut in_flight: u32 = 0;
         let mut next_submit = 0usize;
 
         loop {
-            while in_flight < RING_DEPTH && next_submit < n {
+            while in_flight < self.options.ring_depth && next_submit < n {
                 let idx = next_submit;
                 let w = &writes[idx];
                 let so_far = done[idx];
@@ -212,7 +248,7 @@ impl IoUringStorage {
         Ok(())
     }
 
-    fn submit_one(ring: &mut IoUring, entry: &io_uring::squeue::Entry) -> IoResult<()> {
+    fn submit_one(ring: &mut Uring, entry: &io_uring::squeue::Entry) -> IoResult<()> {
         {
             let mut submission = ring.submission();
             // SAFETY: `entry` references buffers owned by the caller and those
@@ -227,7 +263,7 @@ impl IoUringStorage {
         Ok(())
     }
 
-    fn wait_one(ring: &mut IoUring) -> IoResult<usize> {
+    fn wait_one(ring: &mut Uring) -> IoResult<usize> {
         let completion = ring
             .completion()
             .next()
@@ -240,20 +276,20 @@ impl IoUringStorage {
     }
 }
 
-impl super::StorageEngine for IoUringStorage {
-    const KIND: StorageKind = StorageKind::IoUring;
+impl super::Io for IoUring {
+    const KIND: IoKind = IoKind::IoUring;
 
-    fn availability() -> StorageAvailability
+    fn availability() -> IoAvailability
     where
         Self: Sized,
     {
-        crate::storage::availability::StorageCapabilities::cached()
+        crate::io::availability::IoCapabilities::cached()
             .io_uring
             .clone()
     }
 }
 
-impl super::ReadableStorage for IoUringStorage {
+impl super::BlockingIo for IoUring {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         Self::ensure_available()?;
         let file = OpenOptions::new().read(true).open(path)?;
@@ -263,7 +299,7 @@ impl super::ReadableStorage for IoUringStorage {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
         let mut buf = vec![0u8; len];
-        Self::read_exact_at(&file, 0, &mut buf)?;
+        self.read_exact_at(&file, 0, &mut buf)?;
         Ok(OwnedBytes::Vec(buf))
     }
 
@@ -274,7 +310,7 @@ impl super::ReadableStorage for IoUringStorage {
         Self::ensure_available()?;
         let file = OpenOptions::new().read(true).open(path)?;
         let mut buf = vec![0u8; range.len_usize()?];
-        Self::read_exact_at(&file, range.start(), &mut buf)?;
+        self.read_exact_at(&file, range.start(), &mut buf)?;
         Ok(OwnedBytes::Vec(buf))
     }
 
@@ -297,7 +333,7 @@ impl super::ReadableStorage for IoUringStorage {
 
         // Per-request state: (bytes_done, range).
         let mut done = vec![0usize; n];
-        let mut ring = IoUring::new(RING_DEPTH)?;
+        let mut ring = Uring::new(self.options.ring_depth)?;
 
         // How many ops are currently in the ring.
         let mut in_flight: u32 = 0;
@@ -306,7 +342,7 @@ impl super::ReadableStorage for IoUringStorage {
 
         loop {
             // Submit as many as the ring can hold.
-            while in_flight < RING_DEPTH && next_submit < n {
+            while in_flight < self.options.ring_depth && next_submit < n {
                 let idx = next_submit;
                 let range = ranges[idx].range;
                 let so_far = done[idx];
@@ -381,13 +417,11 @@ impl super::ReadableStorage for IoUringStorage {
             .collect();
         Ok(results)
     }
-}
 
-impl super::WritableStorage for IoUringStorage {
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
         let file = Self::open_create_truncate(path)?;
-        Self::write_exact_at(&file, 0, data)
+        self.write_exact_at(&file, 0, data)
     }
 
     fn write_positioned_file(
@@ -399,13 +433,13 @@ impl super::WritableStorage for IoUringStorage {
         Self::ensure_available()?;
         let file = Self::open_create_truncate(path)?;
         file.set_len(len)?;
-        Self::ring_batch_writes(&file, writes.as_slice())
+        self.ring_batch_writes(&file, writes.as_slice())
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
         let file = Self::open_write_existing(path)?;
-        Self::write_exact_at(&file, offset, data)
+        self.write_exact_at(&file, offset, data)
     }
 
     fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
@@ -414,7 +448,7 @@ impl super::WritableStorage for IoUringStorage {
         }
         Self::ensure_available()?;
         let file = Self::open_write_existing(path)?;
-        Self::ring_batch_writes(&file, writes.as_slice())
+        self.ring_batch_writes(&file, writes.as_slice())
     }
 
     fn sync_data(&self, path: &Path) -> IoResult<()> {
@@ -435,9 +469,7 @@ impl super::WritableStorage for IoUringStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{
-        ByteRange, FileRange, ReadableStorage, StorageEngine, WritableStorage, WriteSlices,
-    };
+    use crate::io::{BlockingIo, ByteRange, FileRange, Io, WriteSlices};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
@@ -447,18 +479,18 @@ mod tests {
     }
 
     fn skip_if_unavailable() -> bool {
-        !IoUringStorage::availability().is_available()
+        !IoUring::availability().is_available()
     }
 
     #[test]
     fn kind_is_io_uring() {
-        assert_eq!(IoUringStorage::new().kind(), StorageKind::IoUring);
+        assert_eq!(IoUring::new().kind(), IoKind::IoUring);
     }
 
     #[test]
     fn availability_reflects_kernel() {
         // Just assert it returns without panic — value depends on the host.
-        let _ = IoUringStorage::availability();
+        let _ = IoUring::availability();
     }
 
     #[test]
@@ -470,7 +502,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -482,7 +514,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert!(result.is_empty());
     }
 
@@ -495,7 +527,7 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let result = IoUringStorage::new()
+        let result = IoUring::new()
             .read_range(&path, ByteRange::from_offset_len(10, 20).unwrap())
             .unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
@@ -509,7 +541,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let result = IoUringStorage::new()
+        let result = IoUring::new()
             .read_range(&path, ByteRange::from_offset_len(0, 0).unwrap())
             .unwrap();
         assert!(result.is_empty());
@@ -520,7 +552,7 @@ mod tests {
         if skip_if_unavailable() {
             return;
         }
-        let results = IoUringStorage::new().read_ranges(&[]).unwrap();
+        let results = IoUring::new().read_ranges(&[]).unwrap();
         assert!(results.is_empty());
     }
 
@@ -537,7 +569,7 @@ mod tests {
             &path,
             ByteRange::from_offset_len(50, 30).unwrap(),
         )];
-        let results = IoUringStorage::new().read_ranges(&entries).unwrap();
+        let results = IoUring::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].data(), &data[50..80]);
@@ -557,7 +589,7 @@ mod tests {
             FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
             FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
         ];
-        let results = IoUringStorage::new().read_ranges(&entries).unwrap();
+        let results = IoUring::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
@@ -573,9 +605,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello io_uring write";
-        IoUringStorage::new().write_file(&path, data).unwrap();
-        IoUringStorage::new().sync_all(&path).unwrap();
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        IoUring::new().write_file(&path, data).unwrap();
+        IoUring::new().sync_all(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
     }
 
@@ -587,10 +619,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        IoUringStorage::new()
+        IoUring::new()
             .write_positioned_file(&path, 15, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert_eq!(result.len(), 15);
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[10..15], b"WORLD");
@@ -603,7 +635,7 @@ mod tests {
         }
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty_pos.bin");
-        IoUringStorage::new()
+        IoUring::new()
             .write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap())
             .unwrap();
         let meta = std::fs::metadata(&path).unwrap();
@@ -618,10 +650,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        IoUringStorage::new()
+        IoUring::new()
             .write_slices(&path, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
@@ -633,10 +665,10 @@ mod tests {
         }
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        IoUringStorage::new()
+        IoUring::new()
             .write_slices(&path, WriteSlices::new(&[]).unwrap())
             .unwrap();
-        let result = IoUringStorage::new().read_file(&path).unwrap();
+        let result = IoUring::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
     }
 
@@ -666,7 +698,7 @@ mod tests {
         let entries: Vec<FileRange<'_>> = (0..8)
             .map(|i| FileRange::new(&path, ByteRange::from_offset_len(i * 32, 32).unwrap()))
             .collect();
-        let results = IoUringStorage::new().read_ranges(&entries).unwrap();
+        let results = IoUring::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 8);
         for (i, r) in results.iter().enumerate() {

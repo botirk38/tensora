@@ -6,14 +6,14 @@
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::{Model as ModelTrait, TensorView};
 #[cfg(target_os = "linux")]
-use crate::storage::availability::{StorageCapabilities, StorageKind};
-use crate::storage::buffer::{MmapRegion, OwnedBytes};
+use crate::io::availability::{IoCapabilities, IoKind};
+use crate::io::buffer::{MmapRegion, OwnedBytes};
 #[cfg(target_os = "linux")]
-use crate::storage::io_uring::IoUringStorage;
-use crate::storage::mmap::MmapStorage;
-use crate::storage::sync::SyncStorage;
-use crate::storage::tokio::TokioStorage;
-use crate::storage::{AsyncReadableStorage, MappableStorage, ReadableStorage};
+use crate::io::io_uring::IoUring;
+use crate::io::mmap::Mmap;
+use crate::io::sync::Sync;
+use crate::io::tokio::Tokio;
+use crate::io::{AsyncIo, BlockingIo, MmapIo};
 use rayon::prelude::*;
 pub use safetensors::SafeTensorError;
 pub use safetensors::tensor::{Dtype, SafeTensors, TensorView as StTensorView};
@@ -71,7 +71,7 @@ impl OwnedShard {
 /// Stores the parsed [`Metadata`] plus the original [`Mmap`] handle.
 /// Tensor data is sliced directly from the mmap on demand — no `transmute`.
 ///
-/// [`MmapRegion`]: crate::storage::buffer::MmapRegion
+/// [`MmapRegion`]: crate::io::buffer::MmapRegion
 #[derive(Debug, Clone)]
 struct MmapShard {
     metadata: Metadata,
@@ -267,7 +267,7 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            self.choose_engine_with_capabilities(StorageCapabilities::cached())
+            self.choose_engine_with_capabilities(IoCapabilities::cached())
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -279,16 +279,16 @@ impl LoadStats {
     }
 
     #[cfg(target_os = "linux")]
-    fn choose_engine_with_capabilities(&self, capabilities: &StorageCapabilities) -> LoadEngine {
+    fn choose_engine_with_capabilities(&self, capabilities: &IoCapabilities) -> LoadEngine {
         if self.shard_count >= IOURING_SHARD_THRESHOLD
             && self.total_bytes >= IOURING_BYTE_THRESHOLD
-            && capabilities.is_available(StorageKind::IoUring)
+            && capabilities.is_available(IoKind::IoUring)
         {
             return LoadEngine::IoUring;
         }
 
         if self.total_bytes >= MULTI_SHARD_ASYNC_THRESHOLD
-            && capabilities.is_available(StorageKind::Tokio)
+            && capabilities.is_available(IoKind::Tokio)
         {
             return LoadEngine::TokioAsync;
         }
@@ -393,7 +393,7 @@ impl Model {
 
     #[cfg(target_os = "linux")]
     fn load_io_uring_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let engine = IoUringStorage::new();
+        let engine = IoUring::new();
         if shard_paths.len() == 1 {
             let bytes = engine
                 .read_file(&shard_paths[0])
@@ -421,7 +421,7 @@ impl Model {
     }
 
     async fn load_async_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let engine = TokioStorage::new();
+        let engine = Tokio::new();
         if shard_paths.len() == 1 {
             let bytes = engine
                 .read_file(&shard_paths[0])
@@ -483,7 +483,7 @@ impl Model {
     }
 
     fn load_sync_from_shards(shard_paths: Vec<PathBuf>) -> ReaderResult<Self> {
-        let engine = SyncStorage::new();
+        let engine = Sync::new();
         if shard_paths.len() == 1 {
             let bytes = engine
                 .read_file(&shard_paths[0])
@@ -675,7 +675,7 @@ pub struct MmapModel {
 impl MmapModel {
     pub fn open(path: impl AsRef<Path>) -> ReaderResult<Self> {
         let shard_paths = Model::discover_shards(path)?;
-        let mapper = MmapStorage::new();
+        let mapper = Mmap::new();
         if shard_paths.len() == 1 {
             let mmap = mapper
                 .map_file(&shard_paths[0])
@@ -816,7 +816,7 @@ mod tests {
     use super::*;
     use crate::formats::traits::TensorView;
     #[cfg(target_os = "linux")]
-    use crate::storage::availability::{StorageAvailability, UnavailableReason};
+    use crate::io::availability::{IoAvailability, UnavailableReason};
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
@@ -951,11 +951,11 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn capabilities_with_io_uring(io_uring: StorageAvailability) -> StorageCapabilities {
-        StorageCapabilities {
-            sync: StorageAvailability::Available,
-            tokio: StorageAvailability::Available,
-            mmap: StorageAvailability::Available,
+    fn capabilities_with_io_uring(io_uring: IoAvailability) -> IoCapabilities {
+        IoCapabilities {
+            sync: IoAvailability::Available,
+            tokio: IoAvailability::Available,
+            mmap: IoAvailability::Available,
             io_uring,
         }
     }
@@ -967,7 +967,7 @@ mod tests {
             shard_count: 5,
             total_bytes: 16 * 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(StorageAvailability::unavailable(
+        let capabilities = capabilities_with_io_uring(IoAvailability::unavailable(
             UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         ));
@@ -985,7 +985,7 @@ mod tests {
             shard_count: 2,
             total_bytes: 1024 * 1024 * 1024,
         };
-        let capabilities = capabilities_with_io_uring(StorageAvailability::unavailable(
+        let capabilities = capabilities_with_io_uring(IoAvailability::unavailable(
             UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         ));

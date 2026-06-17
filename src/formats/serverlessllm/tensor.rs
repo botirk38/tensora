@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::formats::traits::TensorView;
-use crate::storage::buffer::MmapRegion;
+use crate::io::buffer::MmapRegion;
 
 use super::index::TensorDescriptor;
 

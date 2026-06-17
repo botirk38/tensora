@@ -1,13 +1,11 @@
-//! Storage engine traits and vocabulary types.
+//! I/O backend traits and vocabulary types.
 //!
 //! # Traits
 //!
-//! - [`StorageEngine`] — base trait all engines implement (kind, availability)
-//! - [`ReadableStorage`] — exact file and range reads
-//! - [`WritableStorage`] — path-based writes and durability controls
-//! - [`AsyncReadableStorage`] — async exact file and range reads
-//! - [`AsyncWritableStorage`] — async path-based writes and durability controls
-//! - [`MappableStorage`] — memory-map a file or range (mmap engine only)
+//! - [`Io`] — base trait all backends implement (kind, availability)
+//! - [`BlockingIo`] — blocking path-based reads/writes/durability
+//! - [`AsyncIo`] — async path-based reads/writes/durability
+//! - [`MmapIo`] — memory-map a file or range
 //!
 //! # Vocabulary types
 //!
@@ -18,16 +16,16 @@
 //!
 //! # Writing
 //!
-//! Callers pass a path; the engine owns file-handle lifetime. Methods divide
+//! Callers pass a path; the backend owns file-handle lifetime. Methods divide
 //! into two groups:
 //!
-//! - **Creating files**: [`WritableStorage::write_file`] and
-//!   [`WritableStorage::write_positioned_file`] create or truncate the path.
-//! - **Updating files**: [`WritableStorage::write_at`] and
-//!   [`WritableStorage::write_slices`] open an existing file without truncating.
+//! - **Creating files**: [`BlockingIo::write_file`] and
+//!   [`BlockingIo::write_positioned_file`] create or truncate the path.
+//! - **Updating files**: [`BlockingIo::write_at`] and
+//!   [`BlockingIo::write_slices`] open an existing file without truncating.
 //!
-//! Durability is explicit: call [`WritableStorage::sync_data`] or
-//! [`WritableStorage::sync_all`] after writes that must survive a crash.
+//! Durability is explicit: call [`BlockingIo::sync_data`] or
+//! [`BlockingIo::sync_all`] after writes that must survive a crash.
 
 pub mod availability;
 pub mod buffer;
@@ -221,24 +219,24 @@ impl<'a> WriteSlices<'a> {
     }
 }
 
-/// Common metadata every storage engine exposes.
-pub trait StorageEngine {
-    /// Compile-time kind identifier for this engine.
-    const KIND: availability::StorageKind;
+/// Common metadata every I/O backend exposes.
+pub trait Io {
+    /// Compile-time kind identifier for this backend.
+    const KIND: availability::IoKind;
 
-    /// Returns the kind identifier for this engine value.
-    fn kind(&self) -> availability::StorageKind {
+    /// Returns the kind identifier for this backend value.
+    fn kind(&self) -> availability::IoKind {
         Self::KIND
     }
 
-    /// Reports whether this engine can run in the current environment.
-    fn availability() -> availability::StorageAvailability
+    /// Reports whether this backend can run in the current environment.
+    fn availability() -> availability::IoAvailability
     where
         Self: Sized;
 }
 
-/// Blocking storage engine operations for exact reads.
-pub trait ReadableStorage: StorageEngine {
+/// Blocking path-based I/O operations.
+pub trait BlockingIo: Io {
     /// Reads an entire file into owned bytes.
     fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
 
@@ -249,64 +247,33 @@ pub trait ReadableStorage: StorageEngine {
 
     /// Reads a batch of file ranges concurrently.
     ///
-    /// Each backend uses its own parallel strategy (Rayon, io_uring ring
-    /// saturation, etc.).  Results preserve the original `request_index` of
-    /// each entry.
+    /// Each backend uses its own batching strategy. Results preserve the
+    /// original `request_index` of each entry.
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
-}
 
-/// Async storage engine operations for exact reads.
-#[allow(async_fn_in_trait)]
-pub trait AsyncReadableStorage: StorageEngine {
-    /// Reads an entire file into owned bytes.
-    async fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
-
-    /// Reads exactly `range` from `path`.
-    ///
-    /// Empty ranges are valid and return empty bytes.
-    async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
-
-    /// Reads a batch of file ranges.
-    async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
-}
-
-/// Blocking path-based write operations.
-///
-/// The engine owns file-handle lifetime for every operation.  Callers never
-/// open or close files; they only supply paths and byte slices.
-///
-/// ## Creating vs. updating
-///
-/// - [`write_file`](WritableStorage::write_file) and
-///   [`write_positioned_file`](WritableStorage::write_positioned_file) always
-///   create or truncate the target path.
-/// - [`write_at`](WritableStorage::write_at) and
-///   [`write_slices`](WritableStorage::write_slices) open an existing file and
-///   write without truncating.  They do not create the file if it is absent.
-pub trait WritableStorage: StorageEngine {
     /// Creates or truncates `path` and writes all of `data` at offset 0.
     ///
-    /// Does not sync; call [`sync_data`](WritableStorage::sync_data) or
-    /// [`sync_all`](WritableStorage::sync_all) when durability is required.
+    /// Does not sync; call [`sync_data`](BlockingIo::sync_data) or
+    /// [`sync_all`](BlockingIo::sync_all) when durability is required.
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
     /// Creates or truncates `path`, sets its length to `len`, then applies
-    /// every slice in `writes` in parallel.
+    /// every slice in `writes` concurrently.
     ///
-    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not sync.
+    /// `writes` is pre-validated (non-overlapping, no overflow). Does not sync.
     fn write_positioned_file(&self, path: &Path, len: u64, writes: WriteSlices<'_>)
     -> IoResult<()>;
 
     /// Opens an existing file at `path` and writes `data` starting at `offset`.
     ///
-    /// Does not create or truncate the file.  Must write the full slice or
+    /// Does not create or truncate the file. Must write the full slice or
     /// return an error.
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
 
     /// Opens an existing file at `path` and applies every slice in `writes`
-    /// in parallel.
+    /// concurrently.
     ///
-    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not
+    /// `writes` is pre-validated (non-overlapping, no overflow). Does not
     /// create or truncate the file.
     fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()>;
 
@@ -317,19 +284,27 @@ pub trait WritableStorage: StorageEngine {
     fn sync_all(&self, path: &Path) -> IoResult<()>;
 }
 
-/// Async path-based write operations.
-///
-/// Mirrors [`WritableStorage`] with async methods.  The engine owns
-/// file-handle lifetime; callers never open or close files.
+/// Async path-based I/O operations.
 #[allow(async_fn_in_trait)]
-pub trait AsyncWritableStorage: StorageEngine {
+pub trait AsyncIo: Io {
+    /// Reads an entire file into owned bytes.
+    async fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
+
+    /// Reads exactly `range` from `path`.
+    ///
+    /// Empty ranges are valid and return empty bytes.
+    async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+
+    /// Reads a batch of file ranges concurrently.
+    async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
+
     /// Creates or truncates `path` and writes all of `data` at offset 0.
     async fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
 
     /// Creates or truncates `path`, sets its length to `len`, then applies
     /// every slice in `writes` concurrently.
     ///
-    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not sync.
+    /// `writes` is pre-validated (non-overlapping, no overflow). Does not sync.
     async fn write_positioned_file(
         &self,
         path: &Path,
@@ -343,7 +318,7 @@ pub trait AsyncWritableStorage: StorageEngine {
     /// Opens an existing file at `path` and applies every slice in `writes`
     /// concurrently.
     ///
-    /// `writes` is pre-validated (non-overlapping, no overflow).  Does not
+    /// `writes` is pre-validated (non-overlapping, no overflow). Does not
     /// create or truncate the file.
     async fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()>;
 
@@ -354,8 +329,8 @@ pub trait AsyncWritableStorage: StorageEngine {
     async fn sync_all(&self, path: &Path) -> IoResult<()>;
 }
 
-/// Storage engine operations for memory mapping files.
-pub trait MappableStorage: StorageEngine {
+/// Memory-mapped path-based I/O operations.
+pub trait MmapIo: Io {
     /// Maps the entire file at `path`.
     fn map_file(&self, path: &Path) -> IoResult<buffer::MmapRegion>;
 

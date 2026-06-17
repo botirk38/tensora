@@ -5,16 +5,14 @@
 use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::Model as ModelTrait;
 #[cfg(target_os = "linux")]
-use crate::storage::availability::{StorageCapabilities, StorageKind};
-use crate::storage::buffer::{MmapRegion, OwnedBytes};
+use crate::io::availability::{IoCapabilities, IoKind};
+use crate::io::buffer::{MmapRegion, OwnedBytes};
 #[cfg(target_os = "linux")]
-use crate::storage::io_uring::IoUringStorage;
-use crate::storage::mmap::MmapStorage;
-use crate::storage::sync::SyncStorage;
-use crate::storage::tokio::TokioStorage;
-use crate::storage::{
-    AsyncReadableStorage, ByteRange, FileRange, MappableStorage, RangeRead, ReadableStorage,
-};
+use crate::io::io_uring::IoUring;
+use crate::io::mmap::Mmap;
+use crate::io::sync::Sync;
+use crate::io::tokio::Tokio;
+use crate::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo, RangeRead};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -146,7 +144,7 @@ impl LoadPlan {
         }
         self.validate()?;
 
-        let engine = SyncStorage::new();
+        let engine = Sync::new();
 
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
@@ -166,7 +164,7 @@ impl LoadPlan {
         }
         self.validate()?;
 
-        let engine = IoUringStorage::new();
+        let engine = IoUring::new();
 
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
@@ -185,7 +183,7 @@ impl LoadPlan {
         }
         self.validate()?;
 
-        let engine = TokioStorage::new();
+        let engine = Tokio::new();
 
         if self.partitions.len() == 1 {
             let read = &self.partitions[0];
@@ -243,16 +241,16 @@ impl LoadStats {
 
         #[cfg(target_os = "linux")]
         {
-            let capabilities = StorageCapabilities::cached();
+            let capabilities = IoCapabilities::cached();
             if self.partition_count >= IOURING_PARTITION_THRESHOLD
                 && self.total_bytes >= IOURING_BYTE_THRESHOLD
-                && capabilities.is_available(StorageKind::IoUring)
+                && capabilities.is_available(IoKind::IoUring)
             {
                 return LoadEngine::IoUring;
             }
 
             if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
-                && capabilities.is_available(StorageKind::Tokio)
+                && capabilities.is_available(IoKind::Tokio)
             {
                 return LoadEngine::TokioAsync;
             }
@@ -406,7 +404,7 @@ impl MmapModel {
         let dir_path = directory.as_ref();
         let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
         let partition_ids = index.partition_ids();
-        let mapper = MmapStorage::new();
+        let mapper = Mmap::new();
         let partitions: Result<HashMap<usize, MmapRegion>, ReaderError> = partition_ids
             .par_iter()
             .map(|&partition_id| {

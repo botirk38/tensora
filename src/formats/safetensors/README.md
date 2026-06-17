@@ -15,10 +15,10 @@ Whole-file and multi-shard eager loading for HuggingFace SafeTensors checkpoints
 ```rust
 use tensora::safetensors::{MmapModel, Model};
 
-// Adaptive loading (picks best storage engine automatically)
+// Adaptive loading (picks best I/O backend automatically)
 let model = Model::load("model_dir").await?;
 
-// Explicit storage engine
+// Explicit I/O backend
 let model = Model::load_sync("model_dir")?;
 let model = Model::load_async("model_dir").await?;
 let model = Model::load_io_uring("model_dir")?;  // Linux only
