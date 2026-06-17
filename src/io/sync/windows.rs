@@ -239,7 +239,7 @@ impl super::super::BlockingIo for Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::{BlockingIo, ByteRange, FileRange, Io, WriteSlices};
+    use crate::io::{BlockingIo, ByteRange, FileRange, Io, WriteSlice, WriteSlices};
     use tempfile::TempDir;
 
     fn write_tmp(dir: &TempDir, name: &str, data: &[u8]) -> std::path::PathBuf {
