@@ -59,7 +59,6 @@ impl AlignedBuffer {
         })
     }
 
-
     pub fn as_slice(&self) -> &[u8] {
         // SAFETY: ptr is valid for at least self.len bytes, and set_len prevents
         // exposing bytes beyond the allocated layout size.
