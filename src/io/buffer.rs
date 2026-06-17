@@ -59,11 +59,7 @@ impl AlignedBuffer {
         })
     }
 
-    #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
-    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr.as_ptr()
-    }
+
     pub fn as_slice(&self) -> &[u8] {
         // SAFETY: ptr is valid for at least self.len bytes, and set_len prevents
         // exposing bytes beyond the allocated layout size.
