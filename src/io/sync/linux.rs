@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::io::{
-    ByteRange, FileRange, IoResult, RangeRead, WriteSlice, WriteSlices,
+    ByteRange, FileRange, IoResult, RangeRead, WriteSlices,
     availability::{IoAvailability, IoKind},
     buffer::{AlignedBuffer, OwnedBytes, get_buffer_pool},
 };

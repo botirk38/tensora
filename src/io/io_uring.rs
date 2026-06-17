@@ -237,10 +237,8 @@ impl IoUring {
                     return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
                 }
                 done[idx] += n_written;
-                if done[idx] < writes[idx].data.len() {
-                    if next_submit > idx {
-                        next_submit = idx;
-                    }
+                if done[idx] < writes[idx].data.len() && next_submit > idx {
+                    next_submit = idx;
                 }
             }
         }
