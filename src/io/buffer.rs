@@ -69,6 +69,9 @@ impl AlignedBuffer {
         // self.len bytes by the same invariant as as_slice.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
     pub fn set_len(&mut self, len: usize) {
         assert!(len <= self.layout.size());
         self.len = len;

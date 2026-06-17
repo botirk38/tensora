@@ -110,7 +110,7 @@ impl IoUring {
                 // SAFETY: `read < chunk.len()` and `len` is bounded by the
                 // remaining bytes, so the resulting pointer stays within
                 // `chunk` for the submitted read.
-                let ptr = unsafe { chunk.as_mut_slice().as_ptr().add(read) as *mut u8 };
+                let ptr = unsafe { chunk.as_ptr().add(read) as *mut u8 };
                 let entry = opcode::Read::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
                     .offset(absolute_offset + read as u64)
                     .build()
@@ -355,7 +355,7 @@ impl super::BlockingIo for IoUring {
                 // The ring holds a live reference to this memory until the completion
                 // is drained below — `bufs` outlives the ring borrow because both
                 // are owned in this stack frame.
-                let ptr = unsafe { bufs[idx].as_mut_slice().as_ptr().add(so_far) as *mut u8 };
+                let ptr = unsafe { bufs[idx].as_mut_ptr().add(so_far) };
                 let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
                     .offset(range.start() + so_far as u64)
                     .build()
