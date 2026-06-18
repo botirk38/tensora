@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::ids::PartitionId;
 use super::index::{Index, PartitionPlan};
 use super::tensor::{Tensor, TensorMmap};
 
@@ -27,7 +28,7 @@ use super::tensor::{Tensor, TensorMmap};
 
 #[derive(Debug)]
 struct PartitionRead {
-    partition_id: usize,
+    partition_id: PartitionId,
     path: PathBuf,
     size: u64,
 }
@@ -63,7 +64,7 @@ impl LoadPlan {
         for read in &self.partitions {
             let metadata =
                 std::fs::metadata(&read.path).map_err(|_| ReaderError::PartitionNotFound {
-                    partition_id: read.partition_id,
+                    partition_id: read.partition_id.as_usize(),
                     path: read.path.to_string_lossy().to_string(),
                 })?;
             if metadata.len() < read.size {
@@ -94,7 +95,7 @@ impl LoadPlan {
         let max_partition_id = self
             .partitions
             .iter()
-            .map(|r| r.partition_id)
+            .map(|r| r.partition_id.as_usize())
             .max()
             .unwrap_or(0);
         let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
@@ -107,12 +108,12 @@ impl LoadPlan {
                     required: read.size,
                 });
             }
-            partition_buffers[read.partition_id] = Some(buf);
+            partition_buffers[read.partition_id.as_usize()] = Some(buf);
         }
         let mut tensors = HashMap::with_capacity(self.index.len());
         for name in self.index.tensor_names().iter() {
             let desc = self.index.get(name.as_ref()).unwrap();
-            let backing = partition_buffers[desc.partition_id].as_ref().unwrap();
+            let backing = partition_buffers[desc.partition_id.as_usize()].as_ref().unwrap();
             tensors.insert(
                 name.clone(),
                 Tensor::from_shared(Arc::clone(backing), Arc::clone(desc)),
@@ -396,7 +397,7 @@ impl ModelTrait for Model {
 #[derive(Debug)]
 pub struct MmapModel {
     index: Index,
-    partitions: HashMap<usize, MmapRegion>,
+    partitions: HashMap<PartitionId, MmapRegion>,
 }
 
 impl MmapModel {
@@ -405,7 +406,7 @@ impl MmapModel {
         let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
         let partition_ids = index.partition_ids();
         let mapper = Mmap::new();
-        let partitions: Result<HashMap<usize, MmapRegion>, ReaderError> = partition_ids
+        let partitions: Result<HashMap<PartitionId, MmapRegion>, ReaderError> = partition_ids
             .par_iter()
             .map(|&partition_id| {
                 let partition_path = format!(
@@ -581,7 +582,7 @@ mod tests {
         let index = Index::from_bytes(data).unwrap();
         let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
         assert_eq!(plan.partitions.len(), 1);
-        assert_eq!(plan.partitions[0].partition_id, 0);
+        assert_eq!(plan.partitions[0].partition_id, PartitionId::new(0));
     }
 
     #[test]
@@ -625,7 +626,7 @@ mod tests {
             shape: vec![4, 4].into(),
             stride: vec![4, 1].into(),
             dtype: "f32".into(),
-            partition_id: 0,
+            partition_id: PartitionId::new(0),
         });
         let tensor = Tensor::from_shared(backing, desc);
         let mut tensors = HashMap::new();

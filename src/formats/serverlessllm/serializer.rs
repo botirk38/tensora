@@ -25,6 +25,7 @@ use crate::io::{AsyncIo, BlockingIo};
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::ids::PartitionId;
 use super::index::TensorDescriptor;
 
 /// Entry for writing tensors to index.
@@ -35,7 +36,7 @@ pub struct TensorWriteEntry {
     pub shape: Vec<usize>,
     pub stride: Vec<usize>,
     pub dtype: String,
-    pub partition_id: usize,
+    pub partition_id: PartitionId,
 }
 
 impl From<&TensorDescriptor> for TensorWriteEntry {
@@ -165,7 +166,7 @@ fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<
             entry.shape,
             entry.stride,
             entry.dtype,
-            entry.partition_id
+            entry.partition_id.as_usize()
         ]);
         map.insert(name.clone(), value);
     }
@@ -209,6 +210,7 @@ pub fn write_partition_sync(output_path: impl AsRef<Path>, data: &[u8]) -> Write
 mod tests {
     use super::TensorWriteEntry;
     use crate::formats::error::WriterError;
+    use crate::formats::serverlessllm::ids::PartitionId;
     use crate::formats::serverlessllm::serializer::{
         serialize_index, write_index, write_index_sync, write_partition, write_partition_sync,
     };
@@ -225,7 +227,7 @@ mod tests {
                 shape: vec![2, 2],
                 stride: vec![2, 1],
                 dtype: "f32".to_owned(),
-                partition_id: 1,
+                partition_id: PartitionId::new(1),
             },
         )])
     }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::formats::traits::TensorView;
 use crate::io::buffer::MmapRegion;
 
+use super::ids::PartitionId;
 use super::index::TensorDescriptor;
 
 /// Owned tensor with shared backing buffer.
@@ -67,7 +68,7 @@ impl Tensor {
     /// Returns the partition id containing this tensor.
     #[inline]
     #[must_use]
-    pub fn partition_id(&self) -> usize {
+    pub fn partition_id(&self) -> PartitionId {
         self.desc.partition_id
     }
 }
@@ -186,7 +187,7 @@ mod tests {
             shape: vec![2, 4].into(),
             stride: vec![4, 1].into(),
             dtype: "torch.float32".into(),
-            partition_id,
+            partition_id: PartitionId::new(partition_id),
         })
     }
 
@@ -214,7 +215,7 @@ mod tests {
         let backing: Arc<[u8]> = Arc::from(vec![0u8; 8]);
         let desc = make_desc(0, 8, 42);
         let t = Tensor::from_shared(backing, desc);
-        assert_eq!(t.partition_id(), 42);
+        assert_eq!(t.partition_id(), PartitionId::new(42));
     }
 
     #[test]

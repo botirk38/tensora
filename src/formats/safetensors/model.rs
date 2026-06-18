@@ -23,7 +23,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-type TensorShardMap = HashMap<Arc<str>, usize>;
+use super::ids::ShardId;
+
+type TensorShardMap = HashMap<Arc<str>, ShardId>;
 type TensorNameList = Arc<[Arc<str>]>;
 
 /// A parsed safetensors shard with owned storage.
@@ -194,10 +196,10 @@ impl OwnedShardedModel {
         let mut tensor_shards = HashMap::new();
         let mut tensor_names = Vec::new();
 
-        for (shard_idx, shard) in shards.iter().enumerate() {
+        for (i, shard) in shards.iter().enumerate() {
             for name in shard.metadata.offset_keys() {
                 let name: Arc<str> = Arc::from(name.as_str());
-                if tensor_shards.insert(name.clone(), shard_idx).is_some() {
+                if tensor_shards.insert(name.clone(), ShardId::new(i)).is_some() {
                     return Err(ReaderError::InvalidMetadata(format!(
                         "duplicate tensor name across shards: {}",
                         name
@@ -212,14 +214,14 @@ impl OwnedShardedModel {
     }
 
     fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
-        let shard_idx =
+        let shard_id =
             self.tensor_shards
                 .get(name)
                 .copied()
                 .ok_or_else(|| ReaderError::TensorNotFound {
                     name: name.to_owned(),
                 })?;
-        self.shards[shard_idx].tensor(name)
+        self.shards[shard_id.as_usize()].tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {
@@ -611,10 +613,10 @@ impl MmapShardedModel {
         let mut tensor_shards = HashMap::new();
         let mut tensor_names = Vec::new();
 
-        for (shard_idx, shard) in shards.iter().enumerate() {
+        for (i, shard) in shards.iter().enumerate() {
             for name in shard.metadata.offset_keys() {
                 let name: Arc<str> = Arc::from(name.as_str());
-                if tensor_shards.insert(name.clone(), shard_idx).is_some() {
+                if tensor_shards.insert(name.clone(), ShardId::new(i)).is_some() {
                     return Err(ReaderError::InvalidMetadata(format!(
                         "duplicate tensor name across shards: {}",
                         name
@@ -633,14 +635,14 @@ impl MmapShardedModel {
     }
 
     fn tensor<'a>(&'a self, name: &str) -> ReaderResult<Tensor<'a>> {
-        let shard_idx =
+        let shard_id =
             self.tensor_shards
                 .get(name)
                 .copied()
                 .ok_or_else(|| ReaderError::TensorNotFound {
                     name: name.to_owned(),
                 })?;
-        self.shards[shard_idx].tensor(name)
+        self.shards[shard_id.as_usize()].tensor(name)
     }
 
     fn tensor_names(&self) -> &[Arc<str>] {

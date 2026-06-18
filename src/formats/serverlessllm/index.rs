@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::ids::PartitionId;
+
 /// Compact tensor descriptor for load planning.
 #[derive(Debug, Clone)]
 pub struct TensorDescriptor {
@@ -17,13 +19,13 @@ pub struct TensorDescriptor {
     pub shape: Arc<[usize]>,
     pub stride: Arc<[usize]>,
     pub dtype: Arc<str>,
-    pub partition_id: usize,
+    pub partition_id: PartitionId,
 }
 
 /// Precomputed partition metadata for load planning.
 #[derive(Debug, Clone)]
 pub struct PartitionPlan {
-    pub partition_id: usize,
+    pub partition_id: PartitionId,
     pub max_required_size: u64,
     pub tensor_names: Arc<[Arc<str>]>,
 }
@@ -32,8 +34,8 @@ pub struct PartitionPlan {
 #[derive(Debug, Clone)]
 pub struct Index {
     tensors: HashMap<Arc<str>, Arc<TensorDescriptor>>,
-    partition_ids: Arc<[usize]>,
-    partitions: HashMap<usize, PartitionPlan>,
+    partition_ids: Arc<[PartitionId]>,
+    partitions: HashMap<PartitionId, PartitionPlan>,
     tensor_names_sorted: Arc<[Arc<str>]>,
 }
 
@@ -94,21 +96,21 @@ impl Index {
     /// Returns sorted partition IDs (cached, computed once at parse time).
     #[inline]
     #[must_use]
-    pub fn partition_ids(&self) -> &[usize] {
+    pub fn partition_ids(&self) -> &[PartitionId] {
         &self.partition_ids
     }
 
     /// Returns partition plans (cached).
     #[inline]
     #[must_use]
-    pub fn partitions(&self) -> &HashMap<usize, PartitionPlan> {
+    pub fn partitions(&self) -> &HashMap<PartitionId, PartitionPlan> {
         &self.partitions
     }
 
     /// Returns the partition plan for a given partition ID.
     #[inline]
     #[must_use]
-    pub fn partition(&self, id: usize) -> Option<&PartitionPlan> {
+    pub fn partition(&self, id: PartitionId) -> Option<&PartitionPlan> {
         self.partitions.get(&id)
     }
 
@@ -118,8 +120,8 @@ impl Index {
             .map_err(|err| ReaderError::ServerlessLlm(format!("JSON parse error: {err}")))?;
 
         let mut tensors = HashMap::with_capacity(raw.len());
-        let mut partition_max_sizes: HashMap<usize, u64> = HashMap::new();
-        let mut partition_tensors: HashMap<usize, Vec<Arc<str>>> = HashMap::new();
+        let mut partition_max_sizes: HashMap<PartitionId, u64> = HashMap::new();
+        let mut partition_tensors: HashMap<PartitionId, Vec<Arc<str>>> = HashMap::new();
 
         for (name, value) in raw {
             let name: Arc<str> = name.as_str().into();
@@ -141,7 +143,7 @@ impl Index {
             let shape = parse_usize_vec(&arr[2])?;
             let stride = parse_usize_vec(&arr[3])?;
             let dtype = parse_string(&arr[4])?;
-            let partition_id = parse_usize(&arr[5])?;
+            let partition_id = PartitionId::new(parse_usize(&arr[5])?);
             let required =
                 offset
                     .checked_add(size_u64)
@@ -172,11 +174,11 @@ impl Index {
             );
         }
 
-        let mut partition_ids: Vec<usize> = partition_max_sizes.keys().copied().collect();
+        let mut partition_ids: Vec<PartitionId> = partition_max_sizes.keys().copied().collect();
         partition_ids.sort_unstable();
-        let partition_ids: Arc<[usize]> = partition_ids.into();
+        let partition_ids: Arc<[PartitionId]> = partition_ids.into();
 
-        let partitions: HashMap<usize, PartitionPlan> = partition_ids
+        let partitions: HashMap<PartitionId, PartitionPlan> = partition_ids
             .iter()
             .map(|&id| {
                 let max_size = partition_max_sizes.get(&id).copied().unwrap_or(0);
@@ -270,7 +272,7 @@ mod tests {
         let data = br#"{"tensor_b": [4, 2, [1,2], [2,1], "i8", 3]}"#;
         let index = Index::from_bytes(data).expect("parse index");
         let tensor_b = index.get("tensor_b").expect("tensor_b");
-        assert_eq!(tensor_b.partition_id, 3);
+        assert_eq!(tensor_b.partition_id, PartitionId::new(3));
         assert_eq!(tensor_b.size, 2);
         assert_eq!(&*tensor_b.shape, &[1, 2]);
     }
@@ -283,7 +285,7 @@ mod tests {
             "c": [12, 8, [2, 4], [4, 1], "f32", 2]
         }"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert_eq!(index.partition_ids(), &[0, 2]);
+        assert_eq!(index.partition_ids(), &[PartitionId::new(0), PartitionId::new(2)]);
     }
 
     #[test]
@@ -293,7 +295,7 @@ mod tests {
             "b": [10, 20, [2, 4], [4, 1], "f32", 0]
         }"#;
         let index = Index::from_bytes(data).expect("parse");
-        let p0 = index.partition(0).expect("partition 0");
+        let p0 = index.partition(PartitionId::new(0)).expect("partition 0");
         assert_eq!(p0.max_required_size, 30);
     }
 
@@ -375,8 +377,8 @@ mod tests {
             "b": [4, 8, [4], [1], "f32", 0]
         }"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert_eq!(index.partition_ids(), &[0]);
-        let p = index.partition(0).unwrap();
+        assert_eq!(index.partition_ids(), &[PartitionId::new(0)]);
+        let p = index.partition(PartitionId::new(0)).unwrap();
         assert_eq!(p.tensor_names.len(), 2);
     }
 

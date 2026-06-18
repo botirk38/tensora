@@ -124,11 +124,6 @@ pub fn ensure_serverlessllm_cache_dir(
         )));
     }
     let partitions = recommended_partition_count(total);
-    if partitions == 0 {
-        return Err(HfModelError::Msg(
-            "partition count resolved to 0".to_string(),
-        ));
-    }
 
     crate::convert_safetensors_to_serverlessllm_sync(
         safetensors_dir
@@ -136,7 +131,7 @@ pub fn ensure_serverlessllm_cache_dir(
             .ok_or_else(|| HfModelError::Msg("safetensors path is not UTF-8".to_string()))?,
         out.to_str()
             .ok_or_else(|| HfModelError::Msg("output path is not UTF-8".to_string()))?,
-        partitions,
+        partitions.as_usize(),
     )?;
 
     Ok(out)

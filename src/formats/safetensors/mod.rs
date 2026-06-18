@@ -2,9 +2,11 @@
 //!
 //! This module provides reading and writing support for the SafeTensors format.
 
+pub mod ids;
 pub mod model;
 pub mod serializer;
 
+pub use ids::{ShardCount, ShardId};
 pub use safetensors::serialize;
 
 // Re-export model types

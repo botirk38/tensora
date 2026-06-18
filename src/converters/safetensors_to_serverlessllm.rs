@@ -14,6 +14,8 @@
 //! - `convert_safetensors_to_serverlessllm_io_uring` — Linux io_uring I/O
 
 use crate::formats::error::{WriterError, WriterResult};
+use crate::formats::safetensors::ids::ShardId;
+use crate::formats::serverlessllm::ids::PartitionId;
 use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
 #[cfg(target_os = "linux")]
 use crate::io::availability::{IoCapabilities, IoKind};
@@ -104,7 +106,7 @@ pub fn convert_safetensors_to_serverlessllm_io_uring(
 #[derive(Debug, Clone)]
 pub struct TensorSource {
     pub name: String,
-    pub shard_id: usize,
+    pub shard_id: ShardId,
     pub shard_path: PathBuf,
     pub source_offset: u64,
     pub size: usize,
@@ -154,10 +156,10 @@ impl TensorSource {
 /// A single copy operation from source range to destination range.
 #[derive(Debug, Clone)]
 pub struct CopyOp {
-    pub shard_id: usize,
+    pub shard_id: ShardId,
     pub shard_path: PathBuf,
     pub source_offset: u64,
-    pub dest_partition: usize,
+    pub dest_partition: PartitionId,
     pub dest_offset: u64,
     pub size: usize,
 }
@@ -250,20 +252,20 @@ impl ConversionPlan {
 
         let shard_count = tensors
             .iter()
-            .map(|t| t.shard_id)
+            .map(|t| t.shard_id.as_usize())
             .max()
             .map(|m| m + 1)
             .unwrap_or(1);
 
         let mut shard_sizes: Vec<u64> = vec![0; shard_count];
         for t in &tensors {
-            shard_sizes[t.shard_id] += t.size as u64;
+            shard_sizes[t.shard_id.as_usize()] += t.size as u64;
         }
 
         tensors.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 
         let mut partition_sizes: Vec<u64> = vec![0; partition_count];
-        let mut partition_shards: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); partition_count];
+        let mut partition_shards: Vec<BTreeSet<ShardId>> = vec![BTreeSet::new(); partition_count];
         let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
         let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
 
@@ -292,7 +294,7 @@ impl ConversionPlan {
                     shape: tensor.shape.clone(),
                     stride: tensor.stride.clone(),
                     dtype: tensor.dtype.clone(),
-                    partition_id: best_partition,
+                    partition_id: PartitionId::new(best_partition),
                 },
             );
 
@@ -300,7 +302,7 @@ impl ConversionPlan {
                 shard_id: tensor.shard_id,
                 shard_path: tensor.shard_path,
                 source_offset: tensor.source_offset,
-                dest_partition: best_partition,
+                dest_partition: PartitionId::new(best_partition),
                 dest_offset: offset,
                 size: tensor.size,
             });
@@ -466,7 +468,7 @@ impl ConversionPlan {
         let mut all_tensors = Vec::new();
         let mut seen_names = std::collections::BTreeSet::new();
 
-        for (shard_id, shard_path) in shard_paths.iter().enumerate() {
+        for (i, shard_path) in shard_paths.iter().enumerate() {
             let file = File::open(shard_path).map_err(WriterError::from)?;
             let mmap = unsafe { Mmap::map(&file).map_err(WriterError::from)? };
             let model = SafeTensors::deserialize(&mmap)
@@ -487,7 +489,7 @@ impl ConversionPlan {
 
                 all_tensors.push(TensorSource {
                     name: name.to_owned(),
-                    shard_id,
+                    shard_id: ShardId::new(i),
                     shard_path: shard_path.clone(),
                     source_offset: offset as u64,
                     size: view.len(),
@@ -570,8 +572,8 @@ impl ConversionPlan {
             })
     }
 
-    fn group_by_partition(&self) -> Vec<(usize, Vec<&CopyOp>)> {
-        let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
+    fn group_by_partition(&self) -> Vec<(PartitionId, Vec<&CopyOp>)> {
+        let mut by_partition: HashMap<PartitionId, Vec<&CopyOp>> = HashMap::new();
         for op in &self.copy_ops {
             by_partition.entry(op.dest_partition).or_default().push(op);
         }
@@ -580,10 +582,10 @@ impl ConversionPlan {
 
     async fn write_partition_async(
         output_dir: &Path,
-        partition_id: usize,
+        partition_id: PartitionId,
         ops: &[&CopyOp],
     ) -> WriterResult<()> {
-        let path = output_dir.join(format!("tensor.data_{}", partition_id));
+        let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = Tokio::new();
 
@@ -613,10 +615,10 @@ impl ConversionPlan {
 
     fn write_partition_sync(
         output_dir: &Path,
-        partition_id: usize,
+        partition_id: PartitionId,
         ops: &[&CopyOp],
     ) -> WriterResult<()> {
-        let path = output_dir.join(format!("tensor.data_{}", partition_id));
+        let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = Sync::new();
 

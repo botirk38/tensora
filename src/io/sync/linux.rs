@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::io::{
-    ByteRange, FileRange, IoResult, RangeRead, WriteSlices,
+    ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
     availability::{IoAvailability, IoKind},
     buffer::{AlignedBuffer, OwnedBytes, get_buffer_pool},
 };
@@ -328,10 +328,10 @@ impl super::super::BlockingIo for Sync {
             ranges
                 .par_iter()
                 .enumerate()
-                .map(|(request_index, entry)| {
+                .map(|(i, entry)| {
                     let bytes = self.read_range(entry.path, entry.range)?.into_shared();
                     Ok(RangeRead {
-                        request_index,
+                        request_index: RequestIndex::new(i),
                         range: entry.range,
                         bytes,
                     })
