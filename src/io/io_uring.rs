@@ -15,7 +15,7 @@ use std::sync::Arc;
 use io_uring::{IoUring as Uring, opcode, types};
 
 use crate::io::{
-    ByteRange, FileRange, Io, IoResult, RangeRead, WriteSlice, WriteSlices,
+    ByteRange, FileRange, Io, IoResult, RangeRead, RequestIndex, WriteSlice, WriteSlices,
     availability::{IoAvailability, IoKind},
     buffer::OwnedBytes,
 };
@@ -407,9 +407,9 @@ impl super::BlockingIo for IoUring {
         let results = bufs
             .into_iter()
             .enumerate()
-            .map(|(request_index, buf)| RangeRead {
-                request_index,
-                range: ranges[request_index].range,
+            .map(|(i, buf)| RangeRead {
+                request_index: RequestIndex::new(i),
+                range: ranges[i].range,
                 bytes: Arc::from(buf),
             })
             .collect();
@@ -700,7 +700,7 @@ mod tests {
 
         assert_eq!(results.len(), 8);
         for (i, r) in results.iter().enumerate() {
-            assert_eq!(r.request_index, i, "request_index mismatch at slot {i}");
+            assert_eq!(r.request_index, RequestIndex::new(i), "request_index mismatch at slot {i}");
             let start = i * 32;
             assert_eq!(r.data(), &data[start..start + 32]);
         }

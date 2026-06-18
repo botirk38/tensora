@@ -12,7 +12,7 @@ use ::tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use futures::StreamExt;
 
 use crate::io::{
-    AsyncIo, ByteRange, FileRange, IoResult, RangeRead, WriteSlices,
+    AsyncIo, ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
     availability::{IoAvailability, IoKind},
     buffer::OwnedBytes,
 };
@@ -103,10 +103,10 @@ impl AsyncIo for Tokio {
         if ranges.is_empty() {
             return Ok(Vec::new());
         }
-        let tasks: Vec<(usize, PathBuf, ByteRange)> = ranges
+        let tasks: Vec<(RequestIndex, PathBuf, ByteRange)> = ranges
             .iter()
             .enumerate()
-            .map(|(i, e)| (i, e.path.to_path_buf(), e.range))
+            .map(|(i, e)| (RequestIndex::new(i), e.path.to_path_buf(), e.range))
             .collect();
 
         let stream = futures::stream::iter(tasks).map(|(request_index, path, range)| async move {

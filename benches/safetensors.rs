@@ -5,8 +5,10 @@ mod bench_util;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::time::Duration;
-use tensora::formats::safetensors;
-use tensora::formats::traits::TensorView;
+use tensora::formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
+use tensora::formats::traits::Checkpoint as _;
+use tensora::formats::traits::Model as _;
+use tensora::formats::traits::Tensor;
 
 // ---------------------------------------------------------------------------
 // Full-model load benchmarks (one per I/O backend)
@@ -26,7 +28,7 @@ fn bench_default(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = safetensors::Model::load(black_box(&dir_str)).await.unwrap();
+            let model = SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -46,7 +48,7 @@ fn bench_sync(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = safetensors::Model::load_sync(black_box(&dir_str)).unwrap();
+            let model = SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::Sync).unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -67,9 +69,7 @@ fn bench_tokio(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = safetensors::Model::load_async(black_box(&dir_str))
-                .await
-                .unwrap();
+            let model = SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -90,7 +90,7 @@ fn bench_io_uring(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = safetensors::Model::load_io_uring(black_box(&dir_str)).unwrap();
+            let model = SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::IoUring).unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -110,7 +110,7 @@ fn bench_mmap(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = safetensors::MmapModel::open(black_box(&dir_str)).unwrap();
+            let model = SafeTensorsCheckpoint::open(black_box(&dir_str)).unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -126,11 +126,11 @@ fn bench_tensor_sequential(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
 
-    let model = safetensors::Model::load_sync(&dir_str).unwrap();
-    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    let model = SafeTensorsCheckpoint::load(&dir_str, tensora::Backend::Sync).unwrap();
+    let names: Vec<String> = model.tensor_names().map(|n| n.to_string()).collect();
     let total_bytes: u64 = names
         .iter()
-        .filter_map(|n| model.tensor(n).ok())
+        .filter_map(|n| model.tensor(n))
         .map(|t| t.data().len() as u64)
         .sum();
 
@@ -156,8 +156,8 @@ fn bench_tensor_random(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let dir_str = dir.to_str().unwrap().to_string();
 
-    let model = safetensors::Model::load_sync(&dir_str).unwrap();
-    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    let model = SafeTensorsCheckpoint::load(&dir_str, tensora::Backend::Sync).unwrap();
+    let names: Vec<String> = model.tensor_names().map(|n| n.to_string()).collect();
     if names.is_empty() {
         return;
     }

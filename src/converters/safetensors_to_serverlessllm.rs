@@ -7,14 +7,13 @@
 //! 3. Materialization: copy tensor bytes directly from source ranges to destination offsets
 //! 4. Index write: produce `tensor_index.json`
 //!
-//! Four converter variants are exposed, all using the same pipeline with different I/O executors:
-//! - `convert_safetensors_to_serverlessllm` — default (adaptive storage-engine choice)
-//! - `convert_safetensors_to_serverlessllm_sync` — synchronous I/O
-//! - `convert_safetensors_to_serverlessllm_async` — Tokio async I/O
-//! - `convert_safetensors_to_serverlessllm_io_uring` — Linux io_uring I/O
+//! Entry points are provided as methods on the [`SafeTensorsToServerlessLLM`] entity.
 
-use crate::formats::error::{WriterError, WriterResult};
-use crate::formats::serverlessllm::serializer::{TensorWriteEntry, write_index, write_index_sync};
+use crate::formats::error::{SaveError, SaveResult};
+use crate::formats::safetensors::ids::ShardId;
+use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
+use crate::formats::serverlessllm::checkpoint::{Checkpoint as SllmCheckpoint, TensorWriteEntry};
+use crate::formats::tensor::Dtype;
 #[cfg(target_os = "linux")]
 use crate::io::availability::{IoCapabilities, IoKind};
 use crate::io::sync::Sync;
@@ -27,73 +26,186 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// Public API — four converter variants
+// Public API — converter entity
 // ---------------------------------------------------------------------------
 
-/// Convert SafeTensors shards to ServerlessLLM format using adaptive storage-engine choice.
-#[inline]
-pub async fn convert_safetensors_to_serverlessllm(
-    input_dir: &str,
-    output_dir: &str,
-    partition_count: usize,
-) -> WriterResult<()> {
-    if partition_count == 0 {
-        return Err(WriterError::InvalidInput(
-            "partition_count must be greater than zero".to_owned(),
-        ));
-    }
-    let plan = ConversionPlan::build(input_dir, partition_count).await?;
-    let engine = plan.stats.choose_engine();
-    plan.materialize(output_dir, engine).await
+/// Storage engine preference for conversion operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionEnginePreference {
+    /// Let the library choose based on workload characteristics.
+    Adaptive,
+    /// Use synchronous I/O.
+    Sync,
+    /// Use Tokio async I/O.
+    Tokio,
+    /// Use Linux io_uring (Linux only).
+    #[cfg(target_os = "linux")]
+    IoUring,
 }
 
-/// Convert SafeTensors shards to ServerlessLLM format using synchronous I/O.
-#[inline]
-pub fn convert_safetensors_to_serverlessllm_sync(
-    input_dir: &str,
-    output_dir: &str,
-    partition_count: usize,
-) -> WriterResult<()> {
-    if partition_count == 0 {
-        return Err(WriterError::InvalidInput(
-            "partition_count must be greater than zero".to_owned(),
-        ));
-    }
-    let plan = ConversionPlan::build_sync(input_dir, partition_count)?;
-    plan.materialize_sync(output_dir)
+/// Orchestrates conversion from SafeTensors shards to ServerlessLLM format.
+///
+/// This is a configurable value object. Create it with `new()`, then optionally
+/// configure with builder methods, then call conversion methods.
+#[derive(Debug, Clone)]
+pub struct SafeTensorsToServerlessLLM {
+    input_dir: PathBuf,
+    output_dir: PathBuf,
+    partition_count: PartitionCount,
+    engine_preference: ConversionEnginePreference,
 }
 
-/// Convert SafeTensors shards to ServerlessLLM format using Tokio async I/O.
-#[inline]
-pub async fn convert_safetensors_to_serverlessllm_async(
-    input_dir: &str,
-    output_dir: &str,
-    partition_count: usize,
-) -> WriterResult<()> {
-    if partition_count == 0 {
-        return Err(WriterError::InvalidInput(
-            "partition_count must be greater than zero".to_owned(),
-        ));
-    }
-    let plan = ConversionPlan::build(input_dir, partition_count).await?;
-    plan.materialize_async(output_dir).await
-}
+impl SafeTensorsToServerlessLLM {
+    /// Create a new converter configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SaveError::InvalidInput` if `partition_count` is zero.
+    pub fn new(
+        input_dir: impl Into<PathBuf>,
+        output_dir: impl Into<PathBuf>,
+        partition_count: usize,
+    ) -> SaveResult<Self> {
+        let count = PartitionCount::new(partition_count).ok_or_else(|| {
+            SaveError::InvalidInput("partition_count must be greater than zero".to_owned())
+        })?;
 
-/// Convert SafeTensors shards to ServerlessLLM format using Linux io_uring I/O.
-#[cfg(target_os = "linux")]
-#[inline]
-pub fn convert_safetensors_to_serverlessllm_io_uring(
-    input_dir: &str,
-    output_dir: &str,
-    partition_count: usize,
-) -> WriterResult<()> {
-    if partition_count == 0 {
-        return Err(WriterError::InvalidInput(
-            "partition_count must be greater than zero".to_owned(),
-        ));
+        Ok(Self {
+            input_dir: input_dir.into(),
+            output_dir: output_dir.into(),
+            partition_count: count,
+            engine_preference: ConversionEnginePreference::Adaptive,
+        })
     }
-    let plan = ConversionPlan::build_sync(input_dir, partition_count)?;
-    plan.materialize_io_uring(output_dir)
+
+    /// Set the engine preference (builder pattern).
+    #[must_use]
+    pub fn with_engine(mut self, engine: ConversionEnginePreference) -> Self {
+        self.engine_preference = engine;
+        self
+    }
+
+    /// Set the partition count (builder pattern).
+    ///
+    /// # Errors
+    ///
+    /// Returns `SaveError::InvalidInput` if `count` is zero.
+    pub fn with_partition_count(mut self, count: usize) -> SaveResult<Self> {
+        self.partition_count = PartitionCount::new(count).ok_or_else(|| {
+            SaveError::InvalidInput("partition_count must be greater than zero".to_owned())
+        })?;
+        Ok(self)
+    }
+
+    /// Returns the configured input directory.
+    #[inline]
+    #[must_use]
+    pub fn input_dir(&self) -> &Path {
+        &self.input_dir
+    }
+
+    /// Returns the configured output directory.
+    #[inline]
+    #[must_use]
+    pub fn output_dir(&self) -> &Path {
+        &self.output_dir
+    }
+
+    /// Returns the configured partition count.
+    #[inline]
+    #[must_use]
+    pub fn partition_count(&self) -> PartitionCount {
+        self.partition_count
+    }
+
+    /// Returns the configured engine preference.
+    #[inline]
+    #[must_use]
+    pub fn engine_preference(&self) -> ConversionEnginePreference {
+        self.engine_preference
+    }
+
+    /// Build a conversion plan without executing it.
+    pub fn plan(&self) -> SaveResult<ConversionPlan> {
+        ConversionPlan::build_sync(&self.input_dir, self.partition_count.as_usize())
+    }
+
+    /// Build a conversion plan asynchronously.
+    pub async fn plan_async(&self) -> SaveResult<ConversionPlan> {
+        ConversionPlan::build(&self.input_dir, self.partition_count.as_usize()).await
+    }
+
+    /// Execute conversion with the configured settings.
+    pub fn convert_sync(&self) -> SaveResult<()> {
+        let plan = self.plan()?;
+        // The sync path doesn't use engine selection - it always uses parallel sync I/O
+        plan.materialize_sync(&self.output_dir)
+    }
+
+    /// Execute conversion asynchronously with the configured settings.
+    pub async fn convert_async(&self) -> SaveResult<()> {
+        let plan = self.plan_async().await?;
+        let engine = match self.engine_preference {
+            ConversionEnginePreference::Adaptive => plan.stats.choose_engine(),
+            ConversionEnginePreference::Sync => ConversionEngine::Sync,
+            ConversionEnginePreference::Tokio => ConversionEngine::TokioAsync,
+            #[cfg(target_os = "linux")]
+            ConversionEnginePreference::IoUring => ConversionEngine::IoUring,
+        };
+        plan.materialize(&self.output_dir, engine).await
+    }
+
+    /// Convert using adaptive storage-engine choice.
+    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await")]
+    #[inline]
+    pub async fn convert(
+        input_dir: &str,
+        output_dir: &str,
+        partition_count: usize,
+    ) -> SaveResult<()> {
+        Self::new(input_dir, output_dir, partition_count)?.convert_async().await
+    }
+
+    /// Convert using synchronous I/O.
+    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()")]
+    #[inline]
+    pub fn convert_static(
+        input_dir: &str,
+        output_dir: &str,
+        partition_count: usize,
+    ) -> SaveResult<()> {
+        Self::new(input_dir, output_dir, partition_count)?
+            .with_engine(ConversionEnginePreference::Sync)
+            .convert_sync()
+    }
+
+    /// Convert using Tokio async I/O.
+    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await")]
+    #[inline]
+    pub async fn convert_static_async(
+        input_dir: &str,
+        output_dir: &str,
+        partition_count: usize,
+    ) -> SaveResult<()> {
+        Self::new(input_dir, output_dir, partition_count)?
+            .with_engine(ConversionEnginePreference::Tokio)
+            .convert_async()
+            .await
+    }
+
+    /// Convert using Linux io_uring I/O.
+    #[cfg(target_os = "linux")]
+    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()")]
+    #[inline]
+    pub fn convert_static_io_uring(
+        input_dir: &str,
+        output_dir: &str,
+        partition_count: usize,
+    ) -> SaveResult<()> {
+        Self::new(input_dir, output_dir, partition_count)?
+            .with_engine(ConversionEnginePreference::IoUring)
+            .convert_sync()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,36 +216,18 @@ pub fn convert_safetensors_to_serverlessllm_io_uring(
 #[derive(Debug, Clone)]
 pub struct TensorSource {
     pub name: String,
-    pub shard_id: usize,
+    pub shard_id: ShardId,
     pub shard_path: PathBuf,
     pub source_offset: u64,
     pub size: usize,
     pub shape: Vec<usize>,
     pub stride: Vec<usize>,
-    pub dtype: String,
+    pub dtype: Dtype,
 }
 
 impl TensorSource {
-    fn map_dtype(dtype: safetensors::Dtype) -> WriterResult<&'static str> {
-        match dtype {
-            safetensors::Dtype::F32 => Ok("torch.float32"),
-            safetensors::Dtype::F16 => Ok("torch.float16"),
-            safetensors::Dtype::BF16 => Ok("torch.bfloat16"),
-            safetensors::Dtype::F64 => Ok("torch.float64"),
-            safetensors::Dtype::I32 => Ok("torch.int32"),
-            safetensors::Dtype::I16 => Ok("torch.int16"),
-            safetensors::Dtype::I8 => Ok("torch.int8"),
-            safetensors::Dtype::I64 => Ok("torch.int64"),
-            safetensors::Dtype::U32 => Ok("torch.uint32"),
-            safetensors::Dtype::U16 => Ok("torch.uint16"),
-            safetensors::Dtype::U8 => Ok("torch.uint8"),
-            safetensors::Dtype::U64 => Ok("torch.uint64"),
-            safetensors::Dtype::BOOL => Ok("torch.bool"),
-            _ => Err(WriterError::InvalidInput(format!(
-                "unsupported dtype: {:?}",
-                dtype
-            ))),
-        }
+    fn map_dtype(dtype: safetensors::Dtype) -> SaveResult<Dtype> {
+        Ok(Dtype::from(dtype))
     }
 
     fn contiguous_stride(shape: &[usize]) -> Vec<usize> {
@@ -154,10 +248,10 @@ impl TensorSource {
 /// A single copy operation from source range to destination range.
 #[derive(Debug, Clone)]
 pub struct CopyOp {
-    pub shard_id: usize,
+    pub shard_id: ShardId,
     pub shard_path: PathBuf,
     pub source_offset: u64,
-    pub dest_partition: usize,
+    pub dest_partition: PartitionId,
     pub dest_offset: u64,
     pub size: usize,
 }
@@ -225,45 +319,43 @@ pub struct ConversionPlan {
 impl ConversionPlan {
     // -- Construction --------------------------------------------------------
 
-    async fn build(input_dir: &str, partition_count: usize) -> WriterResult<Self> {
-        let input_dir = Path::new(input_dir);
+    async fn build(input_dir: &Path, partition_count: usize) -> SaveResult<Self> {
         let shard_paths = Self::discover_shards(input_dir)?;
         Self::validate_index_manifest(input_dir, &shard_paths)?;
         let tensors = Self::scan_shards_mmap(&shard_paths)?;
         Self::from_tensors(tensors, partition_count)
     }
 
-    fn build_sync(input_dir: &str, partition_count: usize) -> WriterResult<Self> {
-        let input_dir = Path::new(input_dir);
+    fn build_sync(input_dir: &Path, partition_count: usize) -> SaveResult<Self> {
         let shard_paths = Self::discover_shards(input_dir)?;
         Self::validate_index_manifest(input_dir, &shard_paths)?;
         let tensors = Self::scan_shards_mmap(&shard_paths)?;
         Self::from_tensors(tensors, partition_count)
     }
 
-    fn from_tensors(mut tensors: Vec<TensorSource>, partition_count: usize) -> WriterResult<Self> {
+    fn from_tensors(mut tensors: Vec<TensorSource>, partition_count: usize) -> SaveResult<Self> {
         if tensors.is_empty() {
-            return Err(WriterError::InvalidInput(
+            return Err(SaveError::InvalidInput(
                 "no tensors found in input directory".to_owned(),
             ));
         }
 
         let shard_count = tensors
             .iter()
-            .map(|t| t.shard_id)
+            .map(|t| t.shard_id.as_usize())
             .max()
             .map(|m| m + 1)
             .unwrap_or(1);
 
         let mut shard_sizes: Vec<u64> = vec![0; shard_count];
         for t in &tensors {
-            shard_sizes[t.shard_id] += t.size as u64;
+            shard_sizes[t.shard_id.as_usize()] += t.size as u64;
         }
 
         tensors.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 
         let mut partition_sizes: Vec<u64> = vec![0; partition_count];
-        let mut partition_shards: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); partition_count];
+        let mut partition_shards: Vec<BTreeSet<ShardId>> = vec![BTreeSet::new(); partition_count];
         let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
         let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
 
@@ -284,23 +376,21 @@ impl ConversionPlan {
             partition_shards[best_partition].insert(tensor.shard_id);
 
             let size_u64 = tensor.size as u64;
-            index.insert(
-                tensor.name.clone(),
-                TensorWriteEntry {
-                    offset,
-                    size: size_u64,
-                    shape: tensor.shape.clone(),
-                    stride: tensor.stride.clone(),
-                    dtype: tensor.dtype.clone(),
-                    partition_id: best_partition,
-                },
-            );
+            let entry = TensorWriteEntry::new(
+                offset,
+                size_u64,
+                tensor.shape.clone(),
+                tensor.stride.clone(),
+                tensor.dtype,
+                PartitionId::new(best_partition),
+            )?;
+            index.insert(tensor.name.clone(), entry);
 
             copy_ops.push(CopyOp {
                 shard_id: tensor.shard_id,
                 shard_path: tensor.shard_path,
                 source_offset: tensor.source_offset,
-                dest_partition: best_partition,
+                dest_partition: PartitionId::new(best_partition),
                 dest_offset: offset,
                 size: tensor.size,
             });
@@ -361,17 +451,17 @@ impl ConversionPlan {
 
     // -- Shard discovery ----------------------------------------------------
 
-    fn discover_shards(input_dir: &Path) -> WriterResult<Vec<PathBuf>> {
+    fn discover_shards(input_dir: &Path) -> SaveResult<Vec<PathBuf>> {
         if !input_dir.is_dir() {
-            return Err(WriterError::InvalidInput(format!(
+            return Err(SaveError::InvalidInput(format!(
                 "input path is not a directory: {}",
                 input_dir.display()
             )));
         }
 
         let mut shards = Vec::new();
-        for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
-            let entry = entry.map_err(WriterError::from)?;
+        for entry in std::fs::read_dir(input_dir).map_err(SaveError::from)? {
+            let entry = entry.map_err(SaveError::from)?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -387,7 +477,7 @@ impl ConversionPlan {
         shards.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
         if shards.is_empty() {
-            return Err(WriterError::InvalidInput(format!(
+            return Err(SaveError::InvalidInput(format!(
                 "no .safetensors files found in {}",
                 input_dir.display()
             )));
@@ -396,10 +486,10 @@ impl ConversionPlan {
         Ok(shards)
     }
 
-    fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> WriterResult<()> {
+    fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> SaveResult<()> {
         let mut index_files = Vec::new();
-        for entry in std::fs::read_dir(input_dir).map_err(WriterError::from)? {
-            let entry = entry.map_err(WriterError::from)?;
+        for entry in std::fs::read_dir(input_dir).map_err(SaveError::from)? {
+            let entry = entry.map_err(SaveError::from)?;
             let path = entry.path();
             if path
                 .file_name()
@@ -424,9 +514,9 @@ impl ConversionPlan {
             .collect();
 
         for index_path in index_files {
-            let bytes = std::fs::read(&index_path).map_err(WriterError::from)?;
+            let bytes = std::fs::read(&index_path).map_err(SaveError::from)?;
             let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-                WriterError::InvalidInput(format!(
+                SaveError::InvalidInput(format!(
                     "failed to parse index manifest {}: {e}",
                     index_path.display()
                 ))
@@ -435,7 +525,7 @@ impl ConversionPlan {
                 .get("weight_map")
                 .and_then(|value| value.as_object())
                 .ok_or_else(|| {
-                    WriterError::InvalidInput(format!(
+                    SaveError::InvalidInput(format!(
                         "index manifest {} is missing weight_map",
                         index_path.display()
                     ))
@@ -447,7 +537,7 @@ impl ConversionPlan {
                 .collect();
 
             if referenced != shard_names {
-                return Err(WriterError::InvalidInput(format!(
+                return Err(SaveError::InvalidInput(format!(
                     "index manifest {} does not match discovered shard set",
                     index_path.display()
                 )));
@@ -459,41 +549,41 @@ impl ConversionPlan {
 
     // -- Shard scanning -----------------------------------------------------
 
-    fn scan_shards_mmap(shard_paths: &[PathBuf]) -> WriterResult<Vec<TensorSource>> {
+    fn scan_shards_mmap(shard_paths: &[PathBuf]) -> SaveResult<Vec<TensorSource>> {
         use memmap2::Mmap;
         use std::fs::File;
 
         let mut all_tensors = Vec::new();
         let mut seen_names = std::collections::BTreeSet::new();
 
-        for (shard_id, shard_path) in shard_paths.iter().enumerate() {
-            let file = File::open(shard_path).map_err(WriterError::from)?;
-            let mmap = unsafe { Mmap::map(&file).map_err(WriterError::from)? };
+        for (i, shard_path) in shard_paths.iter().enumerate() {
+            let file = File::open(shard_path).map_err(SaveError::from)?;
+            let mmap = unsafe { Mmap::map(&file).map_err(SaveError::from)? };
             let model = SafeTensors::deserialize(&mmap)
-                .map_err(|e| WriterError::Io(std::io::Error::other(e.to_string())))?;
+                .map_err(|e| SaveError::Io(std::io::Error::other(e.to_string())))?;
 
             for name in model.names() {
                 if !seen_names.insert(name.to_owned()) {
-                    return Err(WriterError::InvalidInput(format!(
+                    return Err(SaveError::InvalidInput(format!(
                         "duplicate tensor name across shards: {name}"
                     )));
                 }
 
                 let tensor = model
                     .tensor(name)
-                    .map_err(|e| WriterError::InvalidInput(e.to_string()))?;
+                    .map_err(|e| SaveError::InvalidInput(e.to_string()))?;
                 let view = tensor.data();
                 let offset = view.as_ptr() as usize - mmap.as_ptr() as usize;
 
                 all_tensors.push(TensorSource {
                     name: name.to_owned(),
-                    shard_id,
+                    shard_id: ShardId::new(i),
                     shard_path: shard_path.clone(),
                     source_offset: offset as u64,
                     size: view.len(),
                     shape: tensor.shape().to_vec(),
                     stride: TensorSource::contiguous_stride(tensor.shape()),
-                    dtype: TensorSource::map_dtype(tensor.dtype())?.to_owned(),
+                    dtype: TensorSource::map_dtype(tensor.dtype())?,
                 });
             }
         }
@@ -503,8 +593,7 @@ impl ConversionPlan {
 
     // -- Materialization ----------------------------------------------------
 
-    async fn materialize(&self, output_dir: &str, engine: ConversionEngine) -> WriterResult<()> {
-        let output_dir = Path::new(output_dir);
+    async fn materialize(&self, output_dir: &Path, engine: ConversionEngine) -> SaveResult<()> {
         tokio::fs::create_dir_all(output_dir).await?;
 
         match engine {
@@ -515,40 +604,35 @@ impl ConversionPlan {
         }
 
         let index_path = output_dir.join("tensor_index.json");
-        write_index(&index_path, &self.index).await?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
+        Tokio::new().write_file(&index_path, &index_bytes).await.map_err(SaveError::from)?;
+        Tokio::new().sync_all(&index_path).await.map_err(SaveError::from)?;
 
         Ok(())
     }
 
-    async fn materialize_async(&self, output_dir: &str) -> WriterResult<()> {
-        let output_dir = Path::new(output_dir);
-        tokio::fs::create_dir_all(output_dir).await?;
-        self.materialize_async_inner(output_dir).await?;
-        let index_path = output_dir.join("tensor_index.json");
-        write_index(&index_path, &self.index).await?;
-        Ok(())
-    }
-
-    fn materialize_sync(&self, output_dir: &str) -> WriterResult<()> {
-        let output_dir = Path::new(output_dir);
+    fn materialize_sync(&self, output_dir: &Path) -> SaveResult<()> {
         std::fs::create_dir_all(output_dir)?;
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
-        write_index_sync(&index_path, &self.index)?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
+        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
+        Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
 
     #[cfg(target_os = "linux")]
-    fn materialize_io_uring(&self, output_dir: &str) -> WriterResult<()> {
-        let output_dir = Path::new(output_dir);
+    fn materialize_io_uring(&self, output_dir: &Path) -> SaveResult<()> {
         std::fs::create_dir_all(output_dir)?;
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
-        write_index_sync(&index_path, &self.index)?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
+        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
+        Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
 
-    async fn materialize_async_inner(&self, output_dir: &Path) -> WriterResult<()> {
+    async fn materialize_async_inner(&self, output_dir: &Path) -> SaveResult<()> {
         let partitions = self.group_by_partition();
         let futs: Vec<_> = partitions
             .into_iter()
@@ -561,7 +645,7 @@ impl ConversionPlan {
         Ok(())
     }
 
-    fn materialize_sync_parallel(&self, output_dir: &Path) -> WriterResult<()> {
+    fn materialize_sync_parallel(&self, output_dir: &Path) -> SaveResult<()> {
         let partitions = self.group_by_partition();
         partitions
             .into_par_iter()
@@ -570,8 +654,8 @@ impl ConversionPlan {
             })
     }
 
-    fn group_by_partition(&self) -> Vec<(usize, Vec<&CopyOp>)> {
-        let mut by_partition: HashMap<usize, Vec<&CopyOp>> = HashMap::new();
+    fn group_by_partition(&self) -> Vec<(PartitionId, Vec<&CopyOp>)> {
+        let mut by_partition: HashMap<PartitionId, Vec<&CopyOp>> = HashMap::new();
         for op in &self.copy_ops {
             by_partition.entry(op.dest_partition).or_default().push(op);
         }
@@ -580,10 +664,10 @@ impl ConversionPlan {
 
     async fn write_partition_async(
         output_dir: &Path,
-        partition_id: usize,
+        partition_id: PartitionId,
         ops: &[&CopyOp],
-    ) -> WriterResult<()> {
-        let path = output_dir.join(format!("tensor.data_{}", partition_id));
+    ) -> SaveResult<()> {
+        let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = Tokio::new();
 
@@ -596,7 +680,7 @@ impl ConversionPlan {
                     ByteRange::from_offset_len(op.source_offset, op.size)?,
                 )
                 .await
-                .map_err(WriterError::from)?;
+                .map_err(SaveError::from)?;
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
@@ -607,16 +691,16 @@ impl ConversionPlan {
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
             .await
-            .map_err(WriterError::from)?;
-        engine.sync_all(&path).await.map_err(WriterError::from)
+            .map_err(SaveError::from)?;
+        engine.sync_all(&path).await.map_err(SaveError::from)
     }
 
     fn write_partition_sync(
         output_dir: &Path,
-        partition_id: usize,
+        partition_id: PartitionId,
         ops: &[&CopyOp],
-    ) -> WriterResult<()> {
-        let path = output_dir.join(format!("tensor.data_{}", partition_id));
+    ) -> SaveResult<()> {
+        let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
         let engine = Sync::new();
 
@@ -628,7 +712,7 @@ impl ConversionPlan {
                     &op.shard_path,
                     ByteRange::from_offset_len(op.source_offset, op.size)?,
                 )
-                .map_err(WriterError::from)?;
+                .map_err(SaveError::from)?;
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
@@ -638,14 +722,16 @@ impl ConversionPlan {
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
-            .map_err(WriterError::from)?;
-        engine.sync_all(&path).map_err(WriterError::from)
+            .map_err(SaveError::from)?;
+        engine.sync_all(&path).map_err(SaveError::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::traits::Checkpoint as _;
+    use crate::formats::Backend;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
@@ -667,26 +753,18 @@ mod tests {
     fn convert_rejects_zero_partitions() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = convert_safetensors_to_serverlessllm_sync(
-            tmp.path().to_str().unwrap(),
-            out.to_str().unwrap(),
-            0,
-        )
-        .unwrap_err();
-        assert!(matches!(err, WriterError::InvalidInput(_)));
+        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
+            .unwrap_err();
+        assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
     #[test]
     fn convert_rejects_empty_directory() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = convert_safetensors_to_serverlessllm_sync(
-            tmp.path().to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .unwrap_err();
-        assert!(matches!(err, WriterError::InvalidInput(_)));
+        let converter = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 2).unwrap();
+        let err = converter.convert_sync().unwrap_err();
+        assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
     #[test]
@@ -695,7 +773,9 @@ mod tests {
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out");
 
-        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+        SafeTensorsToServerlessLLM::new(&src, &out, 2)
+            .unwrap()
+            .convert_sync()
             .expect("convert");
 
         assert!(out.exists());
@@ -723,7 +803,9 @@ mod tests {
         write_shard(&shard2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
-        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 4)
+        SafeTensorsToServerlessLLM::new(&src, &out, 4)
+            .unwrap()
+            .convert_sync()
             .expect("convert multi-shard");
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
@@ -750,14 +832,10 @@ mod tests {
         .unwrap();
 
         let out = tmp.path().join("out");
-        let err = convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .unwrap_err();
+        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let err = converter.convert_sync().unwrap_err();
 
-        assert!(matches!(err, WriterError::InvalidInput(_)));
+        assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
     #[test]
@@ -774,19 +852,21 @@ mod tests {
         write_shard(&shard, vec![("a", view_a), ("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_single");
-        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+        SafeTensorsToServerlessLLM::new(&src, &out, 2)
+            .unwrap()
+            .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
+        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
         assert_eq!(a_tensor.shape(), &[4]);
-        assert_eq!(a_tensor.dtype(), "torch.uint8");
+        assert_eq!(a_tensor.dtype(), Dtype::U8);
         assert_eq!(a_tensor.data(), a.as_slice());
 
         assert_eq!(b_tensor.shape(), &[2]);
-        assert_eq!(b_tensor.dtype(), "torch.float32");
+        assert_eq!(b_tensor.dtype(), Dtype::F32);
         assert_eq!(b_tensor.data(), b.as_slice());
     }
 
@@ -806,19 +886,21 @@ mod tests {
         write_shard(&shard2, vec![("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_multi");
-        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 4)
+        SafeTensorsToServerlessLLM::new(&src, &out, 4)
+            .unwrap()
+            .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Model::load_sync(&out).unwrap();
+        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
         assert_eq!(a_tensor.shape(), &[4]);
-        assert_eq!(a_tensor.dtype(), "torch.uint8");
+        assert_eq!(a_tensor.dtype(), Dtype::U8);
         assert_eq!(a_tensor.data(), a.as_slice());
 
         assert_eq!(b_tensor.shape(), &[4]);
-        assert_eq!(b_tensor.dtype(), "torch.uint8");
+        assert_eq!(b_tensor.dtype(), Dtype::U8);
         assert_eq!(b_tensor.data(), b.as_slice());
     }
 
@@ -833,42 +915,42 @@ mod tests {
     fn dtype_mapping_covers_common_types() {
         assert_eq!(
             TensorSource::map_dtype(safetensors::Dtype::F32).unwrap(),
-            "torch.float32"
+            Dtype::F32
         );
         assert_eq!(
             TensorSource::map_dtype(safetensors::Dtype::F16).unwrap(),
-            "torch.float16"
+            Dtype::F16
         );
         assert_eq!(
             TensorSource::map_dtype(safetensors::Dtype::BF16).unwrap(),
-            "torch.bfloat16"
+            Dtype::Bf16
         );
         assert_eq!(
             TensorSource::map_dtype(safetensors::Dtype::I64).unwrap(),
-            "torch.int64"
+            Dtype::I64
         );
         assert_eq!(
             TensorSource::map_dtype(safetensors::Dtype::U8).unwrap(),
-            "torch.uint8"
+            Dtype::U8
         );
     }
 
     #[test]
     fn dtype_mapping_exhaustive() {
         let dtypes = [
-            (safetensors::Dtype::F32, "torch.float32"),
-            (safetensors::Dtype::F16, "torch.float16"),
-            (safetensors::Dtype::BF16, "torch.bfloat16"),
-            (safetensors::Dtype::F64, "torch.float64"),
-            (safetensors::Dtype::I32, "torch.int32"),
-            (safetensors::Dtype::I16, "torch.int16"),
-            (safetensors::Dtype::I8, "torch.int8"),
-            (safetensors::Dtype::I64, "torch.int64"),
-            (safetensors::Dtype::U32, "torch.uint32"),
-            (safetensors::Dtype::U16, "torch.uint16"),
-            (safetensors::Dtype::U8, "torch.uint8"),
-            (safetensors::Dtype::U64, "torch.uint64"),
-            (safetensors::Dtype::BOOL, "torch.bool"),
+            (safetensors::Dtype::F32, Dtype::F32),
+            (safetensors::Dtype::F16, Dtype::F16),
+            (safetensors::Dtype::BF16, Dtype::Bf16),
+            (safetensors::Dtype::F64, Dtype::F64),
+            (safetensors::Dtype::I32, Dtype::I32),
+            (safetensors::Dtype::I16, Dtype::I16),
+            (safetensors::Dtype::I8, Dtype::I8),
+            (safetensors::Dtype::I64, Dtype::I64),
+            (safetensors::Dtype::U32, Dtype::U32),
+            (safetensors::Dtype::U16, Dtype::U16),
+            (safetensors::Dtype::U8, Dtype::U8),
+            (safetensors::Dtype::U64, Dtype::U64),
+            (safetensors::Dtype::BOOL, Dtype::Bool),
         ];
         for (dt, expected) in &dtypes {
             assert_eq!(TensorSource::map_dtype(*dt).unwrap(), *expected);
@@ -895,13 +977,11 @@ mod tests {
         let out = tmp.path().join("out_async");
 
         crate::test_utils::run_async(async {
-            convert_safetensors_to_serverlessllm_async(
-                src.to_str().unwrap(),
-                out.to_str().unwrap(),
-                1,
-            )
-            .await
-            .expect("convert async");
+            SafeTensorsToServerlessLLM::new(&src, &out, 1)
+                .unwrap()
+                .convert_async()
+                .await
+                .expect("convert async");
         });
 
         assert!(out.join("tensor_index.json").exists());
@@ -913,14 +993,9 @@ mod tests {
         let out = tmp.path().join("out_async_zero");
 
         crate::test_utils::run_async(async {
-            let err = convert_safetensors_to_serverlessllm_async(
-                tmp.path().to_str().unwrap(),
-                out.to_str().unwrap(),
-                0,
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(err, WriterError::InvalidInput(_)));
+            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
+                .unwrap_err();
+            assert!(matches!(err, SaveError::InvalidInput(_)));
         });
     }
 
@@ -931,7 +1006,9 @@ mod tests {
         let out = tmp.path().join("out_default");
 
         crate::test_utils::run_async(async {
-            convert_safetensors_to_serverlessllm(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+            SafeTensorsToServerlessLLM::new(&src, &out, 2)
+                .unwrap()
+                .convert_async()
                 .await
                 .expect("convert default");
         });
@@ -1013,13 +1090,9 @@ mod tests {
         write_shard(&shard2, vec![("same_name", view2)]);
 
         let out = tmp.path().join("out_dup");
-        let err = convert_safetensors_to_serverlessllm_sync(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            2,
-        )
-        .unwrap_err();
-        assert!(matches!(err, WriterError::InvalidInput(_)));
+        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let err = converter.convert_sync().unwrap_err();
+        assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
     #[test]
@@ -1039,7 +1112,9 @@ mod tests {
         write_shard(&shard, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
-        convert_safetensors_to_serverlessllm_sync(src.to_str().unwrap(), out.to_str().unwrap(), 2)
+        SafeTensorsToServerlessLLM::new(&src, &out, 2)
+            .unwrap()
+            .convert_sync()
             .unwrap();
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();

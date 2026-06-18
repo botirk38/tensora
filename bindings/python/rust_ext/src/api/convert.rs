@@ -12,10 +12,7 @@ pub fn convert_safetensors_to_serverlessllm(
     output_dir: PathBuf,
     partition_count: usize,
 ) -> PyResult<()> {
-    tensora::convert_safetensors_to_serverlessllm_sync(
-        input_dir.to_string_lossy().as_ref(),
-        output_dir.to_string_lossy().as_ref(),
-        partition_count,
-    )
-    .map_err(map_writer_error)
+    let converter = tensora::SafeTensorsToServerlessLLM::new(&input_dir, &output_dir, partition_count)
+        .map_err(map_writer_error)?;
+    converter.convert_sync().map_err(map_writer_error)
 }

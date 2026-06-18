@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process;
 
 fn default_partition_count(input_dir: &str) -> usize {
@@ -31,7 +32,8 @@ fn default_partition_count(input_dir: &str) -> usize {
         eprintln!("Error: no .safetensors files found in {input_dir}");
         process::exit(1);
     }
-    tensora::recommended_partition_count(total)
+    let sizing = tensora::PartitionSizing::default_target();
+    sizing.recommended_count(total).as_usize()
 }
 
 #[derive(clap::Parser, Debug)]
@@ -83,36 +85,32 @@ fn main() {
     println!("  Partitions: {}", partition_count);
     println!("  Engine: {:?}", args.engine);
 
+    // Create the converter entity with the requested engine preference
+    let converter = tensora::SafeTensorsToServerlessLLM::new(
+        Path::new(&args.input_dir),
+        Path::new(&args.output_dir),
+        partition_count,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Error: Failed to create converter: {e}");
+        std::process::exit(1);
+    });
+
+    let engine_preference = match args.engine {
+        Engine::Default => tensora::ConversionEnginePreference::Adaptive,
+        Engine::Sync => tensora::ConversionEnginePreference::Sync,
+        Engine::Tokio => tensora::ConversionEnginePreference::Tokio,
+        #[cfg(target_os = "linux")]
+        Engine::IoUring => tensora::ConversionEnginePreference::IoUring,
+    };
+
+    let converter = converter.with_engine(engine_preference);
+
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(async {
         match args.engine {
-            Engine::Default => {
-                tensora::convert_safetensors_to_serverlessllm(
-                    &args.input_dir,
-                    &args.output_dir,
-                    partition_count,
-                )
-                .await
-            }
-            Engine::Sync => tensora::convert_safetensors_to_serverlessllm_sync(
-                &args.input_dir,
-                &args.output_dir,
-                partition_count,
-            ),
-            Engine::Tokio => {
-                tensora::convert_safetensors_to_serverlessllm_async(
-                    &args.input_dir,
-                    &args.output_dir,
-                    partition_count,
-                )
-                .await
-            }
-            #[cfg(target_os = "linux")]
-            Engine::IoUring => tensora::convert_safetensors_to_serverlessllm_io_uring(
-                &args.input_dir,
-                &args.output_dir,
-                partition_count,
-            ),
+            Engine::Sync => converter.convert_sync(),
+            _ => converter.convert_async().await,
         }
     });
 

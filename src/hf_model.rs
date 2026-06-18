@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use hf_hub::Repo;
 use hf_hub::api::sync::ApiBuilder;
 
-use crate::WriterError;
-use crate::recommended_partition_count;
+use crate::SaveError;
+use crate::PartitionSizing;
 
 /// Slug used for cache subdirectories (`org-name` lowercased).
 pub fn filesystem_slug(model_id: &str) -> String {
@@ -40,7 +40,7 @@ pub enum HfModelError {
 
     /// Conversion or validation.
     #[error("conversion: {0}")]
-    Convert(#[from] WriterError),
+    Convert(#[from] SaveError),
 
     /// User-facing message.
     #[error("{0}")]
@@ -123,21 +123,15 @@ pub fn ensure_serverlessllm_cache_dir(
             safetensors_dir.display()
         )));
     }
-    let partitions = recommended_partition_count(total);
-    if partitions == 0 {
-        return Err(HfModelError::Msg(
-            "partition count resolved to 0".to_string(),
-        ));
-    }
+    let sizing = PartitionSizing::default_target();
+    let partitions = sizing.recommended_count(total);
 
-    crate::convert_safetensors_to_serverlessllm_sync(
-        safetensors_dir
-            .to_str()
-            .ok_or_else(|| HfModelError::Msg("safetensors path is not UTF-8".to_string()))?,
-        out.to_str()
-            .ok_or_else(|| HfModelError::Msg("output path is not UTF-8".to_string()))?,
-        partitions,
+    let converter = crate::SafeTensorsToServerlessLLM::new(
+        safetensors_dir,
+        &out,
+        partitions.as_usize(),
     )?;
+    converter.convert_sync()?;
 
     Ok(out)
 }

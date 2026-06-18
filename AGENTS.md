@@ -17,7 +17,7 @@ cargo clippy --lib --locked -- -D warnings
 ## Key Conventions
 
 - **Rust edition:** 2024, minimum `rustc` 1.92
-- **Error handling:** Use `thiserror` for library errors; `ReaderError`/`WriterError` in `formats::error`
+- **Error handling:** Use `thiserror` for library errors; `LoadError`/`SaveError` in `formats::error`
 - **Async runtime:** Tokio (multi-thread) for all async paths
 - **Platform gating:** Use `#[cfg(target_os = "linux")]` for io_uring and O_DIRECT code
 - **No `unsafe`** outside of platform-specific I/O backend internals

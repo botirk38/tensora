@@ -12,6 +12,7 @@
 //! - [`ByteRange`] — validated half-open byte range `[start, end)`
 //! - [`FileRange`] — path plus byte range for batch reads
 //! - [`RangeRead`] — single result from a batch read
+//! - [`RequestIndex`] — typed index correlating batch-read results to submissions
 //! - [`WriteSlice`] — positioned write entry
 //!
 //! # Writing
@@ -122,9 +123,50 @@ impl<'a> FileRange<'a> {
     }
 }
 
+/// A type-safe index correlating a batch-read result back to its original submission slot.
+///
+/// Using a newtype instead of `usize` prevents accidentally treating a
+/// `request_index` as a byte offset or count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RequestIndex(usize);
+
+impl RequestIndex {
+    /// Create a `RequestIndex` from a raw `usize` position.
+    #[inline]
+    #[must_use]
+    pub const fn new(n: usize) -> Self {
+        Self(n)
+    }
+
+    /// Return the underlying index value.
+    #[inline]
+    #[must_use]
+    pub const fn as_usize(self) -> usize {
+        self.0
+    }
+}
+
+impl std::fmt::Display for RequestIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<usize> for RequestIndex {
+    fn from(n: usize) -> Self {
+        Self(n)
+    }
+}
+
+impl From<RequestIndex> for usize {
+    fn from(r: RequestIndex) -> Self {
+        r.0
+    }
+}
+
 #[derive(Debug)]
 pub struct RangeRead {
-    pub request_index: usize,
+    pub request_index: RequestIndex,
     pub range: ByteRange,
     pub bytes: Arc<[u8]>,
 }
@@ -384,7 +426,7 @@ mod tests {
         let bytes: Arc<[u8]> = Arc::from(vec![2u8, 3, 4]);
         let range = ByteRange::new(0, 3).unwrap();
         let result = RangeRead {
-            request_index: 0,
+            request_index: RequestIndex::new(0),
             range,
             bytes,
         };

@@ -15,7 +15,8 @@ fn bench_conversion_default(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let total_bytes = bench_util::safetensors_total_bytes(&st_dir);
     let input_dir = st_dir.to_str().unwrap().to_string();
-    let partition_count = tensora::recommended_partition_count(total_bytes).max(1);
+    let sizing = tensora::PartitionSizing::default_target();
+    let partition_count = sizing.recommended_count(total_bytes).as_usize().max(1);
 
     let mut group = c.benchmark_group("conversion_default");
     group.sample_size(10);
@@ -29,13 +30,13 @@ fn bench_conversion_default(c: &mut Criterion) {
             async move {
                 let tmp = TempDir::new().unwrap();
                 let out = tmp.path().to_str().unwrap().to_string();
-                tensora::convert_safetensors_to_serverlessllm(
-                    black_box(&input),
-                    &out,
+                let converter = tensora::SafeTensorsToServerlessLLM::new(
+                    std::path::Path::new(&input),
+                    std::path::Path::new(&out),
                     partition_count,
                 )
-                .await
                 .unwrap();
+                converter.convert_async().await.unwrap();
                 black_box(())
             }
         });
@@ -48,7 +49,8 @@ fn bench_conversion_sync(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let total_bytes = bench_util::safetensors_total_bytes(&st_dir);
     let input_dir = st_dir.to_str().unwrap().to_string();
-    let partition_count = tensora::recommended_partition_count(total_bytes).max(1);
+    let sizing = tensora::PartitionSizing::default_target();
+    let partition_count = sizing.recommended_count(total_bytes).as_usize().max(1);
 
     let mut group = c.benchmark_group("conversion_sync");
     group.sample_size(10);
@@ -59,12 +61,13 @@ fn bench_conversion_sync(c: &mut Criterion) {
         b.iter(|| {
             let tmp = TempDir::new().unwrap();
             let out = tmp.path().to_str().unwrap().to_string();
-            tensora::convert_safetensors_to_serverlessllm_sync(
-                black_box(&input_dir),
-                &out,
+            let converter = tensora::SafeTensorsToServerlessLLM::new(
+                std::path::Path::new(&input_dir),
+                std::path::Path::new(&out),
                 partition_count,
             )
             .unwrap();
+            converter.convert_sync().unwrap();
             black_box(())
         });
     });
@@ -76,7 +79,8 @@ fn bench_conversion_tokio(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let total_bytes = bench_util::safetensors_total_bytes(&st_dir);
     let input_dir = st_dir.to_str().unwrap().to_string();
-    let partition_count = tensora::recommended_partition_count(total_bytes).max(1);
+    let sizing = tensora::PartitionSizing::default_target();
+    let partition_count = sizing.recommended_count(total_bytes).as_usize().max(1);
 
     let mut group = c.benchmark_group("conversion_tokio");
     group.sample_size(10);
@@ -90,13 +94,13 @@ fn bench_conversion_tokio(c: &mut Criterion) {
             async move {
                 let tmp = TempDir::new().unwrap();
                 let out = tmp.path().to_str().unwrap().to_string();
-                tensora::convert_safetensors_to_serverlessllm_async(
-                    black_box(&input),
-                    &out,
+                let converter = tensora::SafeTensorsToServerlessLLM::new(
+                    std::path::Path::new(&input),
+                    std::path::Path::new(&out),
                     partition_count,
                 )
-                .await
                 .unwrap();
+                converter.convert_async().await.unwrap();
                 black_box(())
             }
         });
@@ -110,7 +114,8 @@ fn bench_conversion_io_uring(c: &mut Criterion) {
     let slug = bench_util::model_slug(&model_id);
     let total_bytes = bench_util::safetensors_total_bytes(&st_dir);
     let input_dir = st_dir.to_str().unwrap().to_string();
-    let partition_count = tensora::recommended_partition_count(total_bytes).max(1);
+    let sizing = tensora::PartitionSizing::default_target();
+    let partition_count = sizing.recommended_count(total_bytes).as_usize().max(1);
 
     let mut group = c.benchmark_group("conversion_io_uring");
     group.sample_size(10);
@@ -121,12 +126,14 @@ fn bench_conversion_io_uring(c: &mut Criterion) {
         b.iter(|| {
             let tmp = TempDir::new().unwrap();
             let out = tmp.path().to_str().unwrap().to_string();
-            tensora::convert_safetensors_to_serverlessllm_io_uring(
-                black_box(&input_dir),
-                &out,
+            let converter = tensora::SafeTensorsToServerlessLLM::new(
+                std::path::Path::new(&input_dir),
+                std::path::Path::new(&out),
                 partition_count,
             )
-            .unwrap();
+            .unwrap()
+            .with_engine(tensora::ConversionEnginePreference::IoUring);
+            converter.convert_sync().unwrap();
             black_box(())
         });
     });

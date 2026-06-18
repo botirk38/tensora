@@ -16,4 +16,5 @@
 //! ).await?;
 //! ```
 
+pub mod ids;
 pub mod safetensors_to_serverlessllm;
