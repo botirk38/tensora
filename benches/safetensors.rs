@@ -1,4 +1,4 @@
-//! SafeTensors benchmarks: all storage engines, tensor access patterns, and native baselines.
+//! SafeTensors benchmarks: all I/O backends, tensor access patterns, and native baselines.
 
 mod bench_util;
 
@@ -9,7 +9,7 @@ use tensora::formats::safetensors;
 use tensora::formats::traits::TensorView;
 
 // ---------------------------------------------------------------------------
-// Full-model load benchmarks (one per storage engine)
+// Full-model load benchmarks (one per I/O backend)
 // ---------------------------------------------------------------------------
 
 fn bench_default(c: &mut Criterion) {

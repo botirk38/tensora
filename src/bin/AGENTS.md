@@ -2,7 +2,7 @@
 
 ## Binaries
 
-- `profile` — performance measurement (cold/warm cache, all storage engines)
+- `profile` — performance measurement (cold/warm cache, all I/O backends)
 - `demo` — interactive demonstrations
 - `convert` — format conversion tool
 

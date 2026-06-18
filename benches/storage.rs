@@ -1,7 +1,7 @@
-//! Raw storage engine micro-benchmarks.
+//! Raw I/O backend micro-benchmarks.
 //!
 //! Isolates I/O layer performance from format parsing overhead by benchmarking
-//! `SyncStorage`, `TokioStorage`, `IoUringStorage`, and `MmapStorage` directly
+//! `Sync`, `Tokio`, `IoUring`, and `Mmap` directly
 //! on real shard files.
 
 mod bench_util;
@@ -11,11 +11,11 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
 #[cfg(target_os = "linux")]
-use tensora::storage::io_uring::IoUringStorage;
-use tensora::storage::mmap::MmapStorage;
-use tensora::storage::sync::SyncStorage;
-use tensora::storage::tokio::TokioStorage;
-use tensora::storage::{ByteRange, FileRange, MappableStorage, ReadableStorage};
+use tensora::io::io_uring::IoUring;
+use tensora::io::mmap::Mmap;
+use tensora::io::sync::Sync;
+use tensora::io::tokio::Tokio;
+use tensora::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo};
 
 // ---------------------------------------------------------------------------
 // Full-file load (single shard)
@@ -34,7 +34,7 @@ fn bench_sync_reader_load(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let reader = SyncStorage::new();
+            let reader = Sync::new();
             let data = reader.read_file(black_box(shard.as_path())).unwrap();
             black_box(data.len())
         });
@@ -58,7 +58,7 @@ fn bench_tokio_storage_load(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let path = shard.clone();
             async move {
-                let reader = TokioStorage::new();
+                let reader = Tokio::new();
                 let data = reader.read_file(black_box(path.as_path())).await.unwrap();
                 black_box(data.len())
             }
@@ -81,7 +81,7 @@ fn bench_io_uring_reader_load(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let reader = IoUringStorage::new();
+            let reader = IoUring::new();
             let data = reader.read_file(black_box(shard.as_path())).unwrap();
             black_box(data.len())
         });
@@ -106,7 +106,7 @@ fn bench_sync_reader_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load_batch", &slug), |b| {
         b.iter(|| {
-            let reader = SyncStorage::new();
+            let reader = Sync::new();
             let total_len: usize = black_box(&shards)
                 .iter()
                 .map(|path| reader.read_file(path.as_path()).unwrap().len())
@@ -133,7 +133,7 @@ fn bench_tokio_storage_batch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let paths = shards.clone();
             async move {
-                let reader = TokioStorage::new();
+                let reader = Tokio::new();
                 let mut total_len = 0usize;
                 for path in black_box(&paths) {
                     total_len += reader.read_file(path.as_path()).await.unwrap().len();
@@ -159,7 +159,7 @@ fn bench_io_uring_reader_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load_batch", &slug), |b| {
         b.iter(|| {
-            let reader = IoUringStorage::new();
+            let reader = IoUring::new();
             let total_len: usize = black_box(&shards)
                 .iter()
                 .map(|path| reader.read_file(path.as_path()).unwrap().len())
@@ -201,7 +201,7 @@ fn bench_sync_reader_range_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("range_batch", &slug), |b| {
         b.iter(|| {
-            let reader = SyncStorage::new();
+            let reader = Sync::new();
             let ranges: Vec<FileRange<'_>> = requests
                 .iter()
                 .map(|(path, offset, len)| {
@@ -232,7 +232,7 @@ fn bench_tokio_storage_range_batch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let reqs = requests.clone();
             async move {
-                let reader = TokioStorage::new();
+                let reader = Tokio::new();
                 let ranges: Vec<FileRange<'_>> = reqs
                     .iter()
                     .map(|(path, offset, len)| {
@@ -262,7 +262,7 @@ fn bench_io_uring_reader_range_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("range_batch", &slug), |b| {
         b.iter(|| {
-            let reader = IoUringStorage::new();
+            let reader = IoUring::new();
             let ranges: Vec<FileRange<'_>> = requests
                 .iter()
                 .map(|(path, offset, len)| {
@@ -293,7 +293,7 @@ fn bench_mmap_open_touch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("open_touch", &slug), |b| {
         b.iter(|| {
-            let storage = MmapStorage::new();
+            let storage = Mmap::new();
             let mmap = storage.map_file(black_box(shard.as_path())).unwrap();
             let data = mmap.as_ref();
             let page_size = 4096;

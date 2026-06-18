@@ -5,22 +5,22 @@ The storage refactor replaces legacy backend vocabulary and request-wrapper APIs
 ## Public API
 
 ```rust
-pub trait StorageEngine {
-    const KIND: StorageKind;
+pub trait Io {
+    const KIND: IoKind;
 
-    fn kind(&self) -> StorageKind;
-    fn availability() -> StorageAvailability
+    fn kind(&self) -> IoKind;
+    fn availability() -> IoAvailability
     where
         Self: Sized;
 }
 
-pub trait ReadableStorage: StorageEngine {
+pub trait BlockingIo: Io {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes>;
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes>;
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
 }
 
-pub trait WritableStorage: StorageEngine {
+pub trait BlockingIo: Io {
     fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()>;
     fn write_slices(&mut self, writes: &[WriteSlice<'_>]) -> IoResult<()>;
     fn set_len(&mut self, len: u64) -> IoResult<()>;
@@ -29,7 +29,7 @@ pub trait WritableStorage: StorageEngine {
     fn finish(self) -> IoResult<()>;
 }
 
-pub trait MappableStorage: StorageEngine {
+pub trait MmapIo: Io {
     fn map_file(&self, path: &Path) -> IoResult<MmapRegion>;
     fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<MmapRegion>;
 }
@@ -38,13 +38,13 @@ pub trait MappableStorage: StorageEngine {
 Tokio exposes inherent async methods and implements explicit async traits:
 
 ```rust
-pub trait AsyncReadableStorage: StorageEngine {
+pub trait AsyncIo: Io {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes>;
     async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes>;
     async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
 }
 
-pub trait AsyncWritableStorage: StorageEngine {
+pub trait AsyncIo: Io {
     async fn write_all_at(&mut self, offset: u64, data: &[u8]) -> IoResult<()>;
     async fn write_slices(&mut self, writes: &[WriteSlice<'_>]) -> IoResult<()>;
     async fn set_len(&mut self, len: u64) -> IoResult<()>;
@@ -65,12 +65,12 @@ pub trait AsyncWritableStorage: StorageEngine {
 
 ## Engine Shape
 
-| Engine           | StorageEngine | ReadableStorage | WritableStorage | MappableStorage |
+| Engine           | Io | BlockingIo | BlockingIo | MmapIo |
 |------------------|:-------------:|:---------------:|:---------------:|:---------------:|
-| `SyncStorage`    | ✓ | ✓ | via `SyncWriter` | — |
-| `TokioStorage`   | ✓ | async inherent + async trait | via `TokioWriter` | — |
-| `MmapStorage`    | ✓ | — | — | ✓ |
-| `IoUringStorage` | ✓ | ✓ | via `IoUringWriter` | — |
+| `Sync`    | ✓ | ✓ | via `SyncWriter` | — |
+| `Tokio`   | ✓ | async inherent + async trait | via `TokioWriter` | — |
+| `Mmap`    | ✓ | — | — | ✓ |
+| `IoUring` | ✓ | ✓ | via `IoUringWriter` | — |
 
 Concrete writer creation stays on writer types:
 
@@ -89,8 +89,8 @@ IoUringWriter::create(path, WriteOptions::create_or_truncate())?;
   - Linux O_DIRECT alignment/exact-read logic.
   - Linux chunked parallel full-file reads.
   - io_uring submit/wait and exact positioned I/O loops.
-- Tokio delegates blocking reads to `SyncStorage` instead of duplicating Linux O_DIRECT logic.
-- Storage engines handle raw I/O only and remain format-unaware.
+- Tokio delegates blocking reads to `Sync` instead of duplicating Linux O_DIRECT logic.
+- I/O backends handle raw I/O only and remain format-unaware.
 
 ## Verification
 

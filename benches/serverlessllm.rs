@@ -1,4 +1,4 @@
-//! ServerlessLLM benchmarks: all storage engines, tensor access patterns, mmap page-touch.
+//! ServerlessLLM benchmarks: all I/O backends, tensor access patterns, mmap page-touch.
 
 mod bench_util;
 
@@ -8,7 +8,7 @@ use std::time::Duration;
 use tensora::formats::serverlessllm;
 
 // ---------------------------------------------------------------------------
-// Full-model load benchmarks (one per storage engine)
+// Full-model load benchmarks (one per I/O backend)
 // ---------------------------------------------------------------------------
 
 fn bench_default(c: &mut Criterion) {

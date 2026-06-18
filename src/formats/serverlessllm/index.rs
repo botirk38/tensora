@@ -3,7 +3,8 @@
 //! Redesigned for compiled metadata - all partition info computed once at parse time.
 
 use crate::formats::error::{ReaderError, ReaderResult};
-use crate::storage::tokio::TokioStorage;
+use crate::io::AsyncIo;
+use crate::io::tokio::Tokio;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -206,7 +207,7 @@ impl Index {
 
     /// Load index from file asynchronously.
     pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let engine = TokioStorage::new();
+        let engine = Tokio::new();
         let data = engine.read_file(path.as_ref()).await?;
         Self::from_bytes(&data)
     }

@@ -21,7 +21,7 @@ export TENSORA_MODEL_ID=openai-community/gpt2
 
 cargo bench                        # All suites
 cargo bench --bench safetensors    # Single suite
-cargo bench -- sync                # Filter by storage engine name
+cargo bench -- sync                # Filter by I/O backend name
 ```
 
 ## Configuration

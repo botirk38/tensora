@@ -81,7 +81,7 @@ enum SafeTensorsCase {
     Mmap,
     /// Upstream safetensors crate baseline (std::fs::read + deserialize)
     HfNative,
-    /// Explicit io_uring storage engine (Linux only)
+    /// Explicit io_uring I/O backend (Linux only)
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -96,7 +96,7 @@ enum ServerlessLLMCase {
     Tokio,
     /// Memory-mapped open
     Mmap,
-    /// Explicit io_uring storage engine (Linux only)
+    /// Explicit io_uring I/O backend (Linux only)
     #[cfg(target_os = "linux")]
     IoUring,
 }
@@ -165,8 +165,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error::Error>> {
-    use tensora::storage::availability::{StorageAvailability, StorageCapabilities};
-    let capabilities = StorageCapabilities::probe();
+    use tensora::io::availability::{IoAvailability, IoCapabilities};
+    let capabilities = IoCapabilities::probe();
     match format {
         CapabilityFormat::Text => {
             for (kind, availability) in capabilities.iter() {
@@ -186,10 +186,10 @@ fn print_capabilities(format: CapabilityFormat) -> Result<(), Box<dyn std::error
             let mut entries = serde_json::Map::new();
             for (kind, availability) in capabilities.iter() {
                 let value = match availability {
-                    StorageAvailability::Available => serde_json::json!({
+                    IoAvailability::Available => serde_json::json!({
                         "available": true,
                     }),
-                    StorageAvailability::Unavailable { reason, details } => {
+                    IoAvailability::Unavailable { reason, details } => {
                         serde_json::json!({
                             "available": false,
                             "reason": reason.code(),

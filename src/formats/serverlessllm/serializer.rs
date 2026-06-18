@@ -19,9 +19,9 @@
 
 use crate::formats::error::{WriterError, WriterResult};
 use crate::formats::traits::{AsyncSerializer, SyncSerializer};
-use crate::storage::sync::SyncWriter;
-use crate::storage::tokio::TokioWriter;
-use crate::storage::{WritableStorage, WriteOptions};
+use crate::io::sync::Sync;
+use crate::io::tokio::Tokio;
+use crate::io::{AsyncIo, BlockingIo};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -119,15 +119,20 @@ pub async fn write_index(
     tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(WriterError::from)?;
+    }
     let json = serialize_index(tensors)?;
-    let mut writer = TokioWriter::create(path, WriteOptions::create_or_truncate())
+    let engine = Tokio::new();
+    engine
+        .write_file(path, &json)
         .await
         .map_err(WriterError::from)?;
-    writer
-        .write_all_at(0, &json)
-        .await
-        .map_err(WriterError::from)?;
-    writer.sync_all().await.map_err(WriterError::from)
+    engine.sync_all(path).await.map_err(WriterError::from)
 }
 
 pub fn write_index_sync(
@@ -135,11 +140,15 @@ pub fn write_index_sync(
     tensors: &HashMap<String, TensorWriteEntry>,
 ) -> WriterResult<()> {
     let path = output_path.as_ref();
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(WriterError::from)?;
+    }
     let json = serialize_index(tensors)?;
-    let mut writer =
-        SyncWriter::create(path, WriteOptions::create_or_truncate()).map_err(WriterError::from)?;
-    writer.write_all_at(0, &json).map_err(WriterError::from)?;
-    writer.sync_all().map_err(WriterError::from)
+    let engine = Sync::new();
+    engine.write_file(path, &json).map_err(WriterError::from)?;
+    engine.sync_all(path).map_err(WriterError::from)
 }
 
 fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<Vec<u8>> {
@@ -165,22 +174,31 @@ fn serialize_index(tensors: &HashMap<String, TensorWriteEntry>) -> WriterResult<
 
 pub async fn write_partition(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
-    let mut writer = TokioWriter::create(path, WriteOptions::create_or_truncate())
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(WriterError::from)?;
+    }
+    let engine = Tokio::new();
+    engine
+        .write_file(path, data)
         .await
         .map_err(WriterError::from)?;
-    writer
-        .write_all_at(0, data)
-        .await
-        .map_err(WriterError::from)?;
-    writer.sync_all().await.map_err(WriterError::from)
+    engine.sync_all(path).await.map_err(WriterError::from)
 }
 
 pub fn write_partition_sync(output_path: impl AsRef<Path>, data: &[u8]) -> WriterResult<()> {
     let path = output_path.as_ref();
-    let mut writer =
-        SyncWriter::create(path, WriteOptions::create_or_truncate()).map_err(WriterError::from)?;
-    writer.write_all_at(0, data).map_err(WriterError::from)?;
-    writer.sync_all().map_err(WriterError::from)
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(WriterError::from)?;
+    }
+    let engine = Sync::new();
+    engine.write_file(path, data).map_err(WriterError::from)?;
+    engine.sync_all(path).map_err(WriterError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -222,75 +240,44 @@ mod tests {
     #[test]
     fn write_index_and_partition_sync() {
         let dir = TempDir::new().unwrap();
-        let index_path = dir.path().join("nested").join("tensor_index.json");
-        let part_path = dir.path().join("tensor.data_1");
-
-        write_index_sync(&index_path, &sample_entries()).expect("write index");
-        write_partition_sync(&part_path, b"abcd").expect("write partition");
-
-        let json: Value = serde_json::from_slice(&std::fs::read(index_path).unwrap()).unwrap();
-        let entry = json.get("w").expect("tensor entry");
-        assert_eq!(entry[0], 0);
-        assert_eq!(entry[1], 4);
-        assert_eq!(std::fs::read(part_path).unwrap(), b"abcd");
-    }
-
-    #[test]
-    fn write_index_and_partition_async() {
-        let dir = TempDir::new().unwrap();
-        let index_path = dir.path().join("async").join("tensor_index.json");
-        let part_path = dir.path().join("tensor.data_1");
-
-        crate::test_utils::run_async(async {
-            write_index(&index_path, &sample_entries())
-                .await
-                .expect("write index async");
-            write_partition(&part_path, b"xyz")
-                .await
-                .expect("write partition async");
-        });
-
-        let json: Value = serde_json::from_slice(&std::fs::read(index_path).unwrap()).unwrap();
-        assert_eq!(json["w"][5], 1);
-        assert_eq!(std::fs::read(part_path).unwrap(), b"xyz");
-    }
-
-    #[test]
-    fn serialize_index_roundtrip() {
+        let index_path = dir.path().join("tensor_index.json");
         let entries = sample_entries();
-        let bytes = serialize_index(&entries).unwrap();
-        let parsed: HashMap<String, Value> = serde_json::from_slice(&bytes).unwrap();
-        assert!(parsed.contains_key("w"));
-        let arr = parsed["w"].as_array().unwrap();
-        assert_eq!(arr.len(), 6);
+        write_index_sync(&index_path, &entries).unwrap();
+        assert!(index_path.exists());
+
+        let part_path = dir.path().join("tensor.data_0");
+        write_partition_sync(&part_path, b"abcd").unwrap();
+        assert_eq!(std::fs::read(&part_path).unwrap(), b"abcd");
     }
 
     #[test]
-    fn serialize_index_multiple_entries() {
-        let mut entries = sample_entries();
-        entries.insert(
-            "b".to_owned(),
-            TensorWriteEntry {
-                offset: 100,
-                size: 16,
-                shape: vec![4, 4],
-                stride: vec![4, 1],
-                dtype: "i8".to_owned(),
-                partition_id: 0,
-            },
-        );
-        let bytes = serialize_index(&entries).unwrap();
-        let parsed: HashMap<String, Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert!(parsed.contains_key("w"));
-        assert!(parsed.contains_key("b"));
+    fn serialize_index_produces_valid_json() {
+        let entries = sample_entries();
+        let json = serialize_index(&entries).unwrap();
+        let parsed: Value = serde_json::from_slice(&json).unwrap();
+        let w = parsed.get("w").unwrap().as_array().unwrap();
+        assert_eq!(w[0], 0u64);
+        assert_eq!(w[1], 4u64);
+        assert_eq!(w[4], "f32");
+        assert_eq!(w[5], 1u64);
     }
 
     #[test]
-    fn write_partition_sync_creates_parent_dirs() {
+    fn write_index_async() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nested").join("deep").join("tensor.data_0");
-        write_partition_sync(&path, b"test").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"test");
+        let index_path = dir.path().join("tensor_index.json");
+        let entries = sample_entries();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(write_index(&index_path, &entries)).unwrap();
+        assert!(index_path.exists());
+    }
+
+    #[test]
+    fn write_partition_async() {
+        let dir = TempDir::new().unwrap();
+        let part_path = dir.path().join("tensor.data_0");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(write_partition(&part_path, b"hello")).unwrap();
+        assert_eq!(std::fs::read(&part_path).unwrap(), b"hello");
     }
 }

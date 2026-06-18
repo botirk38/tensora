@@ -59,9 +59,6 @@ impl AlignedBuffer {
         })
     }
 
-    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr.as_ptr()
-    }
     pub fn as_slice(&self) -> &[u8] {
         // SAFETY: ptr is valid for at least self.len bytes, and set_len prevents
         // exposing bytes beyond the allocated layout size.
@@ -71,6 +68,9 @@ impl AlignedBuffer {
         // SAFETY: &mut self guarantees unique access, and ptr is valid for
         // self.len bytes by the same invariant as as_slice.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
     }
     pub fn set_len(&mut self, len: usize) {
         assert!(len <= self.layout.size());
@@ -221,7 +221,7 @@ pub enum OwnedBytes {
     Shared(Arc<[u8]>),
     /// A memory-mapped file region (zero-copy, read-only).
     Mmap(MmapRegion),
-    /// A plain heap-allocated buffer for storage engines that need mutable storage.
+    /// A plain heap-allocated buffer for I/O backends that need mutable storage.
     Vec(Vec<u8>),
 }
 

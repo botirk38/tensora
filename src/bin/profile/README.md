@@ -1,6 +1,6 @@
 # profile
 
-Performance measurement harness for Tensora storage engines.
+Performance measurement harness for Tensora I/O backends.
 
 ## Usage
 
@@ -9,7 +9,7 @@ cargo run --release --bin profile -- <FORMAT> <ENGINE> --model-id <HF/MODEL> [--
 ```
 
 **Formats:** `safetensors`, `serverlessllm`
-**Storage engines:** `default`, `sync`, `tokio`, `mmap`, `io-uring` (Linux only)
+**I/O backends:** `default`, `sync`, `tokio`, `mmap`, `io-uring` (Linux only)
 
 ## Examples
 
