@@ -8,19 +8,13 @@ pub mod io;
 // ============================================================================
 
 // Error types
-pub use formats::error::{LoadError, LoadResult};
-pub use formats::error::{SaveError, SaveResult};
+pub use formats::error::{ReaderError, ReaderResult};
+pub use formats::error::{WriterError, WriterResult};
 
 // Traits
-pub use formats::traits::{Checkpoint, Model, Tensor as TensorTrait};
+pub use formats::traits::{AsyncSerializer, Checkpoint, Model, SyncSerializer, Tensor};
 
-// Backend selection
-pub use formats::{AsyncBackend, Backend};
-
-// Shared tensor dtype
-pub use formats::tensor::Dtype;
-
-// SafeTensors types (aliased to avoid conflict with ServerlessLLM)
+// SafeTensors types
 pub use formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 pub use formats::safetensors::Model as SafeTensorsModel;
 pub use formats::safetensors::Tensor as SafeTensorsTensor;
