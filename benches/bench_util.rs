@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use tensora::formats::traits::{Model, TensorView};
+use tensora::formats::traits::{Model, Tensor};
 
 pub const ENV_VAR: &str = "TENSORA_MODEL_ID";
 

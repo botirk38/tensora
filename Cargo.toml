@@ -30,14 +30,6 @@ name = "storage"
 harness = false
 
 [[bin]]
-name = "profile"
-path = "src/bin/profile/main.rs"
-
-[[bin]]
-name = "demo"
-path = "src/bin/demo/main.rs"
-
-[[bin]]
 name = "convert"
 path = "src/bin/convert/main.rs"
 

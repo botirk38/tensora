@@ -1,258 +1,116 @@
-//! Tensor data containers for ServerlessLLM format.
+//! Tensor type for the ServerlessLLM format.
 
-use std::sync::Arc;
-
-use crate::formats::traits::TensorView;
+use crate::formats::tensor::Dtype;
 use crate::io::buffer::MmapRegion;
 
-use super::ids::PartitionId;
 use super::index::TensorDescriptor;
 
-/// Owned tensor with shared backing buffer.
-/// Multiple tensors from the same partition share the same buffer via Arc.
-#[derive(Debug, Clone)]
-pub struct Tensor {
-    backing: Arc<[u8]>,
-    desc: Arc<TensorDescriptor>,
-}
-
-impl Tensor {
-    /// Creates a new Tensor from shared backing and descriptor.
-    #[inline]
-    #[must_use]
-    pub fn from_shared(backing: Arc<[u8]>, desc: Arc<TensorDescriptor>) -> Self {
-        Self { backing, desc }
-    }
-
-    /// Returns the raw tensor data as a slice (zero-copy).
-    /// Slices from the shared backing buffer using the descriptor's offset.
-    /// Panics if offset + size overflows or exceeds buffer bounds.
-    #[inline]
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        let start = usize::try_from(self.desc.offset).expect("offset overflow");
-        let end = start
-            .checked_add(self.desc.size)
-            .expect("offset + size overflow");
-        &self.backing[start..end]
-    }
-
-    /// Returns the tensor's data type.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> &str {
-        &self.desc.dtype
-    }
-
-    /// Returns the tensor's shape.
-    #[inline]
-    #[must_use]
-    pub fn shape(&self) -> &[usize] {
-        &self.desc.shape
-    }
-
-    /// Returns the tensor's stride.
-    #[inline]
-    #[must_use]
-    pub fn stride(&self) -> &[usize] {
-        &self.desc.stride
-    }
-
-    /// Returns the tensor's size in bytes.
-    #[inline]
-    #[must_use]
-    pub fn size(&self) -> usize {
-        self.desc.size
-    }
-
-    /// Returns the partition id containing this tensor.
-    #[inline]
-    #[must_use]
-    pub fn partition_id(&self) -> PartitionId {
-        self.desc.partition_id
-    }
-}
-
-impl TensorView for Tensor {
-    #[inline]
-    fn shape(&self) -> &[usize] {
-        self.shape()
-    }
-
-    #[inline]
-    fn dtype(&self) -> &str {
-        self.dtype()
-    }
-
-    #[inline]
-    fn data(&self) -> &[u8] {
-        self.data()
-    }
-}
-
-impl TensorView for &Tensor {
-    #[inline]
-    fn shape(&self) -> &[usize] {
-        (**self).shape()
-    }
-
-    #[inline]
-    fn dtype(&self) -> &str {
-        (**self).dtype()
-    }
-
-    #[inline]
-    fn data(&self) -> &[u8] {
-        (**self).data()
-    }
-}
-
-/// View into a memory-mapped tensor with metadata access (lazy loading).
+/// A tensor view into a ServerlessLLM model.
+///
+/// The tensor borrows metadata from the model's index and either borrows bytes
+/// from an eager partition buffer or holds a sub-region of an mmap partition.
 #[derive(Debug)]
-pub struct TensorMmap {
-    mmap: MmapRegion,
-    desc: Arc<TensorDescriptor>,
+pub struct Tensor<'a> {
+    desc: &'a TensorDescriptor,
+    data: TensorData<'a>,
 }
 
-impl TensorMmap {
-    /// Creates a new TensorMmap from memory-mapped data.
-    #[inline]
-    #[must_use]
-    pub fn new(mmap: MmapRegion, desc: Arc<TensorDescriptor>) -> Self {
-        Self { mmap, desc }
+#[derive(Debug)]
+enum TensorData<'a> {
+    Eager(&'a [u8]),
+    Mmap(MmapRegion),
+}
+
+impl<'a> Tensor<'a> {
+    pub(crate) fn eager(desc: &'a TensorDescriptor, data: &'a [u8]) -> Self {
+        Self {
+            desc,
+            data: TensorData::Eager(data),
+        }
     }
 
-    /// Returns the memory-mapped tensor data.
-    #[inline]
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        self.mmap.as_slice()
+    pub(crate) fn mmap(desc: &'a TensorDescriptor, data: MmapRegion) -> Self {
+        Self {
+            desc,
+            data: TensorData::Mmap(data),
+        }
     }
 
-    /// Returns the tensor's data type.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> &str {
-        &self.desc.dtype
-    }
-
-    /// Returns the tensor's shape.
     #[inline]
     #[must_use]
     pub fn shape(&self) -> &[usize] {
-        &self.desc.shape
+        self.desc.shape()
     }
 
-    /// Returns the tensor's stride.
     #[inline]
     #[must_use]
-    pub fn stride(&self) -> &[usize] {
-        &self.desc.stride
+    pub fn dtype(&self) -> Dtype {
+        self.desc.dtype()
     }
 
-    /// Returns the tensor's size in bytes.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> usize {
-        self.desc.size
+    pub fn data(&self) -> &[u8] {
+        match &self.data {
+            TensorData::Eager(data) => data,
+            TensorData::Mmap(region) => region.as_slice(),
+        }
     }
 }
 
-impl TensorView for TensorMmap {
+impl crate::formats::traits::Tensor for Tensor<'_> {
     #[inline]
     fn shape(&self) -> &[usize] {
         self.shape()
     }
 
     #[inline]
-    fn dtype(&self) -> &str {
+    fn dtype(&self) -> Dtype {
         self.dtype()
     }
 
     #[inline]
     fn data(&self) -> &[u8] {
         self.data()
+    }
+
+    #[inline]
+    fn stride(&self) -> Option<&[usize]> {
+        Some(self.desc.stride())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::serverlessllm::ids::PartitionId;
+    use crate::formats::serverlessllm::index::TensorDescriptor;
+    use crate::formats::traits::Tensor as TensorTrait;
     use std::sync::Arc;
 
-    fn make_desc(offset: u64, size: usize, partition_id: usize) -> Arc<TensorDescriptor> {
-        Arc::new(TensorDescriptor {
-            offset,
-            size,
-            shape: vec![2, 4].into(),
-            stride: vec![4, 1].into(),
-            dtype: "torch.float32".into(),
-            partition_id: PartitionId::new(partition_id),
-        })
+    fn make_desc(dtype: Dtype) -> TensorDescriptor {
+        // Use the public constructor via Index
+        let json = br#"{"test": [0, 4, [2, 2], [2, 1], "f32", 0]}"#;
+        let index = crate::formats::serverlessllm::Index::from_bytes(json).unwrap();
+        index.get("test").unwrap().clone()
     }
 
     #[test]
-    fn tensor_from_shared_data_access() {
-        let backing: Arc<[u8]> = Arc::from(vec![10u8, 20, 30, 40, 50, 60, 70, 80]);
-        let desc = make_desc(2, 4, 0);
-        let t = Tensor::from_shared(backing, desc);
-        assert_eq!(t.data(), &[30, 40, 50, 60]);
+    fn eager_tensor_access() {
+        let desc = make_desc(Dtype::F32);
+        let data: Arc<[u8]> = Arc::from(vec![1, 2, 3, 4]);
+        let tensor = Tensor::eager(&desc, &data);
+        assert_eq!(tensor.shape(), &[2, 2]);
+        assert_eq!(tensor.dtype(), Dtype::F32);
+        assert_eq!(tensor.data(), &[1, 2, 3, 4]);
     }
 
     #[test]
-    fn tensor_shape_dtype_stride_size() {
-        let backing: Arc<[u8]> = Arc::from(vec![0u8; 32]);
-        let desc = make_desc(0, 32, 1);
-        let t = Tensor::from_shared(backing, desc);
-        assert_eq!(t.shape(), &[2, 4]);
-        assert_eq!(t.dtype(), "torch.float32");
-        assert_eq!(t.stride(), &[4, 1]);
-        assert_eq!(t.size(), 32);
-    }
-
-    #[test]
-    fn tensor_partition_id() {
-        let backing: Arc<[u8]> = Arc::from(vec![0u8; 8]);
-        let desc = make_desc(0, 8, 42);
-        let t = Tensor::from_shared(backing, desc);
-        assert_eq!(t.partition_id(), PartitionId::new(42));
-    }
-
-    #[test]
-    fn tensor_view_impl() {
-        let backing: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4]);
-        let desc = make_desc(0, 4, 0);
-        let t = Tensor::from_shared(backing, desc);
-        let tv: &dyn TensorView = &t;
-        assert_eq!(tv.shape(), &[2, 4]);
-        assert_eq!(tv.dtype(), "torch.float32");
-        assert_eq!(tv.data(), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn tensor_ref_view_impl() {
-        let backing: Arc<[u8]> = Arc::from(vec![5u8, 6, 7, 8]);
-        let desc = make_desc(0, 4, 0);
-        let t = Tensor::from_shared(backing, desc);
-        let r = &t;
-        let tv: &dyn TensorView = &r;
-        assert_eq!(tv.data(), &[5, 6, 7, 8]);
-    }
-
-    #[test]
-    fn tensor_data_boundary() {
-        let backing: Arc<[u8]> = Arc::from(vec![0u8, 0, 0, 0, 1, 2, 3, 4, 0, 0]);
-        let desc = make_desc(4, 4, 0);
-        let t = Tensor::from_shared(backing, desc);
-        assert_eq!(t.data(), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn tensor_clone() {
-        let backing: Arc<[u8]> = Arc::from(vec![1u8; 4]);
-        let desc = make_desc(0, 4, 0);
-        let t = Tensor::from_shared(backing, desc);
-        let t2 = t.clone();
-        assert_eq!(t.data(), t2.data());
+    fn tensor_stride_returns_descriptor_stride() {
+        let desc = make_desc(Dtype::F32);
+        let data: Arc<[u8]> = Arc::from(vec![1, 2, 3, 4]);
+        let tensor = Tensor::eager(&desc, &data);
+        let expected: &[usize] = &[2, 1];
+        assert_eq!(tensor.stride(), Some(expected));
     }
 }

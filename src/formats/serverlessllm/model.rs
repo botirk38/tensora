@@ -1,645 +1,225 @@
 //! ServerlessLLM format model.
 //!
-//! Provides both eager (owned) and lazy (mmap-backed) model loading.
+//! The model type only provides read-only access to loaded tensors. Loading is
+//! owned by [`Checkpoint`](crate::formats::serverlessllm::Checkpoint).
 
-use crate::formats::error::{ReaderError, ReaderResult};
 use crate::formats::traits::Model as ModelTrait;
-#[cfg(target_os = "linux")]
-use crate::io::availability::{IoCapabilities, IoKind};
-use crate::io::buffer::{MmapRegion, OwnedBytes};
-#[cfg(target_os = "linux")]
-use crate::io::io_uring::IoUring;
-use crate::io::mmap::Mmap;
-use crate::io::sync::Sync;
-use crate::io::tokio::Tokio;
-use crate::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo, RangeRead};
-use rayon::prelude::*;
+use crate::io::buffer::MmapRegion;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::ids::PartitionId;
-use super::index::{Index, PartitionPlan};
-use super::tensor::{Tensor, TensorMmap};
+use super::index::Index;
+use super::tensor::Tensor;
 
 // ============================================================================
-// Eager (owned) model
+// Storage
 // ============================================================================
 
-#[derive(Debug)]
-struct PartitionRead {
-    partition_id: PartitionId,
-    path: PathBuf,
-    size: u64,
+#[derive(Debug, Clone)]
+enum ModelStorage {
+    Eager {
+        index: Index,
+        partitions: HashMap<PartitionId, Arc<[u8]>>,
+    },
+    Mmap {
+        index: Index,
+        partitions: HashMap<PartitionId, MmapRegion>,
+    },
 }
 
-type Tensors = HashMap<Arc<str>, Tensor>;
+// ============================================================================
+// Model
+// ============================================================================
 
-#[derive(Debug)]
-struct LoadPlan {
-    partitions: Vec<PartitionRead>,
-    index: Arc<Index>,
-}
-
-impl LoadPlan {
-    fn compile(index: &Index, base_path: &Path) -> Self {
-        let base_path_str = base_path.to_string_lossy();
-        let partitions: Vec<PartitionRead> = index
-            .partition_ids()
-            .iter()
-            .filter_map(|partition_id| index.partition(*partition_id))
-            .map(|plan: &PartitionPlan| PartitionRead {
-                partition_id: plan.partition_id,
-                path: PathBuf::from(format!("{}_{}", base_path_str, plan.partition_id)),
-                size: plan.max_required_size,
-            })
-            .collect();
-        LoadPlan {
-            partitions,
-            index: Arc::new(index.clone()),
-        }
-    }
-
-    fn validate(&self) -> ReaderResult<()> {
-        for read in &self.partitions {
-            let metadata =
-                std::fs::metadata(&read.path).map_err(|_| ReaderError::PartitionNotFound {
-                    partition_id: read.partition_id.as_usize(),
-                    path: read.path.to_string_lossy().to_string(),
-                })?;
-            if metadata.len() < read.size {
-                return Err(ReaderError::PartitionTooSmall {
-                    path: read.path.to_string_lossy().to_string(),
-                    actual: metadata.len(),
-                    required: read.size,
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn assemble_single(&self, data: OwnedBytes) -> Tensors {
-        let backing: Arc<[u8]> = data.into_shared();
-        let mut tensors = HashMap::with_capacity(self.index.len());
-        for name in self.index.tensor_names().iter() {
-            let desc = self.index.get(name.as_ref()).unwrap();
-            tensors.insert(
-                name.clone(),
-                Tensor::from_shared(Arc::clone(&backing), Arc::clone(desc)),
-            );
-        }
-        tensors
-    }
-
-    fn assemble(&self, results: Vec<RangeRead>) -> ReaderResult<Tensors> {
-        let max_partition_id = self
-            .partitions
-            .iter()
-            .map(|r| r.partition_id.as_usize())
-            .max()
-            .unwrap_or(0);
-        let mut partition_buffers: Vec<Option<Arc<[u8]>>> = vec![None; max_partition_id + 1];
-        for (read, result) in self.partitions.iter().zip(results) {
-            let buf = Arc::clone(&result.bytes);
-            if buf.len() < read.size as usize {
-                return Err(ReaderError::PartitionTooSmall {
-                    path: read.path.to_string_lossy().to_string(),
-                    actual: buf.len() as u64,
-                    required: read.size,
-                });
-            }
-            partition_buffers[read.partition_id.as_usize()] = Some(buf);
-        }
-        let mut tensors = HashMap::with_capacity(self.index.len());
-        for name in self.index.tensor_names().iter() {
-            let desc = self.index.get(name.as_ref()).unwrap();
-            let backing = partition_buffers[desc.partition_id.as_usize()].as_ref().unwrap();
-            tensors.insert(
-                name.clone(),
-                Tensor::from_shared(Arc::clone(backing), Arc::clone(desc)),
-            );
-        }
-        Ok(tensors)
-    }
-
-    fn batch_ranges(&self) -> ReaderResult<Vec<FileRange<'_>>> {
-        self.partitions
-            .iter()
-            .map(|p| {
-                Ok(FileRange::new(
-                    &p.path,
-                    ByteRange::from_offset_len(
-                        0,
-                        usize::try_from(p.size).map_err(|e| {
-                            ReaderError::InvalidMetadata(format!("partition size too large: {e}"))
-                        })?,
-                    )?,
-                ))
-            })
-            .collect()
-    }
-
-    fn execute_sync(&self) -> ReaderResult<Tensors> {
-        if self.partitions.is_empty() {
-            return Ok(HashMap::new());
-        }
-        self.validate()?;
-
-        let engine = Sync::new();
-
-        if self.partitions.len() == 1 {
-            let read = &self.partitions[0];
-            let data = engine.read_file(&read.path).map_err(ReaderError::from)?;
-            return Ok(self.assemble_single(data));
-        }
-
-        let ranges = self.batch_ranges()?;
-        let results = engine.read_ranges(&ranges).map_err(ReaderError::from)?;
-        self.assemble(results)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn execute_io_uring(&self) -> ReaderResult<Tensors> {
-        if self.partitions.is_empty() {
-            return Ok(HashMap::new());
-        }
-        self.validate()?;
-
-        let engine = IoUring::new();
-
-        if self.partitions.len() == 1 {
-            let read = &self.partitions[0];
-            let data = engine.read_file(&read.path).map_err(ReaderError::from)?;
-            return Ok(self.assemble_single(data));
-        }
-
-        let ranges = self.batch_ranges()?;
-        let results = engine.read_ranges(&ranges).map_err(ReaderError::from)?;
-        self.assemble(results)
-    }
-
-    async fn execute_async(&self) -> ReaderResult<Tensors> {
-        if self.partitions.is_empty() {
-            return Ok(HashMap::new());
-        }
-        self.validate()?;
-
-        let engine = Tokio::new();
-
-        if self.partitions.len() == 1 {
-            let read = &self.partitions[0];
-            let data = engine
-                .read_file(&read.path)
-                .await
-                .map_err(ReaderError::from)?;
-            return Ok(self.assemble_single(data));
-        }
-
-        let ranges = self.batch_ranges()?;
-        let results = engine
-            .read_ranges(&ranges)
-            .await
-            .map_err(ReaderError::from)?;
-        self.assemble(results)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LoadStats {
-    partition_count: usize,
-    total_bytes: u64,
-}
-
-enum LoadEngine {
-    Sync,
-    TokioAsync,
-    #[cfg(target_os = "linux")]
-    IoUring,
-}
-
-const MULTI_PARTITION_ASYNC_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const IOURING_PARTITION_THRESHOLD: usize = 4;
-#[cfg(target_os = "linux")]
-const IOURING_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
-
-impl LoadStats {
-    fn from_index(index: &Index) -> Self {
-        let mut total_bytes = 0u64;
-        for plan in index.partitions().values() {
-            total_bytes = total_bytes.saturating_add(plan.max_required_size);
-        }
-        LoadStats {
-            partition_count: index.partition_ids().len(),
-            total_bytes,
-        }
-    }
-
-    fn choose_engine(&self) -> LoadEngine {
-        if self.partition_count <= 1 {
-            return LoadEngine::Sync;
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            let capabilities = IoCapabilities::cached();
-            if self.partition_count >= IOURING_PARTITION_THRESHOLD
-                && self.total_bytes >= IOURING_BYTE_THRESHOLD
-                && capabilities.is_available(IoKind::IoUring)
-            {
-                return LoadEngine::IoUring;
-            }
-
-            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD
-                && capabilities.is_available(IoKind::Tokio)
-            {
-                return LoadEngine::TokioAsync;
-            }
-
-            LoadEngine::Sync
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            if self.total_bytes >= MULTI_PARTITION_ASYNC_THRESHOLD {
-                return LoadEngine::TokioAsync;
-            }
-            LoadEngine::Sync
-        }
-    }
-}
-
-/// ServerlessLLM model with all tensors loaded into memory (eager loading).
+/// ServerlessLLM model with either eager or lazy (mmap) storage.
 #[derive(Debug, Clone)]
 pub struct Model {
-    tensors: HashMap<Arc<str>, Tensor>,
-    tensor_names: Arc<[Arc<str>]>,
+    storage: ModelStorage,
 }
 
 impl Model {
-    fn compile_load_plan(directory: impl AsRef<Path>) -> ReaderResult<(Index, LoadPlan)> {
-        let dir_path = directory.as_ref();
-        let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
-        let plan = LoadPlan::compile(&index, &dir_path.join("tensor.data"));
-        Ok((index, plan))
+    /// Build a model from an eager index and owned partition buffers.
+    #[must_use]
+    pub(crate) fn from_eager(index: Index, partitions: HashMap<PartitionId, Arc<[u8]>>) -> Self {
+        Self {
+            storage: ModelStorage::Eager { index, partitions },
+        }
     }
 
-    pub async fn load(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = match LoadStats::from_index(&index).choose_engine() {
-            #[cfg(target_os = "linux")]
-            LoadEngine::IoUring => plan.execute_io_uring()?,
-            LoadEngine::TokioAsync => plan.execute_async().await?,
-            LoadEngine::Sync => plan.execute_sync()?,
-        };
-        Ok(Self {
-            tensors,
-            tensor_names: index.tensor_names().to_vec().into(),
-        })
+    /// Build a model from an index and memory-mapped partition regions.
+    #[must_use]
+    pub(crate) fn from_mmap(
+        index: Index,
+        partitions: HashMap<PartitionId, MmapRegion>,
+    ) -> Self {
+        Self {
+            storage: ModelStorage::Mmap { index, partitions },
+        }
     }
 
-    #[cfg(target_os = "linux")]
-    pub fn load_io_uring(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = plan.execute_io_uring()?;
-        Ok(Self {
-            tensors,
-            tensor_names: index.tensor_names().to_vec().into(),
-        })
-    }
-
-    pub async fn load_async(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let dir_path = directory.as_ref();
-        let index = Index::load(dir_path.join("tensor_index.json")).await?;
-        let plan = LoadPlan::compile(&index, &dir_path.join("tensor.data"));
-        let tensors = plan.execute_async().await?;
-        Ok(Self {
-            tensors,
-            tensor_names: index.tensor_names().to_vec().into(),
-        })
-    }
-
-    pub fn load_sync(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let (index, plan) = Self::compile_load_plan(directory)?;
-        let tensors = plan.execute_sync()?;
-        Ok(Self {
-            tensors,
-            tensor_names: index.tensor_names().to_vec().into(),
-        })
-    }
-
+    /// Returns true if this model uses lazy (mmap-backed) storage.
     #[inline]
     #[must_use]
-    pub fn tensor(&self, name: &str) -> Option<&Tensor> {
-        self.tensors.get(name)
+    pub fn is_lazy(&self) -> bool {
+        matches!(self.storage, ModelStorage::Mmap { .. })
     }
 
+    /// Returns a view of the tensor with the given name, or `None` if missing.
     #[inline]
     #[must_use]
-    pub fn tensor_names(&self) -> &[Arc<str>] {
-        &self.tensor_names
+    pub fn tensor(&self, name: &str) -> Option<Tensor<'_>> {
+        match &self.storage {
+            ModelStorage::Eager { index, partitions } => {
+                let desc = index.get(name)?;
+                let partition = partitions.get(&desc.partition_id())?;
+                let start = usize::try_from(desc.offset()).ok()?;
+                let end = start.checked_add(desc.size())?;
+                let data = partition.get(start..end)?;
+                Some(Tensor::eager(desc, data))
+            }
+            ModelStorage::Mmap { index, partitions } => {
+                let desc = index.get(name)?;
+                let partition = partitions.get(&desc.partition_id())?;
+                let start = usize::try_from(desc.offset()).ok()?;
+                let end = start.checked_add(desc.size())?;
+                if end > partition.len() {
+                    return None;
+                }
+                let region = partition.subregion(start, desc.size())?;
+                Some(Tensor::mmap(desc, region))
+            }
+        }
     }
 
+    /// Returns the number of tensors.
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.tensors.len()
+        match &self.storage {
+            ModelStorage::Eager { index, .. } => index.len(),
+            ModelStorage::Mmap { index, .. } => index.len(),
+        }
     }
 
+    /// Returns true if there are no tensors.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tensors.is_empty()
+        self.len() == 0
     }
-}
 
-impl<'a> IntoIterator for &'a Model {
-    type Item = (&'a Arc<str>, &'a Tensor);
-    type IntoIter = std::collections::hash_map::Iter<'a, Arc<str>, Tensor>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.tensors.iter()
+    /// Returns an iterator over tensor names.
+    #[allow(dead_code)]
+    fn tensor_names_iter(&self) -> Box<dyn ExactSizeIterator<Item = &str> + '_> {
+        match &self.storage {
+            ModelStorage::Eager { index, .. } => Box::new(index.tensor_names_iter()),
+            ModelStorage::Mmap { index, .. } => Box::new(index.tensor_names_iter()),
+        }
     }
 }
 
 impl ModelTrait for Model {
     type Tensor<'a>
-        = &'a Tensor
+        = Tensor<'a>
+    where
+        Self: 'a;
+
+    type Names<'a>
+        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
     where
         Self: 'a;
 
     #[inline]
     fn len(&self) -> usize {
-        self.tensors.len()
+        Model::len(self)
     }
 
     #[inline]
-    fn contains(&self, name: &str) -> bool {
-        self.tensors.contains_key(name)
-    }
-
-    #[inline]
-    fn tensor_names(&self) -> &[Arc<str>] {
-        Model::tensor_names(self)
-    }
-
-    #[inline]
-    fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-        self.tensors.get(name)
-    }
-}
-
-// ============================================================================
-// Lazy (mmap) model
-// ============================================================================
-
-/// ServerlessLLM model with memory-mapped partition files (lazy loading).
-#[derive(Debug)]
-pub struct MmapModel {
-    index: Index,
-    partitions: HashMap<PartitionId, MmapRegion>,
-}
-
-impl MmapModel {
-    pub fn open(directory: impl AsRef<Path>) -> ReaderResult<Self> {
-        let dir_path = directory.as_ref();
-        let index = Index::load_sync(dir_path.join("tensor_index.json"))?;
-        let partition_ids = index.partition_ids();
-        let mapper = Mmap::new();
-        let partitions: Result<HashMap<PartitionId, MmapRegion>, ReaderError> = partition_ids
-            .par_iter()
-            .map(|&partition_id| {
-                let partition_path = format!(
-                    "{}_{}",
-                    dir_path.join("tensor.data").display(),
-                    partition_id
-                );
-                let mmap = mapper
-                    .map_file(std::path::Path::new(&partition_path))
-                    .map_err(ReaderError::from)?;
-                Ok((partition_id, mmap))
-            })
-            .collect();
-        Ok(Self {
-            index,
-            partitions: partitions?,
-        })
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn tensor(&self, name: &str) -> Option<TensorMmap> {
-        let desc = self.index.get(name)?;
-        let mmap = self.partitions.get(&desc.partition_id)?;
-        let start = usize::try_from(desc.offset).ok()?;
-        let end = start.checked_add(desc.size)?;
-        if end > mmap.len() {
-            return None;
+    fn tensor_names(&self) -> Self::Names<'_> {
+        match &self.storage {
+            ModelStorage::Eager { index, .. } => index.tensor_names(),
+            ModelStorage::Mmap { index, .. } => index.tensor_names(),
         }
-        let tensor_mmap = mmap.subregion(start, desc.size)?;
-        Some(TensorMmap::new(tensor_mmap, Arc::clone(desc)))
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn tensor_names(&self) -> &[Arc<str>] {
-        self.index.tensor_names()
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.index.len()
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &str> {
-        self.index.tensor_names().iter().map(|s| s.as_ref())
-    }
-}
-
-impl ModelTrait for MmapModel {
-    type Tensor<'a>
-        = TensorMmap
-    where
-        Self: 'a;
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.index.len()
-    }
-
-    #[inline]
-    fn contains(&self, name: &str) -> bool {
-        self.index.contains(name)
-    }
-
-    #[inline]
-    fn tensor_names(&self) -> &[Arc<str>] {
-        MmapModel::tensor_names(self)
     }
 
     #[inline]
     fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-        MmapModel::tensor(self, name)
+        Model::tensor(self, name)
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::tensor::Dtype;
+    use crate::formats::serverlessllm::checkpoint::{Checkpoint, TensorWriteEntry};
+    use crate::formats::serverlessllm::ids::PartitionId;
+    use crate::formats::traits::Checkpoint as _;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    fn sample_checkpoint() -> Checkpoint {
+        let mut index = HashMap::new();
+        index.insert(
+            "w".to_owned(),
+            TensorWriteEntry::new(
+                0,
+                4,
+                vec![2, 2],
+                vec![2, 1],
+                Dtype::F32,
+                PartitionId::new(0),
+            ).unwrap(),
+        );
+        Checkpoint::new(index, vec![vec![1, 2, 3, 4]]).unwrap()
+    }
 
     #[test]
-    fn model_len_and_is_empty() {
+    fn model_empty() {
         let model = Model {
-            tensors: HashMap::new(),
-            tensor_names: Arc::new([]),
+            storage: ModelStorage::Eager {
+                index: Index::new(),
+                partitions: HashMap::new(),
+            },
         };
         assert!(model.is_empty());
-        assert_eq!(model.len(), 0);
+        assert!(!model.is_lazy());
     }
 
     #[test]
-    fn choose_sync_for_small_partition_count() {
-        let stats = LoadStats {
-            partition_count: 3,
-            total_bytes: 2 * 1024 * 1024 * 1024,
-        };
-        match stats.choose_engine() {
-            LoadEngine::Sync => {}
-            LoadEngine::TokioAsync => {}
-            #[cfg(target_os = "linux")]
-            LoadEngine::IoUring => {}
-        }
-    }
+    fn model_load_sync() {
+        let dir = TempDir::new().unwrap();
+        let checkpoint = sample_checkpoint();
+        checkpoint.save(dir.path()).unwrap();
 
-    #[test]
-    fn choose_async_or_iouring_for_large_model() {
-        let stats = LoadStats {
-            partition_count: 16,
-            total_bytes: 16 * 1024 * 1024 * 1024,
-        };
-        match stats.choose_engine() {
-            LoadEngine::TokioAsync => {}
-            #[cfg(target_os = "linux")]
-            LoadEngine::IoUring => {}
-            LoadEngine::Sync => panic!("expected async or io_uring for large model"),
-        }
-    }
-
-    #[test]
-    fn choose_sync_for_medium_small_model() {
-        let stats = LoadStats {
-            partition_count: 12,
-            total_bytes: 524 * 1024 * 1024,
-        };
-        match stats.choose_engine() {
-            LoadEngine::Sync => {}
-            LoadEngine::TokioAsync => {}
-            #[cfg(target_os = "linux")]
-            LoadEngine::IoUring => {}
-        }
-    }
-
-    #[test]
-    fn choose_sync_for_single_partition() {
-        let stats = LoadStats {
-            partition_count: 1,
-            total_bytes: 512 * 1024 * 1024,
-        };
-        match stats.choose_engine() {
-            LoadEngine::Sync => {}
-            other => panic!(
-                "expected Sync for single partition, got {:?}",
-                match other {
-                    LoadEngine::TokioAsync => "TokioAsync",
-                    #[cfg(target_os = "linux")]
-                    LoadEngine::IoUring => "IoUring",
-                    _ => "unknown",
-                }
-            ),
-        }
-    }
-
-    #[test]
-    fn mmap_model_empty() {
-        let model = MmapModel {
-            index: Index::new(),
-            partitions: HashMap::new(),
-        };
-        assert!(model.is_empty());
-    }
-
-    #[test]
-    fn load_plan_compile_single_partition() {
-        let data = br#"{"w": [0, 32, [4, 4], [4, 1], "f32", 0]}"#;
-        let index = Index::from_bytes(data).unwrap();
-        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
-        assert_eq!(plan.partitions.len(), 1);
-        assert_eq!(plan.partitions[0].partition_id, PartitionId::new(0));
-    }
-
-    #[test]
-    fn load_plan_compile_multi_partition() {
-        let data = br#"{
-            "a": [0, 4, [2], [1], "f32", 0],
-            "b": [0, 8, [4], [1], "f32", 1]
-        }"#;
-        let index = Index::from_bytes(data).unwrap();
-        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
-        assert_eq!(plan.partitions.len(), 2);
-    }
-
-    #[test]
-    fn load_plan_compile_empty_index() {
-        let index = Index::new();
-        let plan = LoadPlan::compile(&index, std::path::Path::new("/tmp/tensor.data"));
-        assert!(plan.partitions.is_empty());
-    }
-
-    #[test]
-    fn load_stats_from_index() {
-        let data = br#"{
-            "a": [0, 4, [2], [1], "f32", 0],
-            "b": [0, 8, [4], [1], "f32", 1]
-        }"#;
-        let index = Index::from_bytes(data).unwrap();
-        let stats = LoadStats::from_index(&index);
-        assert_eq!(stats.partition_count, 2);
-        assert!(stats.total_bytes > 0);
-    }
-
-    #[test]
-    fn model_tensor_lookup() {
-        use std::sync::Arc;
-        let data = vec![0u8; 16];
-        let backing: Arc<[u8]> = data.into();
-        let desc = Arc::new(super::super::index::TensorDescriptor {
-            offset: 0,
-            size: 16,
-            shape: vec![4, 4].into(),
-            stride: vec![4, 1].into(),
-            dtype: "f32".into(),
-            partition_id: PartitionId::new(0),
-        });
-        let tensor = Tensor::from_shared(backing, desc);
-        let mut tensors = HashMap::new();
-        let name: Arc<str> = "w".into();
-        tensors.insert(name.clone(), tensor);
-        let model = Model {
-            tensors,
-            tensor_names: vec![name].into(),
-        };
+        let model = Checkpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
         assert_eq!(model.len(), 1);
         assert!(model.contains("w"));
-        assert!(!model.contains("v"));
-        assert!(model.tensor("w").is_some());
-        assert!(model.tensor("v").is_none());
+
+        let tensor = model.tensor("w").unwrap();
+        assert_eq!(tensor.shape(), &[2, 2]);
+        assert_eq!(tensor.dtype(), Dtype::F32);
+        assert_eq!(tensor.data(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn model_open_mmap() {
+        let dir = TempDir::new().unwrap();
+        let checkpoint = sample_checkpoint();
+        checkpoint.save(dir.path()).unwrap();
+
+        let model = Checkpoint::open(dir.path()).unwrap();
+        assert!(model.is_lazy());
+        assert_eq!(model.len(), 1);
+
+        let tensor = model.tensor("w").unwrap();
+        assert_eq!(tensor.shape(), &[2, 2]);
+        assert_eq!(tensor.dtype(), Dtype::F32);
+        assert_eq!(tensor.data(), &[1, 2, 3, 4]);
     }
 }

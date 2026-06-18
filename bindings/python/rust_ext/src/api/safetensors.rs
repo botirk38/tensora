@@ -6,11 +6,13 @@ use pyo3::types::{PyBytes, PyDict};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use tensora::formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
+use tensora::formats::safetensors::Model;
 use tensora::formats::safetensors::TensorView as SafetensorTensorView;
-use tensora::formats::safetensors::{Dtype, MmapModel, Model};
+use tensora::formats::traits::Checkpoint as _;
 use tensora::serialize;
-use tensora::ReaderResult;
-use tensora::TensorView;
+use tensora::LoadResult;
+use tensora::Tensor as TensorTrait;
 
 use super::run_async;
 use crate::convert::{
@@ -38,7 +40,7 @@ fn validate_directory(path: &Path) -> PyResult<()> {
 
 #[pyclass]
 pub struct SafeTensorsHandlePy {
-    inner: MmapModel,
+    inner: Model,
 }
 
 #[pymethods]
@@ -47,7 +49,7 @@ impl SafeTensorsHandlePy {
     #[pyo3(signature = (path,))]
     fn new(path: PathBuf) -> PyResult<Self> {
         validate_directory(&path)?;
-        let inner = Python::with_gil(|py| py.allow_threads(|| MmapModel::open(&path)))
+        let inner = Python::with_gil(|py| py.allow_threads(|| SafeTensorsCheckpoint::open(&path)))
             .map_err(map_reader_error)?;
         Ok(Self { inner })
     }
@@ -74,7 +76,7 @@ impl SafeTensorsHandlePy {
             framework,
             TensorData {
                 shape: view.shape(),
-                dtype: view.dtype(),
+                dtype: view.dtype().as_str(),
                 data: view.data(),
             },
             device,
@@ -111,7 +113,7 @@ impl SafeTensorsIterPy {
             &self.framework,
             TensorData {
                 shape: view.shape(),
-                dtype: view.dtype(),
+                dtype: view.dtype().as_str(),
                 data: view.data(),
             },
             &self.device,
@@ -121,12 +123,14 @@ impl SafeTensorsIterPy {
     }
 }
 
-fn load_model(path: PathBuf, backend: &str) -> ReaderResult<Model> {
+fn load_model(path: PathBuf, backend: &str) -> LoadResult<Model> {
     match backend {
-        "default" | "async" => run_async(Model::load(path)),
-        "sync" => Model::load_sync(path),
+        "default" | "async" => {
+            run_async(SafeTensorsCheckpoint::aload(path, tensora::AsyncBackend::Tokio))
+        }
+        "sync" => SafeTensorsCheckpoint::load(path, tensora::Backend::Sync),
         #[cfg(target_os = "linux")]
-        "io_uring" => Model::load_io_uring(path),
+        "io_uring" => SafeTensorsCheckpoint::load(path, tensora::Backend::IoUring),
         _ => unreachable!("validated backend"),
     }
 }
@@ -165,7 +169,7 @@ fn load_dict_from_model(
             framework,
             TensorData {
                 shape: view.shape(),
-                dtype: view.dtype(),
+                dtype: view.dtype().as_str(),
                 data: view.data(),
             },
             device,
@@ -183,7 +187,7 @@ pub fn open_safetensors(path: PathBuf) -> PyResult<PyObject> {
     Python::with_gil(|py| {
         let handle = SafeTensorsHandlePy {
             inner: py
-                .allow_threads(|| MmapModel::open(&path))
+                .allow_threads(|| Model::open(&path))
                 .map_err(map_reader_error)?,
         };
         Ok(Py::new(py, handle)?.into_pyobject(py)?.into_any().unbind())
@@ -222,7 +226,7 @@ pub fn iter_safetensors(
         .allow_threads(|| load_model(path, backend))
         .map_err(map_reader_error)?;
 
-    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    let names: Vec<String> = model.tensor_names().map(|n| n.to_string()).collect();
 
     let iter = SafeTensorsIterPy {
         model,

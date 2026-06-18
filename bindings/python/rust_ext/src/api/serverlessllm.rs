@@ -5,8 +5,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::{Path, PathBuf};
 
-use tensora::formats::serverlessllm::{MmapModel, Model};
-use tensora::ReaderResult;
+use tensora::formats::serverlessllm::Checkpoint as ServerlessLLMCheckpoint;
+use tensora::formats::serverlessllm::Model;
+use tensora::formats::traits::Checkpoint as _;
+use tensora::LoadResult;
 
 use super::run_async;
 use crate::convert::{convert_tensor, convert_tensor_with_context, TensorData, TorchContext};
@@ -24,7 +26,7 @@ fn validate_path_exists(path: &Path) -> PyResult<()> {
 
 #[pyclass]
 pub struct ServerlessLLMHandlePy {
-    inner: MmapModel,
+    inner: Model,
 }
 
 #[pymethods]
@@ -33,8 +35,10 @@ impl ServerlessLLMHandlePy {
     #[pyo3(signature = (path,))]
     fn new(path: PathBuf) -> PyResult<Self> {
         validate_path_exists(&path)?;
-        let inner = Python::with_gil(|py| py.allow_threads(|| MmapModel::open(&path)))
-            .map_err(map_reader_error)?;
+        let inner = Python::with_gil(|py| {
+            py.allow_threads(|| ServerlessLLMCheckpoint::open(&path))
+        })
+        .map_err(map_reader_error)?;
         Ok(Self { inner })
     }
 
@@ -63,7 +67,7 @@ impl ServerlessLLMHandlePy {
             framework,
             TensorData {
                 shape: tensor.shape(),
-                dtype: tensor.dtype(),
+                dtype: tensor.dtype().as_str(),
                 data: tensor.data(),
             },
             device,
@@ -103,7 +107,7 @@ impl ServerlessLLMIterPy {
             &self.framework,
             TensorData {
                 shape: tensor.shape(),
-                dtype: tensor.dtype(),
+                dtype: tensor.dtype().as_str(),
                 data: tensor.data(),
             },
             &self.device,
@@ -113,12 +117,14 @@ impl ServerlessLLMIterPy {
     }
 }
 
-fn load_model(path: PathBuf, backend: &str) -> ReaderResult<Model> {
+fn load_model(path: PathBuf, backend: &str) -> LoadResult<Model> {
     match backend {
-        "default" | "async" => run_async(Model::load(path)),
-        "sync" => Model::load_sync(path),
+        "default" | "async" => {
+            run_async(ServerlessLLMCheckpoint::aload(path, tensora::AsyncBackend::Tokio))
+        }
+        "sync" => ServerlessLLMCheckpoint::load(path, tensora::Backend::Sync),
         #[cfg(target_os = "linux")]
-        "io_uring" => Model::load_io_uring(path),
+        "io_uring" => ServerlessLLMCheckpoint::load(path, tensora::Backend::IoUring),
         _ => unreachable!("validated backend"),
     }
 }
@@ -159,7 +165,7 @@ fn load_into_dict(
             framework,
             TensorData {
                 shape: tensor.shape(),
-                dtype: tensor.dtype(),
+                dtype: tensor.dtype().as_str(),
                 data: tensor.data(),
             },
             device,
@@ -177,7 +183,7 @@ pub fn open_serverlessllm(path: PathBuf) -> PyResult<PyObject> {
     Python::with_gil(|py| {
         let handle = ServerlessLLMHandlePy {
             inner: py
-                .allow_threads(|| MmapModel::open(&path))
+                .allow_threads(|| Model::open(&path))
                 .map_err(map_reader_error)?,
         };
         Ok(Py::new(py, handle)?.into_pyobject(py)?.into_any().unbind())
@@ -216,7 +222,7 @@ pub fn iter_serverlessllm(
         .allow_threads(|| load_model(path, backend))
         .map_err(map_reader_error)?;
 
-    let names: Vec<String> = model.tensor_names().iter().map(|n| n.to_string()).collect();
+    let names: Vec<String> = model.tensor_names().map(|n| n.to_string()).collect();
 
     let iter = ServerlessLLMIterPy {
         model,

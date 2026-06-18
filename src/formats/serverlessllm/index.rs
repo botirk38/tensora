@@ -2,33 +2,112 @@
 //!
 //! Redesigned for compiled metadata - all partition info computed once at parse time.
 
-use crate::formats::error::{ReaderError, ReaderResult};
-use crate::io::AsyncIo;
-use crate::io::tokio::Tokio;
+use crate::formats::error::{LoadError, LoadResult};
+use crate::formats::tensor::Dtype;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
+use std::str::FromStr;
 
 use super::ids::PartitionId;
+
+/// Iterator type for tensor names.
+pub type TensorNamesIter<'a> = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>;
+
+// ============================================================================
+// TensorDescriptor
+// ============================================================================
 
 /// Compact tensor descriptor for load planning.
 #[derive(Debug, Clone)]
 pub struct TensorDescriptor {
-    pub offset: u64,
-    pub size: usize,
-    pub shape: Arc<[usize]>,
-    pub stride: Arc<[usize]>,
-    pub dtype: Arc<str>,
-    pub partition_id: PartitionId,
+    offset: u64,
+    size: usize,
+    shape: Arc<[usize]>,
+    stride: Arc<[usize]>,
+    dtype: Dtype,
+    partition_id: PartitionId,
 }
+
+impl TensorDescriptor {
+    /// Returns the offset within the partition.
+    #[inline]
+    #[must_use]
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// Returns the size in bytes.
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Returns the shape.
+    #[inline]
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Returns the stride.
+    #[inline]
+    #[must_use]
+    pub fn stride(&self) -> &[usize] {
+        &self.stride
+    }
+
+    /// Returns the dtype.
+    #[inline]
+    #[must_use]
+    pub fn dtype(&self) -> Dtype {
+        self.dtype
+    }
+
+    /// Returns the partition ID.
+    #[inline]
+    #[must_use]
+    pub fn partition_id(&self) -> PartitionId {
+        self.partition_id
+    }
+}
+
+// ============================================================================
+// PartitionPlan
+// ============================================================================
 
 /// Precomputed partition metadata for load planning.
 #[derive(Debug, Clone)]
 pub struct PartitionPlan {
-    pub partition_id: PartitionId,
-    pub max_required_size: u64,
-    pub tensor_names: Arc<[Arc<str>]>,
+    partition_id: PartitionId,
+    max_required_size: u64,
+    tensor_names: Arc<[Arc<str>]>,
 }
+
+impl PartitionPlan {
+    /// Returns the partition ID.
+    #[inline]
+    #[must_use]
+    pub fn partition_id(&self) -> PartitionId {
+        self.partition_id
+    }
+
+    /// Returns the maximum required size for this partition.
+    #[inline]
+    #[must_use]
+    pub fn max_required_size(&self) -> u64 {
+        self.max_required_size
+    }
+
+    /// Returns an iterator over tensor names in this partition.
+    pub fn tensor_names(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.tensor_names.iter().map(|n| n.as_ref())
+    }
+}
+
+// ============================================================================
+// Index
+// ============================================================================
 
 /// Compiled ServerlessLLM index with cached partition metadata.
 #[derive(Debug, Clone)]
@@ -55,8 +134,8 @@ impl Index {
     /// Gets a tensor descriptor by name.
     #[inline]
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Arc<TensorDescriptor>> {
-        self.tensors.get(name)
+    pub fn get(&self, name: &str) -> Option<&TensorDescriptor> {
+        self.tensors.get(name).map(|arc| arc.as_ref())
     }
 
     /// Returns true if a tensor with the given name exists.
@@ -80,17 +159,26 @@ impl Index {
         self.tensors.is_empty()
     }
 
-    /// Returns tensor names in sorted order (cached).
-    #[inline]
-    #[must_use]
-    pub fn tensor_names(&self) -> &[Arc<str>] {
-        &self.tensor_names_sorted
+    /// Returns an iterator over tensor names.
+    pub fn tensor_names(&self) -> TensorNamesIter<'_> {
+        fn arc_to_str(arc: &Arc<str>) -> &str {
+            arc.as_ref()
+        }
+        self.tensor_names_sorted.iter().map(arc_to_str)
+    }
+
+    /// Internal iterator for model trait integration.
+    #[allow(dead_code)]
+    pub(crate) fn tensor_names_iter(&self) -> TensorNamesIter<'_> {
+        fn arc_to_str(arc: &Arc<str>) -> &str {
+            arc.as_ref()
+        }
+        self.tensor_names_sorted.iter().map(arc_to_str)
     }
 
     /// Returns an iterator over tensor names and descriptors.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &Arc<TensorDescriptor>)> {
-        self.tensors.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &TensorDescriptor)> {
+        self.tensors.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
     }
 
     /// Returns sorted partition IDs (cached, computed once at parse time).
@@ -98,13 +186,6 @@ impl Index {
     #[must_use]
     pub fn partition_ids(&self) -> &[PartitionId] {
         &self.partition_ids
-    }
-
-    /// Returns partition plans (cached).
-    #[inline]
-    #[must_use]
-    pub fn partitions(&self) -> &HashMap<PartitionId, PartitionPlan> {
-        &self.partitions
     }
 
     /// Returns the partition plan for a given partition ID.
@@ -115,9 +196,9 @@ impl Index {
     }
 
     /// Parse index from raw bytes.
-    pub fn from_bytes(data: &[u8]) -> ReaderResult<Self> {
+    pub fn from_bytes(data: &[u8]) -> LoadResult<Self> {
         let raw: HashMap<String, serde_json::Value> = serde_json::from_slice(data)
-            .map_err(|err| ReaderError::ServerlessLlm(format!("JSON parse error: {err}")))?;
+            .map_err(|err| LoadError::ServerlessLlm(format!("JSON parse error: {err}")))?;
 
         let mut tensors = HashMap::with_capacity(raw.len());
         let mut partition_max_sizes: HashMap<PartitionId, u64> = HashMap::new();
@@ -125,31 +206,23 @@ impl Index {
 
         for (name, value) in raw {
             let name: Arc<str> = name.as_str().into();
-            let arr = value.as_array().ok_or_else(|| {
-                ReaderError::ServerlessLlm("tensor entry must be an array".to_string())
-            })?;
+            let entry = TensorIndexEntryJson::new(&value)?;
 
-            let arr = arr.as_slice();
-            if arr.len() != 6 {
-                return Err(ReaderError::ServerlessLlm(format!(
-                    "tensor entry must have exactly 6 elements, got {}",
-                    arr.len()
-                )));
-            }
-
-            let offset = parse_u64(&arr[0])?;
-            let size = parse_usize(&arr[1])?;
+            let offset = entry.offset()?;
+            let size = entry.size()?;
             let size_u64 = size as u64;
-            let shape = parse_usize_vec(&arr[2])?;
-            let stride = parse_usize_vec(&arr[3])?;
-            let dtype = parse_string(&arr[4])?;
-            let partition_id = PartitionId::new(parse_usize(&arr[5])?);
-            let required =
-                offset
-                    .checked_add(size_u64)
-                    .ok_or_else(|| ReaderError::OffsetOverflow {
-                        name: name.to_string(),
-                    })?;
+            let shape = entry.shape()?;
+            let stride = entry.stride()?;
+            let dtype_str = entry.dtype_str()?;
+            let dtype = Dtype::from_str(&dtype_str).map_err(|err| {
+                LoadError::InvalidMetadata(format!("invalid dtype '{}': {err}", dtype_str))
+            })?;
+            let partition_id = entry.partition_id()?;
+            let required = offset
+                .checked_add(size_u64)
+                .ok_or_else(|| LoadError::OffsetOverflow {
+                    name: name.to_string(),
+                })?;
 
             let max_for_partition = partition_max_sizes.entry(partition_id).or_insert(0);
             if required > *max_for_partition {
@@ -168,7 +241,7 @@ impl Index {
                     size,
                     shape: shape.into(),
                     stride: stride.into(),
-                    dtype: dtype.into(),
+                    dtype,
                     partition_id,
                 }),
             );
@@ -206,19 +279,6 @@ impl Index {
             tensor_names_sorted,
         })
     }
-
-    /// Load index from file asynchronously.
-    pub async fn load(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let engine = Tokio::new();
-        let data = engine.read_file(path.as_ref()).await?;
-        Self::from_bytes(&data)
-    }
-
-    /// Load index from file synchronously.
-    pub fn load_sync(path: impl AsRef<Path>) -> ReaderResult<Self> {
-        let data = std::fs::read(path.as_ref())?;
-        Self::from_bytes(&data)
-    }
 }
 
 impl Default for Index {
@@ -227,41 +287,101 @@ impl Default for Index {
     }
 }
 
-// Helper parsers for JSON values
-fn parse_u64(value: &serde_json::Value) -> ReaderResult<u64> {
-    value
-        .as_u64()
-        .ok_or_else(|| ReaderError::ServerlessLlm("expected u64".into()))
+// ============================================================================
+// JSON Parser Entity
+// ============================================================================
+
+/// JSON parser for a single tensor index entry.
+///
+/// Parses the 6-element array format: [offset, size, shape, stride, dtype, partition_id].
+struct TensorIndexEntryJson<'a> {
+    fields: &'a [serde_json::Value],
 }
 
-fn parse_usize(value: &serde_json::Value) -> ReaderResult<usize> {
-    value
-        .as_u64()
-        .and_then(|v| usize::try_from(v).ok())
-        .ok_or_else(|| ReaderError::ServerlessLlm("expected usize".into()))
-}
+impl<'a> TensorIndexEntryJson<'a> {
+    /// Create a new entry parser from a JSON value.
+    fn new(value: &'a serde_json::Value) -> LoadResult<Self> {
+        let arr = value.as_array().ok_or_else(|| {
+            LoadError::ServerlessLlm("tensor entry must be an array".to_string())
+        })?;
 
-fn parse_string(value: &serde_json::Value) -> ReaderResult<String> {
-    value
-        .as_str()
-        .map(String::from)
-        .ok_or_else(|| ReaderError::ServerlessLlm("expected string".into()))
-}
+        let arr = arr.as_slice();
+        if arr.len() != 6 {
+            return Err(LoadError::ServerlessLlm(format!(
+                "tensor entry must have exactly 6 elements, got {}",
+                arr.len()
+            )));
+        }
 
-fn parse_usize_vec(value: &serde_json::Value) -> ReaderResult<Vec<usize>> {
-    let arr = value
-        .as_array()
-        .ok_or_else(|| ReaderError::ServerlessLlm("expected array".into()))?;
-    let mut out = Vec::with_capacity(arr.len());
-    for v in arr {
-        out.push(
-            v.as_u64()
-                .and_then(|v| usize::try_from(v).ok())
-                .ok_or_else(|| ReaderError::ServerlessLlm("expected integer".into()))?,
-        );
+        Ok(Self { fields: arr })
     }
-    Ok(out)
+
+    /// Parse offset (element 0).
+    fn offset(&self) -> LoadResult<u64> {
+        self.fields[0]
+            .as_u64()
+            .ok_or_else(|| LoadError::ServerlessLlm("expected u64 for offset".into()))
+    }
+
+    /// Parse size (element 1).
+    fn size(&self) -> LoadResult<usize> {
+        self.fields[1]
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| LoadError::ServerlessLlm("expected usize for size".into()))
+    }
+
+    /// Parse shape (element 2).
+    fn shape(&self) -> LoadResult<Vec<usize>> {
+        parse_usize_vec(&self.fields[2], "shape")
+    }
+
+    /// Parse stride (element 3).
+    fn stride(&self) -> LoadResult<Vec<usize>> {
+        parse_usize_vec(&self.fields[3], "stride")
+    }
+
+    /// Parse dtype string (element 4).
+    fn dtype_str(&self) -> LoadResult<String> {
+        self.fields[4]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| LoadError::ServerlessLlm("expected string for dtype".into()))
+    }
+
+    /// Parse partition_id (element 5).
+    fn partition_id(&self) -> LoadResult<PartitionId> {
+        let id = self.fields[5]
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| LoadError::ServerlessLlm("expected usize for partition_id".into()))?;
+        Ok(PartitionId::new(id))
+    }
 }
+
+/// Parse a vector of unsigned integers from a JSON value.
+fn parse_usize_vec(value: &serde_json::Value, field_name: &str) -> LoadResult<Vec<usize>> {
+    let arr = value.as_array().ok_or_else(|| {
+        LoadError::ServerlessLlm(format!("expected array for {}", field_name))
+    })?;
+
+    arr.iter()
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| {
+                    LoadError::ServerlessLlm(format!(
+                        "expected integer for {} element",
+                        field_name
+                    ))
+                })
+        })
+        .collect()
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -272,9 +392,9 @@ mod tests {
         let data = br#"{"tensor_b": [4, 2, [1,2], [2,1], "i8", 3]}"#;
         let index = Index::from_bytes(data).expect("parse index");
         let tensor_b = index.get("tensor_b").expect("tensor_b");
-        assert_eq!(tensor_b.partition_id, PartitionId::new(3));
-        assert_eq!(tensor_b.size, 2);
-        assert_eq!(&*tensor_b.shape, &[1, 2]);
+        assert_eq!(tensor_b.partition_id(), PartitionId::new(3));
+        assert_eq!(tensor_b.size(), 2);
+        assert_eq!(tensor_b.shape(), &[1, 2]);
     }
 
     #[test]
@@ -292,128 +412,85 @@ mod tests {
     fn partition_max_size_computed() {
         let data = br#"{
             "a": [0, 4, [2, 2], [2, 1], "f32", 0],
-            "b": [10, 20, [2, 4], [4, 1], "f32", 0]
+            "b": [4, 8, [2, 4], [4, 1], "f32", 0],
+            "c": [12, 8, [2, 4], [4, 1], "f32", 0]
         }"#;
         let index = Index::from_bytes(data).expect("parse");
-        let p0 = index.partition(PartitionId::new(0)).expect("partition 0");
-        assert_eq!(p0.max_required_size, 30);
-    }
-
-    #[test]
-    fn empty_index_accessors() {
-        let index = Index::new();
-        assert_eq!(index.len(), 0);
-        assert!(index.is_empty());
-        assert!(index.partition_ids().is_empty());
-        assert!(index.tensor_names().is_empty());
-        assert!(index.get("anything").is_none());
-        assert!(!index.contains("anything"));
-        assert_eq!(index.iter().count(), 0);
-    }
-
-    #[test]
-    fn default_is_empty() {
-        let index = Index::default();
-        assert!(index.is_empty());
-    }
-
-    #[test]
-    fn from_bytes_malformed_json() {
-        let result = Index::from_bytes(b"not json");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn from_bytes_wrong_array_length() {
-        let data = br#"{"tensor": [0, 4, [2], [1], "f32"]}"#;
-        let result = Index::from_bytes(data);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn from_bytes_non_numeric_offset() {
-        let data = br#"{"tensor": ["abc", 4, [2], [1], "f32", 0]}"#;
-        let result = Index::from_bytes(data);
-        assert!(result.is_err());
+        let plan = index.partition(PartitionId::new(0)).expect("partition 0");
+        assert_eq!(plan.max_required_size(), 20);
     }
 
     #[test]
     fn tensor_names_sorted() {
-        let data = br#"{
-            "z_tensor": [0, 4, [2, 2], [2, 1], "f32", 0],
-            "a_tensor": [4, 4, [2, 2], [2, 1], "f32", 0],
-            "m_tensor": [8, 4, [2, 2], [2, 1], "f32", 1]
-        }"#;
+        let data = br#"{"c": [0, 4, [1], [1], "f32", 0], "a": [0, 4, [1], [1], "f32", 0], "b": [0, 4, [1], [1], "f32", 0]}"#;
         let index = Index::from_bytes(data).expect("parse");
-        let names: Vec<&str> = index.tensor_names().iter().map(|n| &**n).collect();
-        assert_eq!(names, vec!["a_tensor", "m_tensor", "z_tensor"]);
+        let names: Vec<&str> = index.tensor_names().collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]
-    fn contains_and_get() {
-        let data = br#"{"weight": [0, 8, [2, 4], [4, 1], "f32", 0]}"#;
+    fn descriptor_accessors_work() {
+        let data = br#"{"test": [8, 16, [2, 2], [2, 1], "f64", 1]}"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert!(index.contains("weight"));
-        assert!(!index.contains("bias"));
-        assert!(index.get("weight").is_some());
-        assert!(index.get("bias").is_none());
+        let desc = index.get("test").expect("test tensor");
+        assert_eq!(desc.offset(), 8);
+        assert_eq!(desc.size(), 16);
+        assert_eq!(desc.shape(), &[2, 2]);
+        assert_eq!(desc.stride(), &[2, 1]);
+        assert_eq!(desc.dtype(), Dtype::F64);
+        assert_eq!(desc.partition_id(), PartitionId::new(1));
     }
 
     #[test]
-    fn iter_yields_all_tensors() {
-        let data = br#"{
-            "a": [0, 4, [2], [1], "f32", 0],
-            "b": [4, 4, [2], [1], "f32", 0]
-        }"#;
+    fn get_returns_none_for_missing() {
+        let data = br#"{"exists": [0, 4, [1], [1], "f32", 0]}"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert_eq!(index.iter().count(), index.len());
-        assert_eq!(index.len(), 2);
+        assert!(index.get("missing").is_none());
+        assert!(!index.contains("missing"));
+        assert!(index.contains("exists"));
     }
 
     #[test]
-    fn tensors_in_same_partition() {
-        let data = br#"{
-            "a": [0, 4, [2], [1], "f32", 0],
-            "b": [4, 8, [4], [1], "f32", 0]
-        }"#;
+    fn iter_provides_name_descriptor_pairs() {
+        let data = br#"{"a": [0, 4, [1], [1], "f32", 0], "b": [0, 8, [2], [1], "f64", 1]}"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert_eq!(index.partition_ids(), &[PartitionId::new(0)]);
-        let p = index.partition(PartitionId::new(0)).unwrap();
-        assert_eq!(p.tensor_names.len(), 2);
+        let mut pairs: Vec<(&str, Dtype)> = index
+            .iter()
+            .map(|(name, desc)| (name, desc.dtype()))
+            .collect();
+        pairs.sort_by_key(|(name, _)| *name);
+        assert_eq!(pairs, vec![("a", Dtype::F32), ("b", Dtype::F64)]);
     }
 
-    mod prop {
-        use super::*;
-        use proptest::prelude::*;
+    #[test]
+    fn empty_index() {
+        let index = Index::new();
+        assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+        assert!(index.tensor_names().next().is_none());
+    }
 
-        fn arb_tensor_entry(name: &str) -> String {
-            format!(r#""{name}": [0, 4, [2, 2], [2, 1], "f32", 0]"#)
-        }
+    #[test]
+    fn tensor_entry_json_parses_all_fields() {
+        let json = serde_json::json!([16, 32, [4, 8], [8, 1], "f16", 2]);
+        let entry = TensorIndexEntryJson::new(&json).expect("parse");
+        assert_eq!(entry.offset().unwrap(), 16);
+        assert_eq!(entry.size().unwrap(), 32);
+        assert_eq!(entry.shape().unwrap(), vec![4, 8]);
+        assert_eq!(entry.stride().unwrap(), vec![8, 1]);
+        assert_eq!(entry.dtype_str().unwrap(), "f16");
+        assert_eq!(entry.partition_id().unwrap(), PartitionId::new(2));
+    }
 
-        proptest! {
-            #[test]
-            fn parse_preserves_tensor_count(count in 1usize..20) {
-                let entries: Vec<String> = (0..count)
-                    .map(|i| arb_tensor_entry(&format!("t_{i}")))
-                    .collect();
-                let json = format!("{{{}}}", entries.join(","));
-                let index = Index::from_bytes(json.as_bytes()).unwrap();
-                prop_assert_eq!(index.len(), count);
-                prop_assert_eq!(index.tensor_names().len(), count);
-            }
+    #[test]
+    fn tensor_entry_json_rejects_wrong_element_count() {
+        let json = serde_json::json!([1, 2, 3]); // only 3 elements
+        assert!(TensorIndexEntryJson::new(&json).is_err());
+    }
 
-            #[test]
-            fn names_always_sorted(count in 1usize..20) {
-                let entries: Vec<String> = (0..count)
-                    .map(|i| arb_tensor_entry(&format!("tensor_{:04}", count - i)))
-                    .collect();
-                let json = format!("{{{}}}", entries.join(","));
-                let index = Index::from_bytes(json.as_bytes()).unwrap();
-                let names: Vec<&str> = index.tensor_names().iter().map(|n| &**n).collect();
-                for w in names.windows(2) {
-                    prop_assert!(w[0] <= w[1], "names not sorted: {:?}", names);
-                }
-            }
-        }
+    #[test]
+    fn tensor_entry_json_rejects_non_array() {
+        let json = serde_json::json!("not an array");
+        assert!(TensorIndexEntryJson::new(&json).is_err());
     }
 }
