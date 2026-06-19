@@ -3,7 +3,6 @@
 //! This module provides reading and writing support for the SafeTensors format.
 
 pub mod checkpoint;
-pub mod ids;
 pub mod model;
 pub mod tensor;
 
