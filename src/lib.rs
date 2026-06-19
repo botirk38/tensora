@@ -22,6 +22,7 @@ pub use formats::tensor::{Dtype, TensorMeta};
 pub use formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 pub use formats::safetensors::Model as SafeTensorsModel;
 pub use formats::safetensors::Tensor as SafeTensorsTensor;
+pub use formats::safetensors::TensorEntry as SafeTensorsTensorEntry;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
