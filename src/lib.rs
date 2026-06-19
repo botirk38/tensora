@@ -14,9 +14,6 @@ pub use formats::error::{SaveError, SaveResult};
 // Traits
 pub use formats::traits::{Checkpoint, Model, Tensor};
 
-// Shared tensor primitives
-pub use formats::tensor::{Dtype, TensorMeta};
-
 // SafeTensors types
 pub use formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 pub use formats::safetensors::Model as SafeTensorsModel;
@@ -25,7 +22,7 @@ pub use formats::safetensors::Tensor as SafeTensorsTensor;
 // ServerlessLLM types
 pub use formats::serverlessllm::{
     Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel,
-    PartitionSizing, Tensor as ServerlessLLMTensor, TensorEntry as ServerlessLLMTensorEntry,
+    PartitionSizing, Tensor as ServerlessLLMTensor,
 };
 
 // Conversion functions

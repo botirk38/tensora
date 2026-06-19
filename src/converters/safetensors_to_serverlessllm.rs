@@ -12,8 +12,7 @@
 use crate::formats::error::{SaveError, SaveResult};
 use crate::formats::safetensors::ids::ShardId;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
-use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
-use crate::formats::serverlessllm::tensor::TensorEntry;
+use crate::formats::serverlessllm::checkpoint::{Checkpoint as SllmCheckpoint, TensorWriteEntry};
 use crate::formats::tensor::Dtype;
 #[cfg(target_os = "linux")]
 use crate::io::availability::{IoCapabilities, IoKind};
@@ -313,7 +312,7 @@ impl ConversionStats {
 #[derive(Debug)]
 pub struct ConversionPlan {
     pub copy_ops: Vec<CopyOp>,
-    pub index: HashMap<String, TensorEntry>,
+    pub index: HashMap<String, TensorWriteEntry>,
     pub stats: ConversionStats,
 }
 
@@ -358,7 +357,7 @@ impl ConversionPlan {
         let mut partition_sizes: Vec<u64> = vec![0; partition_count];
         let mut partition_shards: Vec<BTreeSet<ShardId>> = vec![BTreeSet::new(); partition_count];
         let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
-        let mut index: HashMap<String, TensorEntry> = HashMap::with_capacity(tensors.len());
+        let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
 
         for tensor in tensors {
             let best_partition = (0..partition_count)
@@ -377,7 +376,7 @@ impl ConversionPlan {
             partition_shards[best_partition].insert(tensor.shard_id);
 
             let size_u64 = tensor.size as u64;
-            let pt = TensorEntry::from_parts(
+            let entry = TensorWriteEntry::new(
                 offset,
                 size_u64,
                 tensor.shape.clone(),
@@ -385,7 +384,7 @@ impl ConversionPlan {
                 tensor.dtype,
                 PartitionId::new(best_partition),
             )?;
-            index.insert(tensor.name.clone(), pt);
+            index.insert(tensor.name.clone(), entry);
 
             copy_ops.push(CopyOp {
                 shard_id: tensor.shard_id,
@@ -605,7 +604,7 @@ impl ConversionPlan {
         }
 
         let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
         Tokio::new().write_file(&index_path, &index_bytes).await.map_err(SaveError::from)?;
         Tokio::new().sync_all(&index_path).await.map_err(SaveError::from)?;
 
@@ -616,7 +615,7 @@ impl ConversionPlan {
         std::fs::create_dir_all(output_dir)?;
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
         Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
         Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
@@ -627,7 +626,7 @@ impl ConversionPlan {
         std::fs::create_dir_all(output_dir)?;
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
+        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
         Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
         Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
@@ -731,7 +730,7 @@ impl ConversionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
+    use crate::formats::traits::Checkpoint as _;
     use crate::formats::Backend;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;

@@ -2,9 +2,6 @@
 
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
-
-use crate::formats::error::SaveError;
 
 /// Canonical tensor data type.
 ///
@@ -115,125 +112,6 @@ impl From<safetensors::Dtype> for Dtype {
     }
 }
 
-// ============================================================================
-// TensorMeta
-// ============================================================================
-
-/// Format-agnostic tensor metadata.
-///
-/// Carries everything needed to describe a tensor's layout in a checkpoint
-/// file: where it starts (`offset`), how large it is in bytes (`size`),
-/// its logical shape and stride, and its element type. Intentionally contains
-/// no format-specific fields such as partition IDs — those are added by
-/// format-specific wrappers (e.g. `serverlessllm::TensorEntry`).
-///
-/// # Construction
-///
-/// Use [`TensorMeta::new`], which validates all invariants on creation.
-///
-/// # Example
-///
-/// ```rust
-/// use tensora::formats::tensor::{Dtype, TensorMeta};
-///
-/// let meta = TensorMeta::new(0, 16, vec![2usize, 2], vec![2usize, 1], Dtype::F32).unwrap();
-/// assert_eq!(meta.shape(), &[2, 2]);
-/// assert_eq!(meta.stride(), &[2, 1]);
-/// ```
-#[derive(Debug, Clone)]
-pub struct TensorMeta {
-    /// Byte offset within the storage region.
-    pub(crate) offset: u64,
-    /// Size in bytes.
-    pub(crate) size: u64,
-    /// Shape in elements per dimension.
-    pub(crate) shape: Arc<[usize]>,
-    /// Stride in elements per dimension.
-    pub(crate) stride: Arc<[usize]>,
-    /// Element type.
-    pub(crate) dtype: Dtype,
-}
-
-impl TensorMeta {
-    /// Create a new validated `TensorMeta`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SaveError::InvalidInput` if:
-    /// - `dtype` is [`Dtype::Unknown`]
-    /// - `shape.len() != stride.len()`
-    /// - `offset + size` would overflow `u64`
-    pub fn new(
-        offset: u64,
-        size: u64,
-        shape: impl Into<Arc<[usize]>>,
-        stride: impl Into<Arc<[usize]>>,
-        dtype: Dtype,
-    ) -> Result<Self, SaveError> {
-        if dtype == Dtype::Unknown {
-            return Err(SaveError::InvalidInput(
-                "cannot use Unknown dtype for tensor".to_owned(),
-            ));
-        }
-
-        let shape = shape.into();
-        let stride = stride.into();
-
-        if shape.len() != stride.len() {
-            return Err(SaveError::InvalidInput(format!(
-                "shape length ({}) must match stride length ({})",
-                shape.len(),
-                stride.len()
-            )));
-        }
-
-        let _ = offset
-            .checked_add(size)
-            .ok_or_else(|| SaveError::InvalidInput("offset + size overflow".to_owned()))?;
-
-        Ok(Self { offset, size, shape, stride, dtype })
-    }
-
-    /// Byte offset within the storage region.
-    #[inline]
-    #[must_use]
-    pub fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    /// Size in bytes.
-    #[inline]
-    #[must_use]
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-
-    /// Shape in elements per dimension.
-    #[inline]
-    #[must_use]
-    pub fn shape(&self) -> &[usize] {
-        &self.shape
-    }
-
-    /// Stride in elements per dimension.
-    #[inline]
-    #[must_use]
-    pub fn stride(&self) -> &[usize] {
-        &self.stride
-    }
-
-    /// Element type.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> Dtype {
-        self.dtype
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,41 +132,5 @@ mod tests {
     #[test]
     fn unknown_dtype_round_trips() {
         assert_eq!(Dtype::Unknown.as_str(), "unknown");
-    }
-
-    #[test]
-    fn tensor_meta_rejects_unknown_dtype() {
-        let err = TensorMeta::new(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::Unknown);
-        assert!(err.is_err());
-    }
-
-    #[test]
-    fn tensor_meta_rejects_shape_stride_mismatch() {
-        let err = TensorMeta::new(0, 4, vec![2usize, 2], vec![1usize], Dtype::F32);
-        assert!(err.is_err());
-    }
-
-    #[test]
-    fn tensor_meta_rejects_overflow() {
-        let err = TensorMeta::new(u64::MAX, 1, vec![1usize], vec![1usize], Dtype::F32);
-        assert!(err.is_err());
-    }
-
-    #[test]
-    fn tensor_meta_accessors() {
-        let meta = TensorMeta::new(8, 16, vec![4usize], vec![1usize], Dtype::F64).unwrap();
-        assert_eq!(meta.offset(), 8);
-        assert_eq!(meta.size(), 16);
-        assert_eq!(meta.shape(), &[4]);
-        assert_eq!(meta.stride(), &[1]);
-        assert_eq!(meta.dtype(), Dtype::F64);
-    }
-
-    #[test]
-    fn tensor_meta_scalar_zero_dims() {
-        // Scalar tensor: shape=[], stride=[] is valid
-        let meta = TensorMeta::new(0, 4, Vec::<usize>::new(), Vec::<usize>::new(), Dtype::F32).unwrap();
-        assert_eq!(meta.shape(), &[] as &[usize]);
-        assert_eq!(meta.stride(), &[] as &[usize]);
     }
 }
