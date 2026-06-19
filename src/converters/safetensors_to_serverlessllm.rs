@@ -731,7 +731,7 @@ impl ConversionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::traits::Checkpoint as _;
+    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
     use crate::formats::Backend;
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
