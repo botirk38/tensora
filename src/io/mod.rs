@@ -4,7 +4,7 @@
 //!
 //! - [`Io`] — base trait all backends implement (kind, availability)
 //! - [`BlockingIo`] — blocking path-based reads/writes/durability
-//! - [`AsyncIo`] — async path-based reads/writes/durability
+//! - [`AsyncIo`] — async path-based reads/writes/durability (futures are `Send`)
 //! - [`MmapIo`] — memory-map a file or range
 //!
 //! # Vocabulary types
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn file_range_stores_path_and_range() {
-        let path = Path::new("/tmp/shard.bin");
+        let path = Path::new("/tmp/source.bin");
         let range = ByteRange::new(1, 4).unwrap();
         let file_range = FileRange::new(path, range);
         assert_eq!(file_range.path, path);

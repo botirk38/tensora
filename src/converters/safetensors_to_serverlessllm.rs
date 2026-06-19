@@ -507,7 +507,7 @@ impl ConversionPlan {
         Ok(source_files)
     }
 
-    fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> SaveResult<()> {
+    fn validate_index_manifest(input_dir: &Path, source_paths: &[PathBuf]) -> SaveResult<()> {
         let mut index_files = Vec::new();
         for entry in std::fs::read_dir(input_dir).map_err(SaveError::from)? {
             let entry = entry.map_err(SaveError::from)?;
@@ -525,7 +525,7 @@ impl ConversionPlan {
             return Ok(());
         }
 
-        let source_file_names: BTreeSet<String> = shard_paths
+        let source_file_names: BTreeSet<String> = source_paths
             .iter()
             .filter_map(|path| {
                 path.file_name()
@@ -754,16 +754,16 @@ mod tests {
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
 
-    fn write_shard(path: &Path, tensors: Vec<(&str, StTensorView<'_>)>) {
-        let bytes = serialize(tensors, None).expect("serialize shard");
+    fn write_source_file(path: &Path, tensors: Vec<(&str, StTensorView<'_>)>) {
+        let bytes = serialize(tensors, None).expect("serialize source file");
         std::fs::write(path, bytes).unwrap();
     }
 
     fn make_small_model_dir(tmp: &TempDir) -> PathBuf {
-        let shard = tmp.path().join("model.safetensors");
+        let src_file = tmp.path().join("model.safetensors");
         let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let view = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
-        write_shard(&shard, vec![("weight", view)]);
+        write_source_file(&src_file, vec![("weight", view)]);
         tmp.path().to_path_buf()
     }
 
@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_single_shard_roundtrip() {
+    fn convert_single_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out");
@@ -806,24 +806,24 @@ mod tests {
     }
 
     #[test]
-    fn convert_multi_shard_roundtrip() {
+    fn convert_multi_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let data1 = vec![0u8; 16];
         let data2 = vec![1u8; 32];
         let view1 = StTensorView::new(safetensors::Dtype::F32, vec![4], &data1).unwrap();
         let view2 = StTensorView::new(safetensors::Dtype::F32, vec![8], &data2).unwrap();
-        write_shard(&shard1, vec![("a", view1)]);
-        write_shard(&shard2, vec![("b", view2)]);
+        write_source_file(&src_file1, vec![("a", view1)]);
+        write_source_file(&src_file2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
         SafeTensorsToServerlessLLM::new(&src, &out, 4)
             .unwrap()
             .convert_sync()
-            .expect("convert multi-shard");
+            .expect("convert multi-file");
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
         let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();
@@ -837,10 +837,10 @@ mod tests {
     fn convert_rejects_mismatched_index_manifest() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
         let data = vec![0u8; 16];
         let view = StTensorView::new(safetensors::Dtype::F32, vec![4], &data).unwrap();
-        write_shard(&shard, vec![("a", view)]);
+        write_source_file(&src_file, vec![("a", view)]);
 
         std::fs::write(
             src.join("model.safetensors.index.json"),
@@ -856,17 +856,17 @@ mod tests {
     }
 
     #[test]
-    fn convert_single_shard_roundtrip_loads_same_tensor_content() {
+    fn convert_single_file_roundtrip_loads_same_tensor_content() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src_roundtrip_single");
         std::fs::create_dir_all(&src).unwrap();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
 
         let a = vec![1u8, 2, 3, 4];
         let b = vec![5u8, 6, 7, 8, 9, 10, 11, 12];
         let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
         let view_b = StTensorView::new(safetensors::Dtype::F32, vec![2], &b).unwrap();
-        write_shard(&shard, vec![("a", view_a), ("b", view_b)]);
+        write_source_file(&src_file, vec![("a", view_a), ("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_single");
         SafeTensorsToServerlessLLM::new(&src, &out, 2)
@@ -889,19 +889,19 @@ mod tests {
     }
 
     #[test]
-    fn convert_multi_shard_roundtrip_loads_same_tensor_content() {
+    fn convert_multi_file_roundtrip_loads_same_tensor_content() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src_roundtrip_multi");
         std::fs::create_dir_all(&src).unwrap();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let a = vec![1u8, 2, 3, 4];
         let b = vec![5u8, 6, 7, 8];
         let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
         let view_b = StTensorView::new(safetensors::Dtype::U8, vec![4], &b).unwrap();
-        write_shard(&shard1, vec![("a", view_a)]);
-        write_shard(&shard2, vec![("b", view_b)]);
+        write_source_file(&src_file1, vec![("a", view_a)]);
+        write_source_file(&src_file2, vec![("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_multi");
         SafeTensorsToServerlessLLM::new(&src, &out, 4)
@@ -990,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_async_single_shard_roundtrip() {
+    fn convert_async_single_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out_async");
@@ -1098,14 +1098,14 @@ mod tests {
     fn convert_duplicate_tensor_name_rejected() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let data = vec![0u8; 8];
         let view1 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
         let view2 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
-        write_shard(&shard1, vec![("same_name", view1)]);
-        write_shard(&shard2, vec![("same_name", view2)]);
+        write_source_file(&src_file1, vec![("same_name", view1)]);
+        write_source_file(&src_file2, vec![("same_name", view2)]);
 
         let out = tmp.path().join("out_dup");
         let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
@@ -1117,7 +1117,7 @@ mod tests {
     fn partition_balancing_many_tensors() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
 
         let data_a = vec![0u8; 16];
         let data_b = vec![0u8; 32];
@@ -1127,7 +1127,7 @@ mod tests {
         let vb = StTensorView::new(safetensors::Dtype::U8, vec![32], &data_b).unwrap();
         let vc = StTensorView::new(safetensors::Dtype::U8, vec![64], &data_c).unwrap();
         let vd = StTensorView::new(safetensors::Dtype::U8, vec![128], &data_d).unwrap();
-        write_shard(&shard, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
+        write_source_file(&src_file, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
         SafeTensorsToServerlessLLM::new(&src, &out, 2)
@@ -1157,9 +1157,9 @@ mod tests {
         let a = tmp.path().join("a_shard.safetensors");
         let data = vec![0u8; 4];
         let v = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
-        write_shard(&z, vec![("z", v.clone())]);
+        write_source_file(&z, vec![("z", v.clone())]);
         let v2 = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
-        write_shard(&a, vec![("a", v2)]);
+        write_source_file(&a, vec![("a", v2)]);
 
         let files = ConversionPlan::discover_source_files(tmp.path()).unwrap();
         assert!(files[0].file_name().unwrap() < files[1].file_name().unwrap());

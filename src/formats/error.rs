@@ -76,10 +76,6 @@ pub enum LoadError {
     #[error("ServerlessLLM format error: {0}")]
     ServerlessLlm(String),
 
-    /// `TensorStore` format error.
-    #[error("TensorStore format error: {0}")]
-    TensorStore(String),
-
     /// Invalid tensor metadata.
     #[error("Invalid tensor metadata: {0}")]
     InvalidMetadata(String),
@@ -106,10 +102,6 @@ pub enum SaveError {
     /// Error specific to `ServerlessLLM` format writing.
     #[error("ServerlessLLM error: {0}")]
     ServerlessLlm(String),
-
-    /// Error specific to `TensorStore` format writing.
-    #[error("TensorStore error: {0}")]
-    TensorStore(String),
 
     /// Invalid input provided to writer.
     #[error("Invalid input: {0}")]
@@ -193,7 +185,6 @@ mod tests {
             },
             LoadError::MutexPoisoned,
             LoadError::ServerlessLlm("sllm".into()),
-            LoadError::TensorStore("ts".into()),
             LoadError::InvalidMetadata("meta".into()),
         ];
         for v in &variants {
@@ -209,7 +200,6 @@ mod tests {
             SaveError::Io(io::Error::other("io")),
             SaveError::SafeTensors(safetensors::SafeTensorError::TensorNotFound("t".into())),
             SaveError::ServerlessLlm("sllm".into()),
-            SaveError::TensorStore("ts".into()),
             SaveError::InvalidInput("inp".into()),
             SaveError::Serialization("ser".into()),
             SaveError::Path("path".into()),

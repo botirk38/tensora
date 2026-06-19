@@ -148,7 +148,11 @@ pub struct TensorMeta {
     pub(crate) size: u64,
     /// Shape in elements per dimension.
     pub(crate) shape: Arc<[usize]>,
-    /// Stride in elements per dimension.
+    /// Stride in elements (not bytes) per dimension.
+    ///
+    /// `stride[i]` is the number of elements to advance in the flat buffer
+    /// when the index in dimension `i` increases by one.  A C-contiguous
+    /// (row-major) tensor with shape `[m, n]` has strides `[n, 1]`.
     pub(crate) stride: Arc<[usize]>,
     /// Element type.
     pub(crate) dtype: Dtype,
@@ -221,7 +225,7 @@ impl TensorMeta {
         &self.shape
     }
 
-    /// Stride in elements per dimension.
+    /// Stride in elements (not bytes) per dimension.
     #[inline]
     #[must_use]
     pub fn stride(&self) -> &[usize] {
