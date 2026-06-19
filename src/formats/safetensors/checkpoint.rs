@@ -7,18 +7,13 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use tensora::formats::safetensors::{Checkpoint, Dtype, TensorWriteData};
+//! use tensora::formats::safetensors::Checkpoint;
+//! use tensora::formats::tensor::Dtype;
 //!
-//! let data = vec![0u8; 4];
 //! let checkpoint = Checkpoint::new(
-//!     vec![TensorWriteData::new(
-//!         "weight",
-//!         data,
-//!         vec![1, 1],
-//!         Dtype::F32,
-//!     ).unwrap()],
+//!     vec![("weight", vec![0u8; 4], vec![1usize, 1], Dtype::F32)],
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! checkpoint.save("model.safetensors").unwrap();
 //! ```
@@ -43,117 +38,50 @@ pub use safetensors::tensor::View;
 pub type MetadataMap = HashMap<String, String>;
 
 // ============================================================================
-// TensorWriteData
-// ============================================================================
-
-/// Input data for writing a SafeTensors checkpoint.
-#[derive(Debug, Clone)]
-pub struct TensorWriteData {
-    name: String,
-    data: Vec<u8>,
-    shape: Vec<usize>,
-    dtype: Dtype,
-}
-
-impl TensorWriteData {
-    /// Create a new validated tensor write entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SaveError::InvalidInput` if:
-    /// - `name` is empty
-    /// - `dtype` is `Dtype::Unknown`
-    pub fn new(
-        name: impl Into<String>,
-        data: impl Into<Vec<u8>>,
-        shape: impl Into<Vec<usize>>,
-        dtype: Dtype,
-    ) -> SaveResult<Self> {
-        let name = name.into();
-        if name.is_empty() {
-            return Err(SaveError::InvalidInput(
-                "tensor name cannot be empty".to_owned(),
-            ));
-        }
-
-        if dtype == Dtype::Unknown {
-            return Err(SaveError::InvalidInput(
-                "cannot use Unknown dtype for tensor".to_owned(),
-            ));
-        }
-
-        let data = data.into();
-        let shape = shape.into();
-
-        Ok(Self {
-            name,
-            data,
-            shape,
-            dtype,
-        })
-    }
-
-    /// Returns the tensor name.
-    #[inline]
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the tensor data.
-    #[inline]
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// Returns the tensor shape.
-    #[inline]
-    #[must_use]
-    pub fn shape(&self) -> &[usize] {
-        &self.shape
-    }
-
-    /// Returns the dtype.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> Dtype {
-        self.dtype
-    }
-}
-
-// ============================================================================
 // Checkpoint
 // ============================================================================
 
 /// A SafeTensors checkpoint, ready to serialize.
+///
+/// Tensors are supplied as `(name, data, shape, dtype)` tuples.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
-    tensors: Vec<TensorWriteData>,
+    // (name, data, shape, dtype)
+    tensors: Vec<(String, Vec<u8>, Vec<usize>, Dtype)>,
     metadata: Option<MetadataMap>,
 }
 
 impl Checkpoint {
-    /// Create a new checkpoint from tensor data and optional metadata.
+    /// Create a new checkpoint from `(name, data, shape, dtype)` tuples and
+    /// optional metadata.
     ///
     /// # Errors
     ///
-    /// Returns `SaveError::InvalidInput` if the tensor list is empty.
+    /// Returns `SaveError::InvalidInput` if:
+    /// - the tensor list is empty
+    /// - any name is empty
+    /// - any dtype is [`Dtype::Unknown`]
     pub fn new(
-        tensors: impl IntoIterator<Item = TensorWriteData>,
+        tensors: impl IntoIterator<Item = (impl Into<String>, impl Into<Vec<u8>>, impl Into<Vec<usize>>, Dtype)>,
         metadata: Option<MetadataMap>,
     ) -> SaveResult<Self> {
-        let tensors: Vec<TensorWriteData> = tensors.into_iter().collect();
-        if tensors.is_empty() {
+        let mut entries = Vec::new();
+        for (name, data, shape, dtype) in tensors {
+            let name = name.into();
+            if name.is_empty() {
+                return Err(SaveError::InvalidInput("tensor name cannot be empty".to_owned()));
+            }
+            if dtype == Dtype::Unknown {
+                return Err(SaveError::InvalidInput("cannot use Unknown dtype for tensor".to_owned()));
+            }
+            entries.push((name, data.into(), shape.into(), dtype));
+        }
+        if entries.is_empty() {
             return Err(SaveError::InvalidInput(
                 "cannot create checkpoint with empty tensor list".to_owned(),
             ));
         }
-
-        Ok(Self {
-            tensors,
-            metadata,
-        })
+        Ok(Self { tensors: entries, metadata })
     }
 
     /// Returns the number of tensors.
@@ -170,26 +98,23 @@ impl Checkpoint {
         self.tensors.is_empty()
     }
 
-    /// Returns an iterator over tensor write data.
-    pub fn iter(&self) -> impl Iterator<Item = &TensorWriteData> {
-        self.tensors.iter()
-    }
-
     /// Serialize the checkpoint into an owned byte buffer.
     pub fn to_bytes(&self) -> SaveResult<Vec<u8>> {
-        let views: Vec<(&str, safetensors::tensor::TensorView<'_>)> = self.views()?;
+        let views = self.views()?;
         safetensors::serialize(views, self.metadata.clone()).map_err(SaveError::from)
     }
 
-    /// Build `safetensors` tensor views from the checkpoint data.
     fn views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
         self.tensors
             .iter()
-            .map(|t| {
-                let dtype = safetensors::Dtype::from(t.dtype);
-                let view = safetensors::tensor::TensorView::new(dtype, t.shape.clone(), &t.data)
-                    .map_err(|e| SaveError::InvalidInput(e.to_string()))?;
-                Ok((t.name.as_str(), view))
+            .map(|(name, data, shape, dtype)| {
+                let view = safetensors::tensor::TensorView::new(
+                    safetensors::Dtype::from(*dtype),
+                    shape.clone(),
+                    data,
+                )
+                .map_err(|e| SaveError::InvalidInput(e.to_string()))?;
+                Ok((name.as_str(), view))
             })
             .collect()
     }
@@ -354,9 +279,9 @@ mod tests {
 
     fn sample_checkpoint() -> Checkpoint {
         Checkpoint::new(
-            vec![
-                TensorWriteData::new("a", vec![0u8; 4], vec![1], Dtype::F32).unwrap(),
-                TensorWriteData::new("b", vec![0u8; 8], vec![2], Dtype::F64).unwrap(),
+            [
+                ("a", vec![0u8; 4], vec![1usize], Dtype::F32),
+                ("b", vec![0u8; 8], vec![2usize], Dtype::F64),
             ],
             None,
         )
@@ -365,36 +290,23 @@ mod tests {
 
     #[test]
     fn checkpoint_validates_empty_tensor_list() {
-        let result: Result<Checkpoint, _> = Checkpoint::new(vec![], None);
+        let result: Result<Checkpoint, _> = Checkpoint::new(
+            std::iter::empty::<(&str, Vec<u8>, Vec<usize>, Dtype)>(),
+            None,
+        );
         assert!(result.is_err());
     }
 
     #[test]
-    fn tensor_write_data_validates_empty_name() {
-        let result = TensorWriteData::new("", vec![0u8; 4], vec![1], Dtype::F32);
+    fn validates_empty_name() {
+        let result = Checkpoint::new([("", vec![0u8; 4], vec![1usize], Dtype::F32)], None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn tensor_write_data_validates_unknown_dtype() {
-        let result = TensorWriteData::new("test", vec![0u8; 4], vec![1], Dtype::Unknown);
+    fn validates_unknown_dtype() {
+        let result = Checkpoint::new([("t", vec![0u8; 4], vec![1usize], Dtype::Unknown)], None);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn tensor_write_data_accessors_work() {
-        let data = TensorWriteData::new("weight", vec![1, 2, 3, 4], vec![2, 2], Dtype::F32).unwrap();
-        assert_eq!(data.name(), "weight");
-        assert_eq!(data.data(), &[1, 2, 3, 4]);
-        assert_eq!(data.shape(), &[2, 2]);
-        assert_eq!(data.dtype(), Dtype::F32);
-    }
-
-    #[test]
-    fn checkpoint_iter_provides_entries() {
-        let cp = sample_checkpoint();
-        let names: Vec<&str> = cp.iter().map(|t| t.name()).collect();
-        assert_eq!(names, vec!["a", "b"]);
     }
 
     #[test]
