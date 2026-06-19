@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::ids::ShardId;
+use super::tensor::Tensor;
 
 // ============================================================================
 // Storage
@@ -87,54 +88,6 @@ enum ModelStorage {
         tensor_shards: HashMap<Arc<str>, ShardId>,
         tensor_names: Arc<[Arc<str>]>,
     },
-}
-
-// ============================================================================
-// Tensor
-// ============================================================================
-
-/// A tensor view into a SafeTensors model.
-#[derive(Debug)]
-pub struct Tensor<'a> {
-    shape: &'a [usize],
-    dtype: Dtype,
-    data: &'a [u8],
-}
-
-impl<'a> Tensor<'a> {
-    #[inline]
-    #[must_use]
-    pub(crate) fn new(shape: &'a [usize], dtype: Dtype, data: &'a [u8]) -> Self {
-        Self {
-            shape,
-            dtype,
-            data,
-        }
-    }
-}
-
-impl crate::formats::traits::Tensor for Tensor<'_> {
-    #[inline]
-    fn shape(&self) -> &[usize] {
-        self.shape
-    }
-
-    #[inline]
-    fn dtype(&self) -> Dtype {
-        self.dtype
-    }
-
-    #[inline]
-    fn data(&self) -> &[u8] {
-        self.data
-    }
-
-    #[inline]
-    fn stride(&self) -> Option<&[usize]> {
-        // SafeTensors are always contiguous; stride is not stored
-        // Could compute on demand, but returning None is acceptable
-        None
-    }
 }
 
 // ============================================================================
