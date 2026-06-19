@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tensora::formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 use tensora::formats::safetensors::Model;
 use tensora::formats::safetensors::TensorView as SafetensorTensorView;
-use tensora::formats::traits::Checkpoint as _;
+use tensora::formats::traits::Checkpoint;
 use tensora::serialize;
 use tensora::LoadResult;
 use tensora::Tensor as TensorTrait;

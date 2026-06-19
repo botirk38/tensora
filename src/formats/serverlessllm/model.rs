@@ -3,7 +3,6 @@
 //! The model type only provides read-only access to loaded tensors. Loading is
 //! owned by [`Checkpoint`](crate::formats::serverlessllm::Checkpoint).
 
-use crate::formats::traits::Model as ModelTrait;
 use crate::io::buffer::MmapRegion;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,103 +38,51 @@ pub struct Model {
 }
 
 impl Model {
-    /// Build a model from an eager index and owned partition buffers.
-    #[must_use]
     pub(crate) fn from_eager(index: Index, partitions: HashMap<PartitionId, Arc<[u8]>>) -> Self {
         Self {
             storage: ModelStorage::Eager { index, partitions },
         }
     }
 
-    /// Build a model from an index and memory-mapped partition regions.
-    #[must_use]
-    pub(crate) fn from_mmap(
-        index: Index,
-        partitions: HashMap<PartitionId, MmapRegion>,
-    ) -> Self {
+    pub(crate) fn from_mmap(index: Index, partitions: HashMap<PartitionId, MmapRegion>) -> Self {
         Self {
             storage: ModelStorage::Mmap { index, partitions },
         }
     }
 
     /// Returns true if this model uses lazy (mmap-backed) storage.
-    #[inline]
     #[must_use]
     pub fn is_lazy(&self) -> bool {
         matches!(self.storage, ModelStorage::Mmap { .. })
     }
 
-    /// Returns a view of the tensor with the given name, or `None` if missing.
-    #[inline]
+    /// Returns true if the model contains the named tensor.
     #[must_use]
-    pub fn tensor(&self, name: &str) -> Option<Tensor<'_>> {
+    pub fn contains(&self, name: &str) -> bool {
         match &self.storage {
-            ModelStorage::Eager { index, partitions } => {
-                let desc = index.get(name)?;
-                let partition = partitions.get(&desc.partition_id())?;
-                let start = usize::try_from(desc.offset()).ok()?;
-                let end = start.checked_add(desc.size())?;
-                let data = partition.get(start..end)?;
-                Some(Tensor::eager(desc, data))
-            }
-            ModelStorage::Mmap { index, partitions } => {
-                let desc = index.get(name)?;
-                let partition = partitions.get(&desc.partition_id())?;
-                let start = usize::try_from(desc.offset()).ok()?;
-                let end = start.checked_add(desc.size())?;
-                if end > partition.len() {
-                    return None;
-                }
-                let region = partition.subregion(start, desc.size())?;
-                Some(Tensor::mmap(desc, region))
-            }
+            ModelStorage::Eager { index, .. } => index.contains(name),
+            ModelStorage::Mmap { index, .. } => index.contains(name),
         }
     }
+}
 
-    /// Returns the number of tensors.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
+impl crate::formats::traits::Model for Model {
+    type Tensor<'a>
+        = Tensor<'a>
+    where
+        Self: 'a;
+    type Names<'a>
+        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
+    where
+        Self: 'a;
+
+    fn len(&self) -> usize {
         match &self.storage {
             ModelStorage::Eager { index, .. } => index.len(),
             ModelStorage::Mmap { index, .. } => index.len(),
         }
     }
 
-    /// Returns true if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns an iterator over tensor names.
-    #[allow(dead_code)]
-    fn tensor_names_iter(&self) -> Box<dyn ExactSizeIterator<Item = &str> + '_> {
-        match &self.storage {
-            ModelStorage::Eager { index, .. } => Box::new(index.tensor_names_iter()),
-            ModelStorage::Mmap { index, .. } => Box::new(index.tensor_names_iter()),
-        }
-    }
-}
-
-impl ModelTrait for Model {
-    type Tensor<'a>
-        = Tensor<'a>
-    where
-        Self: 'a;
-
-    type Names<'a>
-        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
-    where
-        Self: 'a;
-
-    #[inline]
-    fn len(&self) -> usize {
-        Model::len(self)
-    }
-
-    #[inline]
     fn tensor_names(&self) -> Self::Names<'_> {
         match &self.storage {
             ModelStorage::Eager { index, .. } => index.tensor_names(),
@@ -143,9 +90,27 @@ impl ModelTrait for Model {
         }
     }
 
-    #[inline]
     fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-        Model::tensor(self, name)
+        match &self.storage {
+            ModelStorage::Eager { index, partitions } => {
+                let pt = index.get(name)?;
+                let partition = partitions.get(&pt.partition_id())?;
+                let start = usize::try_from(pt.offset()).ok()?;
+                let end = start.checked_add(usize::try_from(pt.size()).ok()?)?;
+                Some(Tensor::eager(pt, partition.get(start..end)?))
+            }
+            ModelStorage::Mmap { index, partitions } => {
+                let pt = index.get(name)?;
+                let partition = partitions.get(&pt.partition_id())?;
+                let start = usize::try_from(pt.offset()).ok()?;
+                let size = usize::try_from(pt.size()).ok()?;
+                let end = start.checked_add(size)?;
+                if end > partition.len() {
+                    return None;
+                }
+                Some(Tensor::mmap(pt, partition.subregion(start, size)?))
+            }
+        }
     }
 }
 
@@ -155,38 +120,31 @@ impl ModelTrait for Model {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::tensor::Dtype;
-    use crate::formats::serverlessllm::checkpoint::{Checkpoint, TensorWriteEntry};
-    use crate::formats::serverlessllm::ids::PartitionId;
-    use crate::formats::traits::Checkpoint as _;
     use std::collections::HashMap;
+
+    use super::{Index, Model as ServerlessLLMModel, ModelStorage};
+    use crate::formats::serverlessllm::checkpoint::Checkpoint as ServerlessLLMCheckpoint;
+    use crate::formats::serverlessllm::ids::PartitionId;
+    use crate::formats::serverlessllm::tensor::TensorEntry;
+    use crate::formats::tensor::{Dtype, TensorMeta};
+    use crate::formats::traits::{Checkpoint, Model, Tensor as TensorTrait};
     use tempfile::TempDir;
 
-    fn sample_checkpoint() -> Checkpoint {
-        let mut index = HashMap::new();
-        index.insert(
-            "w".to_owned(),
-            TensorWriteEntry::new(
-                0,
-                4,
-                vec![2, 2],
-                vec![2, 1],
-                Dtype::F32,
-                PartitionId::new(0),
-            ).unwrap(),
-        );
-        Checkpoint::new(index, vec![vec![1, 2, 3, 4]]).unwrap()
+    fn sample_checkpoint() -> ServerlessLLMCheckpoint {
+        let meta = TensorMeta::new(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32).unwrap();
+        let pt = TensorEntry::new(meta, PartitionId::new(0));
+        ServerlessLLMCheckpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
     }
 
     #[test]
     fn model_empty() {
-        let model = Model {
+        let model = ServerlessLLMModel {
             storage: ModelStorage::Eager {
                 index: Index::new(),
                 partitions: HashMap::new(),
             },
         };
+        assert_eq!(model.len(), 0);
         assert!(model.is_empty());
         assert!(!model.is_lazy());
     }
@@ -194,32 +152,31 @@ mod tests {
     #[test]
     fn model_load_sync() {
         let dir = TempDir::new().unwrap();
-        let checkpoint = sample_checkpoint();
-        checkpoint.save(dir.path()).unwrap();
+        sample_checkpoint().save(dir.path()).unwrap();
 
-        let model = Checkpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
+        let model =
+            ServerlessLLMCheckpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
         assert_eq!(model.len(), 1);
         assert!(model.contains("w"));
 
         let tensor = model.tensor("w").unwrap();
-        assert_eq!(tensor.shape(), &[2, 2]);
-        assert_eq!(tensor.dtype(), Dtype::F32);
-        assert_eq!(tensor.data(), &[1, 2, 3, 4]);
+        assert_eq!(TensorTrait::shape(&tensor), &[2, 2]);
+        assert_eq!(TensorTrait::dtype(&tensor), Dtype::F32);
+        assert_eq!(TensorTrait::data(&tensor), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn model_open_mmap() {
         let dir = TempDir::new().unwrap();
-        let checkpoint = sample_checkpoint();
-        checkpoint.save(dir.path()).unwrap();
+        sample_checkpoint().save(dir.path()).unwrap();
 
-        let model = Checkpoint::open(dir.path()).unwrap();
+        let model = ServerlessLLMCheckpoint::open(dir.path()).unwrap();
         assert!(model.is_lazy());
         assert_eq!(model.len(), 1);
 
         let tensor = model.tensor("w").unwrap();
-        assert_eq!(tensor.shape(), &[2, 2]);
-        assert_eq!(tensor.dtype(), Dtype::F32);
-        assert_eq!(tensor.data(), &[1, 2, 3, 4]);
+        assert_eq!(TensorTrait::shape(&tensor), &[2, 2]);
+        assert_eq!(TensorTrait::dtype(&tensor), Dtype::F32);
+        assert_eq!(TensorTrait::data(&tensor), &[1, 2, 3, 4]);
     }
 }

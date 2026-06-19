@@ -1,6 +1,6 @@
 //! `SafeTensors` to `ServerlessLLM` conversion.
 //!
-//! Converts a directory of `*.safetensors` shards into a ServerlessLLM artifact
+//! Converts a directory of `*.safetensors` files into a ServerlessLLM artifact
 //! (partition files + tensor index). The pipeline is:
 //! 1. Metadata scan: parse SafeTensors headers to collect tensor descriptors
 //! 2. Planning: assign tensors to partitions with locality-aware balancing
@@ -10,10 +10,11 @@
 //! Entry points are provided as methods on the [`SafeTensorsToServerlessLLM`] entity.
 
 use crate::formats::error::{SaveError, SaveResult};
-use crate::formats::safetensors::ids::ShardId;
+
+use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
-use crate::formats::serverlessllm::checkpoint::{Checkpoint as SllmCheckpoint, TensorWriteEntry};
-use crate::formats::tensor::Dtype;
+use crate::formats::serverlessllm::tensor::TensorEntry;
+use crate::formats::tensor::{Dtype, TensorMeta};
 #[cfg(target_os = "linux")]
 use crate::io::availability::{IoCapabilities, IoKind};
 use crate::io::sync::Sync;
@@ -43,7 +44,7 @@ pub enum ConversionEnginePreference {
     IoUring,
 }
 
-/// Orchestrates conversion from SafeTensors shards to ServerlessLLM format.
+/// Orchestrates conversion from a directory of SafeTensors files to ServerlessLLM format.
 ///
 /// This is a configurable value object. Create it with `new()`, then optionally
 /// configure with builder methods, then call conversion methods.
@@ -156,18 +157,26 @@ impl SafeTensorsToServerlessLLM {
     }
 
     /// Convert using adaptive storage-engine choice.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await"
+    )]
     #[inline]
     pub async fn convert(
         input_dir: &str,
         output_dir: &str,
         partition_count: usize,
     ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?.convert_async().await
+        Self::new(input_dir, output_dir, partition_count)?
+            .convert_async()
+            .await
     }
 
     /// Convert using synchronous I/O.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()"
+    )]
     #[inline]
     pub fn convert_static(
         input_dir: &str,
@@ -180,7 +189,10 @@ impl SafeTensorsToServerlessLLM {
     }
 
     /// Convert using Tokio async I/O.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await"
+    )]
     #[inline]
     pub async fn convert_static_async(
         input_dir: &str,
@@ -195,7 +207,10 @@ impl SafeTensorsToServerlessLLM {
 
     /// Convert using Linux io_uring I/O.
     #[cfg(target_os = "linux")]
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()"
+    )]
     #[inline]
     pub fn convert_static_io_uring(
         input_dir: &str,
@@ -212,12 +227,13 @@ impl SafeTensorsToServerlessLLM {
 // Core types
 // ---------------------------------------------------------------------------
 
-/// Describes a single tensor in its source shard.
+/// Describes a single tensor in its source SafeTensors file.
 #[derive(Debug, Clone)]
 pub struct TensorSource {
     pub name: String,
-    pub shard_id: ShardId,
-    pub shard_path: PathBuf,
+    /// Index of the source `.safetensors` file in discovery order.
+    pub source_file_index: usize,
+    pub source_path: PathBuf,
     pub source_offset: u64,
     pub size: usize,
     pub shape: Vec<usize>,
@@ -245,11 +261,12 @@ impl TensorSource {
     }
 }
 
-/// A single copy operation from source range to destination range.
+/// A single copy operation from a source SafeTensors file to a destination partition.
 #[derive(Debug, Clone)]
 pub struct CopyOp {
-    pub shard_id: ShardId,
-    pub shard_path: PathBuf,
+    /// Index of the source `.safetensors` file in discovery order.
+    pub source_file_index: usize,
+    pub source_path: PathBuf,
     pub source_offset: u64,
     pub dest_partition: PartitionId,
     pub dest_offset: u64,
@@ -260,15 +277,15 @@ pub struct CopyOp {
 #[derive(Debug, Clone)]
 pub struct ConversionStats {
     pub total_bytes: u64,
-    pub shard_count: usize,
+    pub source_file_count: usize,
     pub partition_count: usize,
     pub tensor_count: usize,
-    pub max_shard_bytes: u64,
-    pub mean_shard_bytes: u64,
+    pub max_source_file_bytes: u64,
+    pub mean_source_file_bytes: u64,
     pub max_partition_bytes: u64,
     pub mean_partition_bytes: u64,
-    pub mean_shards_per_partition: f64,
-    pub max_shards_per_partition: usize,
+    pub mean_source_files_per_partition: f64,
+    pub max_source_files_per_partition: usize,
     pub copy_op_count: usize,
     pub mean_copy_size: f64,
     pub max_copy_size: usize,
@@ -312,7 +329,7 @@ impl ConversionStats {
 #[derive(Debug)]
 pub struct ConversionPlan {
     pub copy_ops: Vec<CopyOp>,
-    pub index: HashMap<String, TensorWriteEntry>,
+    pub index: HashMap<String, TensorEntry>,
     pub stats: ConversionStats,
 }
 
@@ -320,16 +337,16 @@ impl ConversionPlan {
     // -- Construction --------------------------------------------------------
 
     async fn build(input_dir: &Path, partition_count: usize) -> SaveResult<Self> {
-        let shard_paths = Self::discover_shards(input_dir)?;
-        Self::validate_index_manifest(input_dir, &shard_paths)?;
-        let tensors = Self::scan_shards_mmap(&shard_paths)?;
+        let source_paths = Self::discover_source_files(input_dir)?;
+        Self::validate_index_manifest(input_dir, &source_paths)?;
+        let tensors = Self::scan_source_files_mmap(&source_paths)?;
         Self::from_tensors(tensors, partition_count)
     }
 
     fn build_sync(input_dir: &Path, partition_count: usize) -> SaveResult<Self> {
-        let shard_paths = Self::discover_shards(input_dir)?;
-        Self::validate_index_manifest(input_dir, &shard_paths)?;
-        let tensors = Self::scan_shards_mmap(&shard_paths)?;
+        let source_paths = Self::discover_source_files(input_dir)?;
+        Self::validate_index_manifest(input_dir, &source_paths)?;
+        let tensors = Self::scan_source_files_mmap(&source_paths)?;
         Self::from_tensors(tensors, partition_count)
     }
 
@@ -340,55 +357,57 @@ impl ConversionPlan {
             ));
         }
 
-        let shard_count = tensors
+        let source_file_count = tensors
             .iter()
-            .map(|t| t.shard_id.as_usize())
+            .map(|t| t.source_file_index)
             .max()
             .map(|m| m + 1)
             .unwrap_or(1);
 
-        let mut shard_sizes: Vec<u64> = vec![0; shard_count];
+        let mut source_file_sizes: Vec<u64> = vec![0; source_file_count];
         for t in &tensors {
-            shard_sizes[t.shard_id.as_usize()] += t.size as u64;
+            source_file_sizes[t.source_file_index] += t.size as u64;
         }
 
         tensors.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 
         let mut partition_sizes: Vec<u64> = vec![0; partition_count];
-        let mut partition_shards: Vec<BTreeSet<ShardId>> = vec![BTreeSet::new(); partition_count];
+        let mut partition_source_files: Vec<BTreeSet<usize>> =
+            vec![BTreeSet::new(); partition_count];
         let mut copy_ops: Vec<CopyOp> = Vec::with_capacity(tensors.len());
-        let mut index: HashMap<String, TensorWriteEntry> = HashMap::with_capacity(tensors.len());
+        let mut index: HashMap<String, TensorEntry> = HashMap::with_capacity(tensors.len());
 
         for tensor in tensors {
             let best_partition = (0..partition_count)
                 .min_by_key(|&pid| {
-                    let new_shard = if partition_shards[pid].contains(&tensor.shard_id) {
-                        0
-                    } else {
-                        1
-                    };
-                    (partition_sizes[pid], new_shard, pid)
+                    let new_source_file =
+                        if partition_source_files[pid].contains(&tensor.source_file_index) {
+                            0
+                        } else {
+                            1
+                        };
+                    (partition_sizes[pid], new_source_file, pid)
                 })
                 .unwrap_or(0);
 
             let offset = partition_sizes[best_partition];
             partition_sizes[best_partition] += tensor.size as u64;
-            partition_shards[best_partition].insert(tensor.shard_id);
+            partition_source_files[best_partition].insert(tensor.source_file_index);
 
             let size_u64 = tensor.size as u64;
-            let entry = TensorWriteEntry::new(
+            let meta = TensorMeta::new(
                 offset,
                 size_u64,
                 tensor.shape.clone(),
                 tensor.stride.clone(),
                 tensor.dtype,
-                PartitionId::new(best_partition),
             )?;
-            index.insert(tensor.name.clone(), entry);
+            let pt = TensorEntry::new(meta, PartitionId::new(best_partition));
+            index.insert(tensor.name.clone(), pt);
 
             copy_ops.push(CopyOp {
-                shard_id: tensor.shard_id,
-                shard_path: tensor.shard_path,
+                source_file_index: tensor.source_file_index,
+                source_path: tensor.source_path,
                 source_offset: tensor.source_offset,
                 dest_partition: PartitionId::new(best_partition),
                 dest_offset: offset,
@@ -397,9 +416,9 @@ impl ConversionPlan {
         }
 
         let total_bytes: u64 = copy_ops.iter().map(|op| op.size as u64).sum();
-        let max_shard_bytes = shard_sizes.iter().copied().max().unwrap_or(0);
-        let mean_shard_bytes = if shard_count > 0 {
-            shard_sizes.iter().sum::<u64>() / shard_count as u64
+        let max_source_file_bytes = source_file_sizes.iter().copied().max().unwrap_or(0);
+        let mean_source_file_bytes = if source_file_count > 0 {
+            source_file_sizes.iter().sum::<u64>() / source_file_count as u64
         } else {
             0
         };
@@ -410,13 +429,15 @@ impl ConversionPlan {
             0
         };
 
-        let shards_per_partition: Vec<usize> = partition_shards.iter().map(|s| s.len()).collect();
-        let mean_shards_per_partition = if partition_count > 0 {
-            shards_per_partition.iter().sum::<usize>() as f64 / partition_count as f64
+        let source_files_per_partition: Vec<usize> =
+            partition_source_files.iter().map(|s| s.len()).collect();
+        let mean_source_files_per_partition = if partition_count > 0 {
+            source_files_per_partition.iter().sum::<usize>() as f64 / partition_count as f64
         } else {
             0.0
         };
-        let max_shards_per_partition = shards_per_partition.into_iter().max().unwrap_or(0);
+        let max_source_files_per_partition =
+            source_files_per_partition.into_iter().max().unwrap_or(0);
 
         let copy_op_count = copy_ops.len();
         let mean_copy_size = if copy_op_count > 0 {
@@ -428,15 +449,15 @@ impl ConversionPlan {
 
         let stats = ConversionStats {
             total_bytes,
-            shard_count,
+            source_file_count,
             partition_count,
             tensor_count: copy_op_count,
-            max_shard_bytes,
-            mean_shard_bytes,
+            max_source_file_bytes,
+            mean_source_file_bytes,
             max_partition_bytes,
             mean_partition_bytes,
-            mean_shards_per_partition,
-            max_shards_per_partition,
+            mean_source_files_per_partition,
+            max_source_files_per_partition,
             copy_op_count,
             mean_copy_size,
             max_copy_size,
@@ -449,9 +470,9 @@ impl ConversionPlan {
         })
     }
 
-    // -- Shard discovery ----------------------------------------------------
+    // -- Source file discovery -----------------------------------------------
 
-    fn discover_shards(input_dir: &Path) -> SaveResult<Vec<PathBuf>> {
+    fn discover_source_files(input_dir: &Path) -> SaveResult<Vec<PathBuf>> {
         if !input_dir.is_dir() {
             return Err(SaveError::InvalidInput(format!(
                 "input path is not a directory: {}",
@@ -459,7 +480,7 @@ impl ConversionPlan {
             )));
         }
 
-        let mut shards = Vec::new();
+        let mut source_files = Vec::new();
         for entry in std::fs::read_dir(input_dir).map_err(SaveError::from)? {
             let entry = entry.map_err(SaveError::from)?;
             let path = entry.path();
@@ -470,23 +491,23 @@ impl ConversionPlan {
                 continue;
             };
             if name.ends_with(".safetensors") {
-                shards.push(path);
+                source_files.push(path);
             }
         }
 
-        shards.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        source_files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
-        if shards.is_empty() {
+        if source_files.is_empty() {
             return Err(SaveError::InvalidInput(format!(
                 "no .safetensors files found in {}",
                 input_dir.display()
             )));
         }
 
-        Ok(shards)
+        Ok(source_files)
     }
 
-    fn validate_index_manifest(input_dir: &Path, shard_paths: &[PathBuf]) -> SaveResult<()> {
+    fn validate_index_manifest(input_dir: &Path, source_paths: &[PathBuf]) -> SaveResult<()> {
         let mut index_files = Vec::new();
         for entry in std::fs::read_dir(input_dir).map_err(SaveError::from)? {
             let entry = entry.map_err(SaveError::from)?;
@@ -504,7 +525,7 @@ impl ConversionPlan {
             return Ok(());
         }
 
-        let shard_names: BTreeSet<String> = shard_paths
+        let source_file_names: BTreeSet<String> = source_paths
             .iter()
             .filter_map(|path| {
                 path.file_name()
@@ -536,9 +557,9 @@ impl ConversionPlan {
                 .filter_map(|value| value.as_str().map(|s| s.to_owned()))
                 .collect();
 
-            if referenced != shard_names {
+            if referenced != source_file_names {
                 return Err(SaveError::InvalidInput(format!(
-                    "index manifest {} does not match discovered shard set",
+                    "index manifest {} does not match discovered source file set",
                     index_path.display()
                 )));
             }
@@ -547,17 +568,17 @@ impl ConversionPlan {
         Ok(())
     }
 
-    // -- Shard scanning -----------------------------------------------------
+    // -- Source file scanning -----------------------------------------------
 
-    fn scan_shards_mmap(shard_paths: &[PathBuf]) -> SaveResult<Vec<TensorSource>> {
+    fn scan_source_files_mmap(source_paths: &[PathBuf]) -> SaveResult<Vec<TensorSource>> {
         use memmap2::Mmap;
         use std::fs::File;
 
         let mut all_tensors = Vec::new();
         let mut seen_names = std::collections::BTreeSet::new();
 
-        for (i, shard_path) in shard_paths.iter().enumerate() {
-            let file = File::open(shard_path).map_err(SaveError::from)?;
+        for (i, source_path) in source_paths.iter().enumerate() {
+            let file = File::open(source_path).map_err(SaveError::from)?;
             let mmap = unsafe { Mmap::map(&file).map_err(SaveError::from)? };
             let model = SafeTensors::deserialize(&mmap)
                 .map_err(|e| SaveError::Io(std::io::Error::other(e.to_string())))?;
@@ -565,7 +586,7 @@ impl ConversionPlan {
             for name in model.names() {
                 if !seen_names.insert(name.to_owned()) {
                     return Err(SaveError::InvalidInput(format!(
-                        "duplicate tensor name across shards: {name}"
+                        "duplicate tensor name across source files: {name}"
                     )));
                 }
 
@@ -577,8 +598,8 @@ impl ConversionPlan {
 
                 all_tensors.push(TensorSource {
                     name: name.to_owned(),
-                    shard_id: ShardId::new(i),
-                    shard_path: shard_path.clone(),
+                    source_file_index: i,
+                    source_path: source_path.clone(),
                     source_offset: offset as u64,
                     size: view.len(),
                     shape: tensor.shape().to_vec(),
@@ -604,9 +625,15 @@ impl ConversionPlan {
         }
 
         let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
-        Tokio::new().write_file(&index_path, &index_bytes).await.map_err(SaveError::from)?;
-        Tokio::new().sync_all(&index_path).await.map_err(SaveError::from)?;
+        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
+        Tokio::new()
+            .write_file(&index_path, &index_bytes)
+            .await
+            .map_err(SaveError::from)?;
+        Tokio::new()
+            .sync_all(&index_path)
+            .await
+            .map_err(SaveError::from)?;
 
         Ok(())
     }
@@ -615,19 +642,10 @@ impl ConversionPlan {
         std::fs::create_dir_all(output_dir)?;
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
-        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
-        Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    fn materialize_io_uring(&self, output_dir: &Path) -> SaveResult<()> {
-        std::fs::create_dir_all(output_dir)?;
-        self.materialize_sync_parallel(output_dir)?;
-        let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index_bytes(&self.index)?;
-        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
+        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
+        Sync::new()
+            .write_file(&index_path, &index_bytes)
+            .map_err(SaveError::from)?;
         Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
@@ -676,7 +694,7 @@ impl ConversionPlan {
         for op in ops {
             let data = engine
                 .read_range(
-                    &op.shard_path,
+                    &op.source_path,
                     ByteRange::from_offset_len(op.source_offset, op.size)?,
                 )
                 .await
@@ -709,7 +727,7 @@ impl ConversionPlan {
         for op in ops {
             let data = engine
                 .read_range(
-                    &op.shard_path,
+                    &op.source_path,
                     ByteRange::from_offset_len(op.source_offset, op.size)?,
                 )
                 .map_err(SaveError::from)?;
@@ -730,22 +748,24 @@ impl ConversionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::traits::Checkpoint as _;
     use crate::formats::Backend;
+    use crate::formats::serverlessllm::Checkpoint as ServerlessLLMCheckpoint;
+    use crate::formats::traits::{Checkpoint, Model};
+
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
 
-    fn write_shard(path: &Path, tensors: Vec<(&str, StTensorView<'_>)>) {
-        let bytes = serialize(tensors, None).expect("serialize shard");
+    fn write_source_file(path: &Path, tensors: Vec<(&str, StTensorView<'_>)>) {
+        let bytes = serialize(tensors, None).expect("serialize source file");
         std::fs::write(path, bytes).unwrap();
     }
 
     fn make_small_model_dir(tmp: &TempDir) -> PathBuf {
-        let shard = tmp.path().join("model.safetensors");
+        let src_file = tmp.path().join("model.safetensors");
         let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let view = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
-        write_shard(&shard, vec![("weight", view)]);
+        write_source_file(&src_file, vec![("weight", view)]);
         tmp.path().to_path_buf()
     }
 
@@ -753,8 +773,7 @@ mod tests {
     fn convert_rejects_zero_partitions() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
-            .unwrap_err();
+        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
@@ -768,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_single_shard_roundtrip() {
+    fn convert_single_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out");
@@ -789,24 +808,24 @@ mod tests {
     }
 
     #[test]
-    fn convert_multi_shard_roundtrip() {
+    fn convert_multi_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let data1 = vec![0u8; 16];
         let data2 = vec![1u8; 32];
         let view1 = StTensorView::new(safetensors::Dtype::F32, vec![4], &data1).unwrap();
         let view2 = StTensorView::new(safetensors::Dtype::F32, vec![8], &data2).unwrap();
-        write_shard(&shard1, vec![("a", view1)]);
-        write_shard(&shard2, vec![("b", view2)]);
+        write_source_file(&src_file1, vec![("a", view1)]);
+        write_source_file(&src_file2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
         SafeTensorsToServerlessLLM::new(&src, &out, 4)
             .unwrap()
             .convert_sync()
-            .expect("convert multi-shard");
+            .expect("convert multi-file");
 
         let index_bytes = std::fs::read(out.join("tensor_index.json")).unwrap();
         let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();
@@ -820,10 +839,10 @@ mod tests {
     fn convert_rejects_mismatched_index_manifest() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
         let data = vec![0u8; 16];
         let view = StTensorView::new(safetensors::Dtype::F32, vec![4], &data).unwrap();
-        write_shard(&shard, vec![("a", view)]);
+        write_source_file(&src_file, vec![("a", view)]);
 
         std::fs::write(
             src.join("model.safetensors.index.json"),
@@ -839,17 +858,17 @@ mod tests {
     }
 
     #[test]
-    fn convert_single_shard_roundtrip_loads_same_tensor_content() {
+    fn convert_single_file_roundtrip_loads_same_tensor_content() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src_roundtrip_single");
         std::fs::create_dir_all(&src).unwrap();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
 
         let a = vec![1u8, 2, 3, 4];
         let b = vec![5u8, 6, 7, 8, 9, 10, 11, 12];
         let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
         let view_b = StTensorView::new(safetensors::Dtype::F32, vec![2], &b).unwrap();
-        write_shard(&shard, vec![("a", view_a), ("b", view_b)]);
+        write_source_file(&src_file, vec![("a", view_a), ("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_single");
         SafeTensorsToServerlessLLM::new(&src, &out, 2)
@@ -857,7 +876,7 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted = ServerlessLLMCheckpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
@@ -871,19 +890,19 @@ mod tests {
     }
 
     #[test]
-    fn convert_multi_shard_roundtrip_loads_same_tensor_content() {
+    fn convert_multi_file_roundtrip_loads_same_tensor_content() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("src_roundtrip_multi");
         std::fs::create_dir_all(&src).unwrap();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let a = vec![1u8, 2, 3, 4];
         let b = vec![5u8, 6, 7, 8];
         let view_a = StTensorView::new(safetensors::Dtype::U8, vec![4], &a).unwrap();
         let view_b = StTensorView::new(safetensors::Dtype::U8, vec![4], &b).unwrap();
-        write_shard(&shard1, vec![("a", view_a)]);
-        write_shard(&shard2, vec![("b", view_b)]);
+        write_source_file(&src_file1, vec![("a", view_a)]);
+        write_source_file(&src_file2, vec![("b", view_b)]);
 
         let out = tmp.path().join("out_roundtrip_multi");
         SafeTensorsToServerlessLLM::new(&src, &out, 4)
@@ -891,7 +910,7 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted = ServerlessLLMCheckpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
@@ -971,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_async_single_shard_roundtrip() {
+    fn convert_async_single_file_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let src = make_small_model_dir(&tmp);
         let out = tmp.path().join("out_async");
@@ -993,8 +1012,7 @@ mod tests {
         let out = tmp.path().join("out_async_zero");
 
         crate::test_utils::run_async(async {
-            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
-                .unwrap_err();
+            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
             assert!(matches!(err, SaveError::InvalidInput(_)));
         });
     }
@@ -1020,15 +1038,15 @@ mod tests {
     fn engine_selection_small_single_partition() {
         let stats = ConversionStats {
             total_bytes: 1024,
-            shard_count: 1,
+            source_file_count: 1,
             partition_count: 1,
             tensor_count: 1,
-            max_shard_bytes: 1024,
-            mean_shard_bytes: 1024,
+            max_source_file_bytes: 1024,
+            mean_source_file_bytes: 1024,
             max_partition_bytes: 1024,
             mean_partition_bytes: 1024,
-            mean_shards_per_partition: 1.0,
-            max_shards_per_partition: 1,
+            mean_source_files_per_partition: 1.0,
+            max_source_files_per_partition: 1,
             copy_op_count: 1,
             mean_copy_size: 1024.0,
             max_copy_size: 1024,
@@ -1040,15 +1058,15 @@ mod tests {
     fn engine_selection_large_multi() {
         let stats = ConversionStats {
             total_bytes: 16 * 1024 * 1024 * 1024,
-            shard_count: 8,
+            source_file_count: 8,
             partition_count: 32,
             tensor_count: 500,
-            max_shard_bytes: 2 * 1024 * 1024 * 1024,
-            mean_shard_bytes: 2 * 1024 * 1024 * 1024,
+            max_source_file_bytes: 2 * 1024 * 1024 * 1024,
+            mean_source_file_bytes: 2 * 1024 * 1024 * 1024,
             max_partition_bytes: 512 * 1024 * 1024,
             mean_partition_bytes: 512 * 1024 * 1024,
-            mean_shards_per_partition: 2.0,
-            max_shards_per_partition: 4,
+            mean_source_files_per_partition: 2.0,
+            max_source_files_per_partition: 4,
             copy_op_count: 500,
             mean_copy_size: 32.0 * 1024.0 * 1024.0,
             max_copy_size: 64 * 1024 * 1024,
@@ -1060,15 +1078,15 @@ mod tests {
     fn choose_sync_for_small_conversion() {
         let stats = ConversionStats {
             total_bytes: 1024 * 1024,
-            shard_count: 2,
+            source_file_count: 2,
             partition_count: 4,
             tensor_count: 10,
-            max_shard_bytes: 512 * 1024,
-            mean_shard_bytes: 512 * 1024,
+            max_source_file_bytes: 512 * 1024,
+            mean_source_file_bytes: 512 * 1024,
             max_partition_bytes: 256 * 1024,
             mean_partition_bytes: 256 * 1024,
-            mean_shards_per_partition: 1.0,
-            max_shards_per_partition: 2,
+            mean_source_files_per_partition: 1.0,
+            max_source_files_per_partition: 2,
             copy_op_count: 10,
             mean_copy_size: 100_000.0,
             max_copy_size: 200_000,
@@ -1080,14 +1098,14 @@ mod tests {
     fn convert_duplicate_tensor_name_rejected() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard1 = src.join("model-00001-of-00002.safetensors");
-        let shard2 = src.join("model-00002-of-00002.safetensors");
+        let src_file1 = src.join("model-00001-of-00002.safetensors");
+        let src_file2 = src.join("model-00002-of-00002.safetensors");
 
         let data = vec![0u8; 8];
         let view1 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
         let view2 = StTensorView::new(safetensors::Dtype::F32, vec![2], &data).unwrap();
-        write_shard(&shard1, vec![("same_name", view1)]);
-        write_shard(&shard2, vec![("same_name", view2)]);
+        write_source_file(&src_file1, vec![("same_name", view1)]);
+        write_source_file(&src_file2, vec![("same_name", view2)]);
 
         let out = tmp.path().join("out_dup");
         let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
@@ -1099,7 +1117,7 @@ mod tests {
     fn partition_balancing_many_tensors() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
-        let shard = src.join("model.safetensors");
+        let src_file = src.join("model.safetensors");
 
         let data_a = vec![0u8; 16];
         let data_b = vec![0u8; 32];
@@ -1109,7 +1127,7 @@ mod tests {
         let vb = StTensorView::new(safetensors::Dtype::U8, vec![32], &data_b).unwrap();
         let vc = StTensorView::new(safetensors::Dtype::U8, vec![64], &data_c).unwrap();
         let vd = StTensorView::new(safetensors::Dtype::U8, vec![128], &data_d).unwrap();
-        write_shard(&shard, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
+        write_source_file(&src_file, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
         SafeTensorsToServerlessLLM::new(&src, &out, 2)
@@ -1133,18 +1151,18 @@ mod tests {
     }
 
     #[test]
-    fn discover_shards_sorts_paths() {
+    fn discover_source_files_sorts_paths() {
         let tmp = TempDir::new().unwrap();
         let z = tmp.path().join("z_shard.safetensors");
         let a = tmp.path().join("a_shard.safetensors");
         let data = vec![0u8; 4];
         let v = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
-        write_shard(&z, vec![("z", v.clone())]);
+        write_source_file(&z, vec![("z", v.clone())]);
         let v2 = StTensorView::new(safetensors::Dtype::U8, vec![4], &data).unwrap();
-        write_shard(&a, vec![("a", v2)]);
+        write_source_file(&a, vec![("a", v2)]);
 
-        let shards = ConversionPlan::discover_shards(tmp.path()).unwrap();
-        assert!(shards[0].file_name().unwrap() < shards[1].file_name().unwrap());
+        let files = ConversionPlan::discover_source_files(tmp.path()).unwrap();
+        assert!(files[0].file_name().unwrap() < files[1].file_name().unwrap());
     }
 
     mod prop {

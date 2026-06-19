@@ -700,7 +700,11 @@ mod tests {
 
         assert_eq!(results.len(), 8);
         for (i, r) in results.iter().enumerate() {
-            assert_eq!(r.request_index, RequestIndex::new(i), "request_index mismatch at slot {i}");
+            assert_eq!(
+                r.request_index,
+                RequestIndex::new(i),
+                "request_index mismatch at slot {i}"
+            );
             let start = i * 32;
             assert_eq!(r.data(), &data[start..start + 32]);
         }

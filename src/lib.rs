@@ -11,18 +11,23 @@ pub mod io;
 pub use formats::error::{LoadError, LoadResult};
 pub use formats::error::{SaveError, SaveResult};
 
-// Traits
+// Traits and backend enums
 pub use formats::traits::{Checkpoint, Model, Tensor};
+pub use formats::{AsyncBackend, Backend};
+
+// Shared tensor primitives
+pub use formats::tensor::{Dtype, TensorMeta};
 
 // SafeTensors types
 pub use formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 pub use formats::safetensors::Model as SafeTensorsModel;
 pub use formats::safetensors::Tensor as SafeTensorsTensor;
+pub use formats::safetensors::TensorEntry as SafeTensorsTensorEntry;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
-    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel,
-    PartitionSizing, Tensor as ServerlessLLMTensor,
+    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel, PartitionSizing,
+    Tensor as ServerlessLLMTensor, TensorEntry as ServerlessLLMTensorEntry,
 };
 
 // Conversion functions

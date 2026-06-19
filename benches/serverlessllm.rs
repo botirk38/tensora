@@ -27,8 +27,15 @@ fn bench_default(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = ServerlessLLMCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
-            let bytes: usize = model.tensor_names().filter_map(|n| model.tensor(n)).map(|t| t.data().len()).sum();
+            let model =
+                ServerlessLLMCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio)
+                    .await
+                    .unwrap();
+            let bytes: usize = model
+                .tensor_names()
+                .filter_map(|n| model.tensor(n))
+                .map(|t| t.data().len())
+                .sum();
             black_box((model.len(), bytes))
         });
     });
@@ -48,8 +55,13 @@ fn bench_sync(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = ServerlessLLMCheckpoint::load(black_box(&dir_str), tensora::Backend::Sync).unwrap();
-            let bytes: usize = model.tensor_names().filter_map(|n| model.tensor(n)).map(|t| t.data().len()).sum();
+            let model =
+                ServerlessLLMCheckpoint::load(black_box(&dir_str), tensora::Backend::Sync).unwrap();
+            let bytes: usize = model
+                .tensor_names()
+                .filter_map(|n| model.tensor(n))
+                .map(|t| t.data().len())
+                .sum();
             black_box((model.len(), bytes))
         });
     });
@@ -70,8 +82,15 @@ fn bench_tokio(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = ServerlessLLMCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
-            let bytes: usize = model.tensor_names().filter_map(|n| model.tensor(n)).map(|t| t.data().len()).sum();
+            let model =
+                ServerlessLLMCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio)
+                    .await
+                    .unwrap();
+            let bytes: usize = model
+                .tensor_names()
+                .filter_map(|n| model.tensor(n))
+                .map(|t| t.data().len())
+                .sum();
             black_box((model.len(), bytes))
         });
     });
@@ -92,8 +111,14 @@ fn bench_io_uring(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = ServerlessLLMCheckpoint::load(black_box(&dir_str), tensora::Backend::IoUring).unwrap();
-            let bytes: usize = model.tensor_names().filter_map(|n| model.tensor(n)).map(|t| t.data().len()).sum();
+            let model =
+                ServerlessLLMCheckpoint::load(black_box(&dir_str), tensora::Backend::IoUring)
+                    .unwrap();
+            let bytes: usize = model
+                .tensor_names()
+                .filter_map(|n| model.tensor(n))
+                .map(|t| t.data().len())
+                .sum();
             black_box((model.len(), bytes))
         });
     });

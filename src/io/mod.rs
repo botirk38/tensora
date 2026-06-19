@@ -4,7 +4,7 @@
 //!
 //! - [`Io`] — base trait all backends implement (kind, availability)
 //! - [`BlockingIo`] — blocking path-based reads/writes/durability
-//! - [`AsyncIo`] — async path-based reads/writes/durability
+//! - [`AsyncIo`] — async path-based reads/writes/durability (futures are `Send`)
 //! - [`MmapIo`] — memory-map a file or range
 //!
 //! # Vocabulary types
@@ -327,48 +327,79 @@ pub trait BlockingIo: Io {
 }
 
 /// Async path-based I/O operations.
-#[allow(async_fn_in_trait)]
+///
+/// All returned futures are `Send`, allowing implementations to be used across
+/// Tokio multi-thread runtimes and in `spawn`-ed tasks.
 pub trait AsyncIo: Io {
     /// Reads an entire file into owned bytes.
-    async fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
+    fn read_file<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
 
     /// Reads exactly `range` from `path`.
     ///
     /// Empty ranges are valid and return empty bytes.
-    async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+    fn read_range<'a>(
+        &'a self,
+        path: &'a Path,
+        range: ByteRange,
+    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
 
     /// Reads a batch of file ranges concurrently.
-    async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>>;
+    fn read_ranges<'a>(
+        &'a self,
+        ranges: &'a [FileRange<'a>],
+    ) -> impl std::future::Future<Output = IoResult<Vec<RangeRead>>> + Send + 'a;
 
     /// Creates or truncates `path` and writes all of `data` at offset 0.
-    async fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()>;
+    fn write_file<'a>(
+        &'a self,
+        path: &'a Path,
+        data: &'a [u8],
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 
     /// Creates or truncates `path`, sets its length to `len`, then applies
     /// every slice in `writes` concurrently.
     ///
     /// `writes` is pre-validated (non-overlapping, no overflow). Does not sync.
-    async fn write_positioned_file(
-        &self,
-        path: &Path,
+    fn write_positioned_file<'a>(
+        &'a self,
+        path: &'a Path,
         len: u64,
-        writes: WriteSlices<'_>,
-    ) -> IoResult<()>;
+        writes: WriteSlices<'a>,
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 
     /// Opens an existing file at `path` and writes `data` starting at `offset`.
-    async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()>;
+    fn write_at<'a>(
+        &'a self,
+        path: &'a Path,
+        offset: u64,
+        data: &'a [u8],
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 
     /// Opens an existing file at `path` and applies every slice in `writes`
     /// concurrently.
     ///
     /// `writes` is pre-validated (non-overlapping, no overflow). Does not
     /// create or truncate the file.
-    async fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()>;
+    fn write_slices<'a>(
+        &'a self,
+        path: &'a Path,
+        writes: WriteSlices<'a>,
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 
     /// Syncs file data (but not metadata) to durable storage.
-    async fn sync_data(&self, path: &Path) -> IoResult<()>;
+    fn sync_data<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 
     /// Syncs file data and metadata to durable storage.
-    async fn sync_all(&self, path: &Path) -> IoResult<()>;
+    fn sync_all<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl std::future::Future<Output = IoResult<()>> + Send + 'a;
 }
 
 /// Memory-mapped path-based I/O operations.
@@ -414,7 +445,7 @@ mod tests {
 
     #[test]
     fn file_range_stores_path_and_range() {
-        let path = Path::new("/tmp/shard.bin");
+        let path = Path::new("/tmp/source.bin");
         let range = ByteRange::new(1, 4).unwrap();
         let file_range = FileRange::new(path, range);
         assert_eq!(file_range.path, path);

@@ -1,20 +1,20 @@
 //! `SafeTensors` format model.
 //!
-//! The model type only provides read-only access to loaded tensors. Loading is
-//! owned by [`Checkpoint`](crate::formats::safetensors::Checkpoint).
+//! [`Model`] provides read-only access to tensors loaded from one or more
+//! `.safetensors` files.  Loading is owned by
+//! [`Checkpoint`](crate::formats::safetensors::Checkpoint).
 
 use crate::formats::error::{LoadError, LoadResult};
 use crate::formats::tensor::Dtype;
-use crate::formats::traits::Model as ModelTrait;
 use crate::io::buffer::{MmapRegion, OwnedBytes};
 use safetensors::tensor::Metadata;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::ids::ShardId;
+use super::tensor::Tensor;
 
 // ============================================================================
-// Storage
+// Backing — storage abstraction
 // ============================================================================
 
 #[derive(Debug, Clone)]
@@ -55,19 +55,24 @@ impl From<Vec<u8>> for Backing {
     }
 }
 
+// ============================================================================
+// FileData — one parsed SafeTensors file
+// ============================================================================
+
 #[derive(Debug, Clone)]
-pub(crate) struct ShardData {
+pub(crate) struct FileData {
     pub(crate) metadata: Metadata,
     pub(crate) data_start: usize,
     pub(crate) backing: Backing,
 }
 
-impl ShardData {
-    /// Parse a SafeTensors shard from raw bytes or an mmap region.
+impl FileData {
+    /// Parse a SafeTensors file from raw bytes or an mmap region.
     pub(crate) fn parse(backing: impl Into<Backing>) -> LoadResult<Self> {
         const N_LEN: usize = std::mem::size_of::<u64>();
         let backing = backing.into();
-        let (header_json_len, metadata) = safetensors::SafeTensors::read_metadata(backing.as_slice())?;
+        let (header_json_len, metadata) =
+            safetensors::SafeTensors::read_metadata(backing.as_slice())?;
         Ok(Self {
             metadata,
             data_start: header_json_len + N_LEN,
@@ -76,111 +81,39 @@ impl ShardData {
     }
 }
 
-#[derive(Debug, Clone)]
-enum ModelStorage {
-    Single {
-        shard: ShardData,
-        tensor_names: Arc<[Arc<str>]>,
-    },
-    Sharded {
-        shards: Vec<ShardData>,
-        tensor_shards: HashMap<Arc<str>, ShardId>,
-        tensor_names: Arc<[Arc<str>]>,
-    },
-}
-
-// ============================================================================
-// Tensor
-// ============================================================================
-
-/// A tensor view into a SafeTensors model.
-#[derive(Debug)]
-pub struct Tensor<'a> {
-    shape: &'a [usize],
-    dtype: Dtype,
-    data: &'a [u8],
-}
-
-impl<'a> Tensor<'a> {
-    #[inline]
-    #[must_use]
-    pub(crate) fn new(shape: &'a [usize], dtype: Dtype, data: &'a [u8]) -> Self {
-        Self {
-            shape,
-            dtype,
-            data,
-        }
-    }
-}
-
-impl crate::formats::traits::Tensor for Tensor<'_> {
-    #[inline]
-    fn shape(&self) -> &[usize] {
-        self.shape
-    }
-
-    #[inline]
-    fn dtype(&self) -> Dtype {
-        self.dtype
-    }
-
-    #[inline]
-    fn data(&self) -> &[u8] {
-        self.data
-    }
-
-    #[inline]
-    fn stride(&self) -> Option<&[usize]> {
-        // SafeTensors are always contiguous; stride is not stored
-        // Could compute on demand, but returning None is acceptable
-        None
-    }
-}
-
 // ============================================================================
 // Model
 // ============================================================================
 
-/// SafeTensors model with either eager or lazy (mmap) storage.
+/// SafeTensors model loaded from one or more `.safetensors` files.
+///
+/// Supports both eager (owned bytes) and lazy (mmap-backed) storage.
+/// Single-file and multi-file models are represented uniformly.
 #[derive(Debug, Clone)]
 pub struct Model {
-    storage: ModelStorage,
+    /// All parsed SafeTensors files, in discovery order.
+    files: Vec<FileData>,
+    /// Maps tensor name → index into `files`.
+    tensor_files: HashMap<Arc<str>, usize>,
+    /// Sorted tensor names.
+    tensor_names: Arc<[Arc<str>]>,
 }
 
 impl Model {
-    /// Build a model from parsed shards.
+    /// Build a model from one or more parsed [`FileData`] objects.
     ///
     /// Used by [`Checkpoint`](crate::formats::safetensors::Checkpoint) after it
     /// owns the loading process.
-    pub(crate) fn from_shards(shards: Vec<ShardData>) -> LoadResult<Self> {
-        if shards.len() == 1 {
-            let shard = shards.into_iter().next().unwrap();
-            let mut tensor_names: Vec<Arc<str>> = shard
-                .metadata
-                .offset_keys()
-                .into_iter()
-                .map(Arc::from)
-                .collect();
-            tensor_names.sort_unstable();
-
-            return Ok(Self {
-                storage: ModelStorage::Single {
-                    shard,
-                    tensor_names: tensor_names.into(),
-                },
-            });
-        }
-
-        let mut tensor_shards: HashMap<Arc<str>, ShardId> = HashMap::new();
+    pub(crate) fn from_files(files: Vec<FileData>) -> LoadResult<Self> {
+        let mut tensor_files: HashMap<Arc<str>, usize> = HashMap::new();
         let mut tensor_names: Vec<Arc<str>> = Vec::new();
 
-        for (i, shard) in shards.iter().enumerate() {
-            let shard_id = ShardId::new(i);
-            for name in shard.metadata.offset_keys() {
+        for (file_index, file) in files.iter().enumerate() {
+            for name in file.metadata.offset_keys() {
                 let name: Arc<str> = Arc::from(name.as_str());
-                if tensor_shards.insert(name.clone(), shard_id).is_some() {
+                if tensor_files.insert(name.clone(), file_index).is_some() {
                     return Err(LoadError::InvalidMetadata(format!(
-                        "duplicate tensor name across shards: {name}"
+                        "duplicate tensor name across SafeTensors files: {name}"
                     )));
                 }
                 tensor_names.push(name);
@@ -190,174 +123,110 @@ impl Model {
         tensor_names.sort_unstable();
 
         Ok(Self {
-            storage: ModelStorage::Sharded {
-                shards,
-                tensor_shards,
-                tensor_names: tensor_names.into(),
-            },
+            files,
+            tensor_files,
+            tensor_names: tensor_names.into(),
         })
     }
 
-    /// Returns true if this model uses lazy (mmap-backed) storage.
-    #[inline]
+    /// Returns `true` if any file uses lazy (mmap-backed) storage.
     #[must_use]
     pub fn is_lazy(&self) -> bool {
-        match &self.storage {
-            ModelStorage::Single { shard, .. } => {
-                matches!(shard.backing, Backing::Mmap(_))
-            }
-            ModelStorage::Sharded { shards, .. } => {
-                shards.iter().any(|s| matches!(s.backing, Backing::Mmap(_)))
-            }
-        }
-    }
-
-    /// Returns a view of the tensor with the given name, or `None` if missing.
-    #[inline]
-    #[must_use]
-    pub fn tensor(&self, name: &str) -> Option<Tensor<'_>> {
-        let (metadata, data_start, backing) = match &self.storage {
-            ModelStorage::Single { shard, .. } => {
-                (&shard.metadata, shard.data_start, &shard.backing)
-            }
-            ModelStorage::Sharded {
-                shards,
-                tensor_shards,
-                ..
-            } => {
-                let shard_id = tensor_shards.get(name)?;
-                let shard = &shards[shard_id.as_usize()];
-                (&shard.metadata, shard.data_start, &shard.backing)
-            }
-        };
-
-        let info = metadata.info(name)?;
-        let data_region = &backing.as_slice()[data_start..];
-        let (start, end) = info.data_offsets;
-        let data = data_region.get(start..end)?;
-
-        Some(Tensor::new(&info.shape, Dtype::from(info.dtype), data))
-    }
-
-    /// Returns tensor names as an iterator.
-    fn tensor_names_iter(&self) -> Box<dyn ExactSizeIterator<Item = &str> + '_> {
-        fn arc_to_str(arc: &Arc<str>) -> &str {
-            arc.as_ref()
-        }
-        match &self.storage {
-            ModelStorage::Single { tensor_names, .. } => Box::new(tensor_names.iter().map(arc_to_str)),
-            ModelStorage::Sharded { tensor_names, .. } => Box::new(tensor_names.iter().map(arc_to_str)),
-        }
-    }
-
-    /// Returns the number of tensors.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.tensor_names_iter().len()
-    }
-
-    /// Returns true if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.files
+            .iter()
+            .any(|f| matches!(f.backing, Backing::Mmap(_)))
     }
 }
 
-impl ModelTrait for Model {
+fn arc_to_str(arc: &Arc<str>) -> &str {
+    arc.as_ref()
+}
+
+impl crate::formats::traits::Model for Model {
     type Tensor<'a>
         = Tensor<'a>
     where
         Self: 'a;
-
     type Names<'a>
         = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
     where
         Self: 'a;
 
-    #[inline]
     fn len(&self) -> usize {
-        Model::len(self)
+        self.tensor_names.len()
     }
 
-    #[inline]
     fn tensor_names(&self) -> Self::Names<'_> {
-        // Use a named fn for the closure to ensure same type in both arms
-        fn arc_to_str(arc: &Arc<str>) -> &str {
-            arc.as_ref()
-        }
-
-        match &self.storage {
-            ModelStorage::Single { tensor_names, .. } => tensor_names.iter().map(arc_to_str),
-            ModelStorage::Sharded { tensor_names, .. } => tensor_names.iter().map(arc_to_str),
-        }
+        self.tensor_names.iter().map(arc_to_str)
     }
 
-    #[inline]
     fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-        Model::tensor(self, name)
+        let file = &self.files[*self.tensor_files.get(name)?];
+        let info = file.metadata.info(name)?;
+        let (start, end) = info.data_offsets;
+        let data = file.backing.as_slice()[file.data_start..].get(start..end)?;
+        Some(Tensor::new(&info.shape, Dtype::from(info.dtype), data))
     }
 }
 
-// ============================================================================
 // ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::traits::Tensor as _;
+    use super::{FileData, Model as SafeTensorsModel, Tensor as SafeTensorsTensor};
+    use crate::formats::tensor::Dtype;
+    use crate::formats::traits::{Model, Tensor};
     use crate::io::buffer::OwnedBytes;
 
-    fn dummy_shard_data() -> ShardData {
-        // Minimal valid SafeTensors: 8-byte length (LE u64) + header JSON
-        // Header length = 2 bytes for "{}"
+    fn minimal_file_data() -> FileData {
+        // Minimal valid SafeTensors: 8-byte LE u64 length + header JSON "{}"
         let header = b"{}";
         let len = header.len() as u64;
         let mut data = Vec::with_capacity(8 + header.len());
         data.extend_from_slice(&len.to_le_bytes());
         data.extend_from_slice(header);
-        ShardData::parse(OwnedBytes::from_vec(data)).expect("parse minimal shard")
+        FileData::parse(OwnedBytes::from_vec(data)).expect("parse minimal file")
     }
 
     #[test]
-    fn model_from_single_shard() {
-        let shard = dummy_shard_data();
-        let model = Model::from_shards(vec![shard]).expect("single shard ok");
+    fn model_from_single_file() {
+        let model =
+            SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("single file ok");
         assert!(model.is_empty());
         assert!(model.tensor_names().next().is_none());
     }
 
     #[test]
-    fn model_len_matches_tensor_count() {
-        // Create a shard with known tensor names for testing
-        // This requires a valid SafeTensors header with tensors
-        // For now, just verify empty model has len 0
-        let shard = dummy_shard_data();
-        let model = Model::from_shards(vec![shard]).expect("parse");
+    fn model_from_multiple_files() {
+        let f1 = minimal_file_data();
+        let f2 = minimal_file_data();
+        let model = SafeTensorsModel::from_files(vec![f1, f2]).expect("two files ok");
+        assert!(model.is_empty());
+    }
+
+    #[test]
+    fn model_len_is_zero_for_empty_file() {
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert_eq!(model.len(), 0);
     }
 
     #[test]
     fn model_is_empty_when_no_tensors() {
-        let shard = dummy_shard_data();
-        let model = Model::from_shards(vec![shard]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(model.is_empty());
     }
 
     #[test]
     fn tensor_returns_none_for_missing() {
-        let shard = dummy_shard_data();
-        let model = Model::from_shards(vec![shard]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(model.tensor("nonexistent").is_none());
     }
 
     #[test]
     fn model_contains_uses_tensor_lookup() {
-        let shard = dummy_shard_data();
-        let model = Model::from_shards(vec![shard]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(!model.contains("any"));
     }
 
@@ -366,7 +235,7 @@ mod tests {
         // SafeTensors tensors do not store explicit stride
         let shape = vec![2, 3, 4];
         let data = vec![0u8; 2 * 3 * 4 * 4]; // f32
-        let tensor = Tensor::new(&shape, Dtype::F32, &data);
+        let tensor = SafeTensorsTensor::new(&shape, Dtype::F32, &data);
         assert_eq!(tensor.stride(), None);
     }
 }

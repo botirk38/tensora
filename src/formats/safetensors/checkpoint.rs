@@ -1,257 +1,151 @@
 //! `SafeTensors` format checkpoint.
 //!
-//! This module provides a format-specific checkpoint type that loads and saves
-//! SafeTensors models. Loading produces a [`Model`](crate::formats::safetensors::Model);
-//! saving writes a single `.safetensors` file.
+//! Provides loading from a directory of `.safetensors` files and saving to a
+//! single `.safetensors` file.
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use tensora::formats::safetensors::{Checkpoint, Dtype, TensorWriteData};
+//! use tensora::formats::safetensors::{Checkpoint, TensorEntry};
+//! use tensora::formats::tensor::Dtype;
 //!
-//! let data = vec![0u8; 4];
 //! let checkpoint = Checkpoint::new(
-//!     vec![TensorWriteData::new(
-//!         "weight",
-//!         data,
-//!         vec![1, 1],
-//!         Dtype::F32,
-//!     ).unwrap()],
+//!     vec![TensorEntry::new("weight", vec![0u8; 4], vec![1usize, 1], Dtype::F32).unwrap()],
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! checkpoint.save("model.safetensors").unwrap();
 //! ```
 
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::tensor::Dtype;
-use crate::formats::traits::Checkpoint as CheckpointTrait;
 use crate::formats::{AsyncBackend, Backend};
 use crate::io::mmap::Mmap;
 use crate::io::sync::Sync;
 use crate::io::tokio::Tokio;
 use crate::io::{AsyncIo, BlockingIo, MmapIo};
 use std::collections::HashMap;
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::model::{Model, ShardData};
-pub use safetensors::tensor::View;
+use super::model::{FileData, Model};
+use super::tensor::TensorEntry;
 
 /// Convenience alias for custom metadata passed to `SafeTensors`.
 pub type MetadataMap = HashMap<String, String>;
-
-// ============================================================================
-// TensorWriteData
-// ============================================================================
-
-/// Input data for writing a SafeTensors checkpoint.
-#[derive(Debug, Clone)]
-pub struct TensorWriteData {
-    name: String,
-    data: Vec<u8>,
-    shape: Vec<usize>,
-    dtype: Dtype,
-}
-
-impl TensorWriteData {
-    /// Create a new validated tensor write entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SaveError::InvalidInput` if:
-    /// - `name` is empty
-    /// - `dtype` is `Dtype::Unknown`
-    pub fn new(
-        name: impl Into<String>,
-        data: impl Into<Vec<u8>>,
-        shape: impl Into<Vec<usize>>,
-        dtype: Dtype,
-    ) -> SaveResult<Self> {
-        let name = name.into();
-        if name.is_empty() {
-            return Err(SaveError::InvalidInput(
-                "tensor name cannot be empty".to_owned(),
-            ));
-        }
-
-        if dtype == Dtype::Unknown {
-            return Err(SaveError::InvalidInput(
-                "cannot use Unknown dtype for tensor".to_owned(),
-            ));
-        }
-
-        let data = data.into();
-        let shape = shape.into();
-
-        Ok(Self {
-            name,
-            data,
-            shape,
-            dtype,
-        })
-    }
-
-    /// Returns the tensor name.
-    #[inline]
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the tensor data.
-    #[inline]
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// Returns the tensor shape.
-    #[inline]
-    #[must_use]
-    pub fn shape(&self) -> &[usize] {
-        &self.shape
-    }
-
-    /// Returns the dtype.
-    #[inline]
-    #[must_use]
-    pub fn dtype(&self) -> Dtype {
-        self.dtype
-    }
-}
 
 // ============================================================================
 // Checkpoint
 // ============================================================================
 
 /// A SafeTensors checkpoint, ready to serialize.
+///
+/// Tensors are supplied as [`TensorEntry`] values.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
-    tensors: Vec<TensorWriteData>,
+    tensors: Vec<TensorEntry>,
     metadata: Option<MetadataMap>,
 }
 
 impl Checkpoint {
-    /// Create a new checkpoint from tensor data and optional metadata.
+    /// Create a new checkpoint from [`TensorEntry`] values and optional metadata.
     ///
     /// # Errors
     ///
-    /// Returns `SaveError::InvalidInput` if the tensor list is empty.
+    /// Returns [`SaveError::InvalidInput`] if the tensor list is empty.
+    /// Per-tensor validation (empty name, Unknown dtype) is performed by
+    /// [`TensorEntry::new`].
     pub fn new(
-        tensors: impl IntoIterator<Item = TensorWriteData>,
+        tensors: impl IntoIterator<Item = TensorEntry>,
         metadata: Option<MetadataMap>,
     ) -> SaveResult<Self> {
-        let tensors: Vec<TensorWriteData> = tensors.into_iter().collect();
+        let tensors: Vec<TensorEntry> = tensors.into_iter().collect();
         if tensors.is_empty() {
             return Err(SaveError::InvalidInput(
                 "cannot create checkpoint with empty tensor list".to_owned(),
             ));
         }
-
-        Ok(Self {
-            tensors,
-            metadata,
-        })
-    }
-
-    /// Returns the number of tensors.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.tensors.len()
-    }
-
-    /// Returns true if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.tensors.is_empty()
-    }
-
-    /// Returns an iterator over tensor write data.
-    pub fn iter(&self) -> impl Iterator<Item = &TensorWriteData> {
-        self.tensors.iter()
+        Ok(Self { tensors, metadata })
     }
 
     /// Serialize the checkpoint into an owned byte buffer.
     pub fn to_bytes(&self) -> SaveResult<Vec<u8>> {
-        let views: Vec<(&str, safetensors::tensor::TensorView<'_>)> = self.views()?;
+        let views = self.tensor_views()?;
         safetensors::serialize(views, self.metadata.clone()).map_err(SaveError::from)
     }
 
-    /// Build `safetensors` tensor views from the checkpoint data.
-    fn views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
+    fn tensor_views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
         self.tensors
             .iter()
-            .map(|t| {
-                let dtype = safetensors::Dtype::from(t.dtype);
-                let view = safetensors::tensor::TensorView::new(dtype, t.shape.clone(), &t.data)
-                    .map_err(|e| SaveError::InvalidInput(e.to_string()))?;
-                Ok((t.name.as_str(), view))
+            .map(|entry| {
+                safetensors::tensor::TensorView::new(
+                    safetensors::Dtype::from(entry.dtype()),
+                    entry.shape().to_vec(),
+                    entry.data(),
+                )
+                .map(|v| (entry.name(), v))
+                .map_err(|e| SaveError::InvalidInput(e.to_string()))
             })
             .collect()
     }
 
-    /// Discover `.safetensors` shard files in a directory.
-    fn discover_shards(path: impl AsRef<Path>) -> LoadResult<Vec<PathBuf>> {
+    /// Discover `.safetensors` files in a directory.
+    fn discover_files(path: impl AsRef<Path>) -> LoadResult<Vec<PathBuf>> {
         let path = path.as_ref();
         if path.is_file() {
             return Err(LoadError::InvalidMetadata(format!(
-                "SafeTensors loads a directory of .safetensors shards, got file path {}",
+                "expected a directory of .safetensors files, got file path {}",
                 path.display()
             )));
         }
         if !path.is_dir() {
             return Err(LoadError::InvalidMetadata(format!(
-                "SafeTensors loads a directory of .safetensors shards, got path {}",
+                "expected a directory of .safetensors files, path not found: {}",
                 path.display()
             )));
         }
 
-        let mut shard_paths = Vec::new();
+        let mut file_paths = Vec::new();
         for entry in fs::read_dir(path)? {
             let entry = entry?;
             let entry_path = entry.path();
             if !entry_path.is_file() {
                 continue;
             }
-
             let Some(name) = entry_path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
             if name.ends_with(".safetensors") {
-                shard_paths.push(entry_path);
+                file_paths.push(entry_path);
             }
         }
 
-        shard_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        file_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
-        if shard_paths.is_empty() {
+        if file_paths.is_empty() {
             return Err(LoadError::InvalidMetadata(format!(
                 "no .safetensors files found in {}",
                 path.display()
             )));
         }
 
-        Ok(shard_paths)
+        Ok(file_paths)
     }
 }
 
-impl CheckpointTrait for Checkpoint {
+impl crate::formats::traits::Checkpoint for Checkpoint {
     type Model = Model;
 
     fn load(path: impl AsRef<Path>, backend: Backend) -> LoadResult<Self::Model> {
-        let paths = Self::discover_shards(path)?;
-        let mut shards = Vec::with_capacity(paths.len());
+        let paths = Self::discover_files(path)?;
+        let mut files = Vec::with_capacity(paths.len());
 
         match backend {
             Backend::Sync => {
                 let engine = Sync::new();
                 for path in paths {
                     let bytes = engine.read_file(&path).map_err(LoadError::from)?;
-                    shards.push(ShardData::parse(bytes)?);
+                    files.push(FileData::parse(bytes)?);
                 }
             }
             #[cfg(target_os = "linux")]
@@ -259,42 +153,45 @@ impl CheckpointTrait for Checkpoint {
                 let engine = crate::io::io_uring::IoUring::new();
                 for path in paths {
                     let bytes = engine.read_file(&path).map_err(LoadError::from)?;
-                    shards.push(ShardData::parse(bytes)?);
+                    files.push(FileData::parse(bytes)?);
                 }
             }
         }
 
-        Model::from_shards(shards)
+        Model::from_files(files)
     }
 
-    async fn aload(path: impl AsRef<Path> + Send, backend: AsyncBackend) -> LoadResult<Self::Model> {
-        let paths = Self::discover_shards(path)?;
-        let mut shards = Vec::with_capacity(paths.len());
+    async fn aload(
+        path: impl AsRef<Path> + Send,
+        backend: AsyncBackend,
+    ) -> LoadResult<Self::Model> {
+        let paths = Self::discover_files(path)?;
+        let mut files = Vec::with_capacity(paths.len());
 
         match backend {
             AsyncBackend::Tokio => {
                 let engine = Tokio::new();
                 for path in paths {
                     let bytes = engine.read_file(&path).await.map_err(LoadError::from)?;
-                    shards.push(ShardData::parse(bytes)?);
+                    files.push(FileData::parse(bytes)?);
                 }
             }
         }
 
-        Model::from_shards(shards)
+        Model::from_files(files)
     }
 
     fn open(path: impl AsRef<Path>) -> LoadResult<Self::Model> {
-        let paths = Self::discover_shards(path)?;
+        let paths = Self::discover_files(path)?;
         let mapper = Mmap::new();
-        let mut shards = Vec::with_capacity(paths.len());
+        let mut files = Vec::with_capacity(paths.len());
 
         for path in paths {
             let mmap = mapper.map_file(&path).map_err(LoadError::from)?;
-            shards.push(ShardData::parse(mmap)?);
+            files.push(FileData::parse(mmap)?);
         }
 
-        Model::from_shards(shards)
+        Model::from_files(files)
     }
 
     fn save(&self, path: impl AsRef<Path>) -> SaveResult<()> {
@@ -302,9 +199,8 @@ impl CheckpointTrait for Checkpoint {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        let views: Vec<(&str, safetensors::tensor::TensorView<'_>)> = self.views()?;
-        safetensors::serialize_to_file(views, self.metadata.clone(), path)
-            .map_err(SaveError::from)
+        let views = self.tensor_views()?;
+        safetensors::serialize_to_file(views, self.metadata.clone(), path).map_err(SaveError::from)
     }
 
     async fn asave(&self, path: impl AsRef<Path> + Send) -> SaveResult<()> {
@@ -343,20 +239,21 @@ impl From<Dtype> for safetensors::Dtype {
     }
 }
 
-// ---------------------------------------------------------------------------
+// ============================================================================
 // Tests
-// ---------------------------------------------------------------------------
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as _};
+    use super::Checkpoint as SafeTensorsCheckpoint;
+    use super::{Dtype, TensorEntry};
+    use crate::formats::traits::{Checkpoint, Model};
 
-    fn sample_checkpoint() -> Checkpoint {
-        Checkpoint::new(
-            vec![
-                TensorWriteData::new("a", vec![0u8; 4], vec![1], Dtype::F32).unwrap(),
-                TensorWriteData::new("b", vec![0u8; 8], vec![2], Dtype::F64).unwrap(),
+    fn sample_checkpoint() -> SafeTensorsCheckpoint {
+        SafeTensorsCheckpoint::new(
+            [
+                TensorEntry::new("a", vec![0u8; 4], vec![1usize], Dtype::F32).unwrap(),
+                TensorEntry::new("b", vec![0u8; 16], vec![2usize], Dtype::F64).unwrap(),
             ],
             None,
         )
@@ -365,42 +262,29 @@ mod tests {
 
     #[test]
     fn checkpoint_validates_empty_tensor_list() {
-        let result: Result<Checkpoint, _> = Checkpoint::new(vec![], None);
+        let result = SafeTensorsCheckpoint::new(std::iter::empty::<TensorEntry>(), None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn tensor_write_data_validates_empty_name() {
-        let result = TensorWriteData::new("", vec![0u8; 4], vec![1], Dtype::F32);
-        assert!(result.is_err());
+    fn validates_empty_name() {
+        let entry = TensorEntry::new("", vec![0u8; 4], vec![1usize], Dtype::F32);
+        assert!(entry.is_err());
     }
 
     #[test]
-    fn tensor_write_data_validates_unknown_dtype() {
-        let result = TensorWriteData::new("test", vec![0u8; 4], vec![1], Dtype::Unknown);
-        assert!(result.is_err());
+    fn validates_unknown_dtype() {
+        let entry = TensorEntry::new("t", vec![0u8; 4], vec![1usize], Dtype::Unknown);
+        assert!(entry.is_err());
     }
 
     #[test]
-    fn tensor_write_data_accessors_work() {
-        let data = TensorWriteData::new("weight", vec![1, 2, 3, 4], vec![2, 2], Dtype::F32).unwrap();
-        assert_eq!(data.name(), "weight");
-        assert_eq!(data.data(), &[1, 2, 3, 4]);
-        assert_eq!(data.shape(), &[2, 2]);
-        assert_eq!(data.dtype(), Dtype::F32);
-    }
-
-    #[test]
-    fn checkpoint_iter_provides_entries() {
-        let cp = sample_checkpoint();
-        let names: Vec<&str> = cp.iter().map(|t| t.name()).collect();
-        assert_eq!(names, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn checkpoint_len_and_is_empty() {
-        let cp = sample_checkpoint();
-        assert_eq!(cp.len(), 2);
-        assert!(!cp.is_empty());
+    fn checkpoint_roundtrip() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        sample_checkpoint().save(&path).unwrap();
+        let model = SafeTensorsCheckpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
+        assert_eq!(model.len(), 2);
     }
 }

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use hf_hub::Repo;
 use hf_hub::api::sync::ApiBuilder;
 
-use crate::SaveError;
 use crate::PartitionSizing;
+use crate::SaveError;
 
 /// Slug used for cache subdirectories (`org-name` lowercased).
 pub fn filesystem_slug(model_id: &str) -> String {
@@ -126,11 +126,8 @@ pub fn ensure_serverlessllm_cache_dir(
     let sizing = PartitionSizing::default_target();
     let partitions = sizing.recommended_count(total);
 
-    let converter = crate::SafeTensorsToServerlessLLM::new(
-        safetensors_dir,
-        &out,
-        partitions.as_usize(),
-    )?;
+    let converter =
+        crate::SafeTensorsToServerlessLLM::new(safetensors_dir, &out, partitions.as_usize())?;
     converter.convert_sync()?;
 
     Ok(out)
