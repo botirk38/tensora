@@ -644,19 +644,6 @@ impl ConversionPlan {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
-    fn materialize_io_uring(&self, output_dir: &Path) -> SaveResult<()> {
-        std::fs::create_dir_all(output_dir)?;
-        self.materialize_sync_parallel(output_dir)?;
-        let index_path = output_dir.join("tensor_index.json");
-        let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Sync::new()
-            .write_file(&index_path, &index_bytes)
-            .map_err(SaveError::from)?;
-        Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
-        Ok(())
-    }
-
     async fn materialize_async_inner(&self, output_dir: &Path) -> SaveResult<()> {
         let partitions = self.group_by_partition();
         let futs: Vec<_> = partitions
