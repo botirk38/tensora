@@ -247,7 +247,7 @@ impl From<Dtype> for safetensors::Dtype {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as _};
+    use crate::formats::traits::Model as _;
 
     fn sample_checkpoint() -> Checkpoint {
         Checkpoint::new(

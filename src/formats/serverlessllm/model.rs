@@ -126,7 +126,7 @@ mod tests {
     use crate::formats::serverlessllm::ids::PartitionId;
     use crate::formats::serverlessllm::tensor::TensorEntry;
     use crate::formats::tensor::{Dtype, TensorMeta};
-    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
+    use crate::formats::traits::{Checkpoint as _, Tensor as TensorTrait};
     use tempfile::TempDir;
 
     fn sample_checkpoint() -> Checkpoint {
