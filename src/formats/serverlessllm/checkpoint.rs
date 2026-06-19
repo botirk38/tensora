@@ -93,46 +93,6 @@ impl Checkpoint {
         Ok(Self { index: index_map, partitions })
     }
 
-    /// Returns the number of tensors in this checkpoint.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.index.len()
-    }
-
-    /// Returns `true` if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
-    }
-
-    /// Returns the number of partitions.
-    #[inline]
-    #[must_use]
-    pub fn partition_count(&self) -> usize {
-        self.partitions.len()
-    }
-
-    /// Iterates over `(name, PartitionedTensor)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &TensorEntry)> {
-        self.index.iter().map(|(k, v)| (k.as_str(), v))
-    }
-
-    /// Returns the [`PartitionedTensor`] for a given tensor name.
-    #[inline]
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&TensorEntry> {
-        self.index.get(name)
-    }
-
-    /// Returns `true` if the checkpoint contains the named tensor.
-    #[inline]
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.index.contains_key(name)
-    }
-
     /// Encode the index map as canonical `tensor_index.json` bytes.
     ///
     /// Called by `save`/`asave` and the converter's materialize step.
@@ -317,19 +277,19 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_partitioned_tensors() {
-        let cp = Checkpoint::new(
+    fn multi_tensor_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        Checkpoint::new(
             [
                 ("a".to_owned(), entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0)),
                 ("b".to_owned(), entry(4, 8, vec![2, 4], vec![4, 1], Dtype::F64, 0)),
             ],
             [vec![0u8; 12]],
-        ).unwrap();
+        ).unwrap().save(dir.path()).unwrap();
 
-        let mut pairs: Vec<(&str, Dtype)> =
-            cp.iter().map(|(name, e)| (name, e.dtype())).collect();
-        pairs.sort_by_key(|(name, _)| *name);
-
-        assert_eq!(pairs, vec![("a", Dtype::F32), ("b", Dtype::F64)]);
+        let model = Checkpoint::load(dir.path(), Backend::Sync).unwrap();
+        assert_eq!(model.len(), 2);
+        assert_eq!(model.tensor("a").unwrap().dtype(), Dtype::F32);
+        assert_eq!(model.tensor("b").unwrap().dtype(), Dtype::F64);
     }
 }

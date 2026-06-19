@@ -84,39 +84,18 @@ impl Checkpoint {
         Ok(Self { tensors: entries, metadata })
     }
 
-    /// Returns the number of tensors.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.tensors.len()
-    }
-
-    /// Returns true if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.tensors.is_empty()
-    }
-
     /// Serialize the checkpoint into an owned byte buffer.
     pub fn to_bytes(&self) -> SaveResult<Vec<u8>> {
-        let views = self.views()?;
+        let views = self.tensor_views()?;
         safetensors::serialize(views, self.metadata.clone()).map_err(SaveError::from)
     }
 
-    fn views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
-        self.tensors
-            .iter()
-            .map(|(name, data, shape, dtype)| {
-                let view = safetensors::tensor::TensorView::new(
-                    safetensors::Dtype::from(*dtype),
-                    shape.clone(),
-                    data,
-                )
-                .map_err(|e| SaveError::InvalidInput(e.to_string()))?;
-                Ok((name.as_str(), view))
-            })
-            .collect()
+    fn tensor_views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
+        self.tensors.iter().map(|(name, data, shape, dtype)| {
+            safetensors::tensor::TensorView::new(safetensors::Dtype::from(*dtype), shape.clone(), data)
+                .map(|v| (name.as_str(), v))
+                .map_err(|e| SaveError::InvalidInput(e.to_string()))
+        }).collect()
     }
 
     /// Discover `.safetensors` shard files in a directory.
@@ -227,7 +206,7 @@ impl CheckpointTrait for Checkpoint {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        let views: Vec<(&str, safetensors::tensor::TensorView<'_>)> = self.views()?;
+        let views = self.tensor_views()?;
         safetensors::serialize_to_file(views, self.metadata.clone(), path)
             .map_err(SaveError::from)
     }
@@ -280,8 +259,8 @@ mod tests {
     fn sample_checkpoint() -> Checkpoint {
         Checkpoint::new(
             [
-                ("a", vec![0u8; 4], vec![1usize], Dtype::F32),
-                ("b", vec![0u8; 8], vec![2usize], Dtype::F64),
+                ("a", vec![0u8; 4], vec![1usize], Dtype::F32),   // 1 × f32 = 4 bytes
+                ("b", vec![0u8; 16], vec![2usize], Dtype::F64),  // 2 × f64 = 16 bytes
             ],
             None,
         )
@@ -310,9 +289,12 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_len_and_is_empty() {
-        let cp = sample_checkpoint();
-        assert_eq!(cp.len(), 2);
-        assert!(!cp.is_empty());
+    fn checkpoint_roundtrip() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("model.safetensors");
+        sample_checkpoint().save(&path).unwrap();
+        let model = Checkpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
+        assert_eq!(model.len(), 2);
     }
 }

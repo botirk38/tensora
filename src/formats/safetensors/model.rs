@@ -152,104 +152,48 @@ impl Model {
     }
 
     /// Returns true if this model uses lazy (mmap-backed) storage.
-    #[inline]
     #[must_use]
     pub fn is_lazy(&self) -> bool {
         match &self.storage {
-            ModelStorage::Single { shard, .. } => {
-                matches!(shard.backing, Backing::Mmap(_))
-            }
-            ModelStorage::Sharded { shards, .. } => {
-                shards.iter().any(|s| matches!(s.backing, Backing::Mmap(_)))
-            }
+            ModelStorage::Single { shard, .. } => matches!(shard.backing, Backing::Mmap(_)),
+            ModelStorage::Sharded { shards, .. } => shards.iter().any(|s| matches!(s.backing, Backing::Mmap(_))),
         }
-    }
-
-    /// Returns a view of the tensor with the given name, or `None` if missing.
-    #[inline]
-    #[must_use]
-    pub fn tensor(&self, name: &str) -> Option<Tensor<'_>> {
-        let (metadata, data_start, backing) = match &self.storage {
-            ModelStorage::Single { shard, .. } => {
-                (&shard.metadata, shard.data_start, &shard.backing)
-            }
-            ModelStorage::Sharded {
-                shards,
-                tensor_shards,
-                ..
-            } => {
-                let shard_id = tensor_shards.get(name)?;
-                let shard = &shards[shard_id.as_usize()];
-                (&shard.metadata, shard.data_start, &shard.backing)
-            }
-        };
-
-        let info = metadata.info(name)?;
-        let data_region = &backing.as_slice()[data_start..];
-        let (start, end) = info.data_offsets;
-        let data = data_region.get(start..end)?;
-
-        Some(Tensor::new(&info.shape, Dtype::from(info.dtype), data))
-    }
-
-    /// Returns tensor names as an iterator.
-    fn tensor_names_iter(&self) -> Box<dyn ExactSizeIterator<Item = &str> + '_> {
-        fn arc_to_str(arc: &Arc<str>) -> &str {
-            arc.as_ref()
-        }
-        match &self.storage {
-            ModelStorage::Single { tensor_names, .. } => Box::new(tensor_names.iter().map(arc_to_str)),
-            ModelStorage::Sharded { tensor_names, .. } => Box::new(tensor_names.iter().map(arc_to_str)),
-        }
-    }
-
-    /// Returns the number of tensors.
-    #[inline]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.tensor_names_iter().len()
-    }
-
-    /// Returns true if there are no tensors.
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
+fn arc_to_str(arc: &Arc<str>) -> &str { arc.as_ref() }
+
 impl ModelTrait for Model {
-    type Tensor<'a>
-        = Tensor<'a>
-    where
-        Self: 'a;
+    type Tensor<'a> = Tensor<'a> where Self: 'a;
+    type Names<'a> = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
+        where Self: 'a;
 
-    type Names<'a>
-        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
-    where
-        Self: 'a;
-
-    #[inline]
     fn len(&self) -> usize {
-        Model::len(self)
+        match &self.storage {
+            ModelStorage::Single { tensor_names, .. } => tensor_names.len(),
+            ModelStorage::Sharded { tensor_names, .. } => tensor_names.len(),
+        }
     }
 
-    #[inline]
     fn tensor_names(&self) -> Self::Names<'_> {
-        // Use a named fn for the closure to ensure same type in both arms
-        fn arc_to_str(arc: &Arc<str>) -> &str {
-            arc.as_ref()
-        }
-
         match &self.storage {
             ModelStorage::Single { tensor_names, .. } => tensor_names.iter().map(arc_to_str),
             ModelStorage::Sharded { tensor_names, .. } => tensor_names.iter().map(arc_to_str),
         }
     }
 
-    #[inline]
     fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-        Model::tensor(self, name)
+        let (metadata, data_start, backing) = match &self.storage {
+            ModelStorage::Single { shard, .. } => (&shard.metadata, shard.data_start, &shard.backing),
+            ModelStorage::Sharded { shards, tensor_shards, .. } => {
+                let shard = &shards[tensor_shards.get(name)?.as_usize()];
+                (&shard.metadata, shard.data_start, &shard.backing)
+            }
+        };
+        let info = metadata.info(name)?;
+        let (start, end) = info.data_offsets;
+        let data = backing.as_slice()[data_start..].get(start..end)?;
+        Some(Tensor::new(&info.shape, Dtype::from(info.dtype), data))
     }
 }
 
