@@ -19,7 +19,6 @@
 
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::tensor::Dtype;
-use crate::formats::traits::Checkpoint as CheckpointTrait;
 use crate::formats::{AsyncBackend, Backend};
 use crate::io::mmap::Mmap;
 use crate::io::sync::Sync;
@@ -134,7 +133,7 @@ impl Checkpoint {
     }
 }
 
-impl CheckpointTrait for Checkpoint {
+impl crate::formats::traits::Checkpoint for Checkpoint {
     type Model = Model;
 
     fn load(path: impl AsRef<Path>, backend: Backend) -> LoadResult<Self::Model> {
@@ -246,11 +245,12 @@ impl From<Dtype> for safetensors::Dtype {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::traits::Model as _;
+    use super::Checkpoint as SafeTensorsCheckpoint;
+    use super::{Dtype, TensorEntry};
+    use crate::formats::traits::{Checkpoint, Model};
 
-    fn sample_checkpoint() -> Checkpoint {
-        Checkpoint::new(
+    fn sample_checkpoint() -> SafeTensorsCheckpoint {
+        SafeTensorsCheckpoint::new(
             [
                 TensorEntry::new("a", vec![0u8; 4], vec![1usize], Dtype::F32).unwrap(),
                 TensorEntry::new("b", vec![0u8; 16], vec![2usize], Dtype::F64).unwrap(),
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn checkpoint_validates_empty_tensor_list() {
-        let result = Checkpoint::new(std::iter::empty::<TensorEntry>(), None);
+        let result = SafeTensorsCheckpoint::new(std::iter::empty::<TensorEntry>(), None);
         assert!(result.is_err());
     }
 
@@ -284,7 +284,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("model.safetensors");
         sample_checkpoint().save(&path).unwrap();
-        let model = Checkpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
+        let model = SafeTensorsCheckpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
         assert_eq!(model.len(), 2);
     }
 }

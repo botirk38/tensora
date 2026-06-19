@@ -19,7 +19,6 @@
 //! ```
 
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
-use crate::formats::traits::Checkpoint as CheckpointTrait;
 use crate::formats::{AsyncBackend, Backend};
 use crate::io::mmap::Mmap;
 use crate::io::sync::Sync;
@@ -124,10 +123,10 @@ impl Checkpoint {
 }
 
 // ============================================================================
-// CheckpointTrait impl
+// Checkpoint trait impl
 // ============================================================================
 
-impl CheckpointTrait for Checkpoint {
+impl crate::formats::traits::Checkpoint for Checkpoint {
     type Model = Model;
 
     fn load(path: impl AsRef<Path>, backend: Backend) -> LoadResult<Self::Model> {
@@ -258,9 +257,13 @@ impl CheckpointTrait for Checkpoint {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Checkpoint as ServerlessLLMCheckpoint;
+    use crate::formats::Backend;
+    use crate::formats::error::SaveResult;
+    use crate::formats::serverlessllm::ids::PartitionId;
+    use crate::formats::serverlessllm::tensor::TensorEntry;
     use crate::formats::tensor::{Dtype, TensorMeta};
-    use crate::formats::traits::Model as _;
+    use crate::formats::traits::{Checkpoint, Model};
     use tempfile::TempDir;
 
     fn entry(
@@ -277,14 +280,14 @@ mod tests {
 
     #[test]
     fn validates_empty_index() {
-        let result: SaveResult<Checkpoint> =
-            Checkpoint::new(std::iter::empty::<(String, TensorEntry)>(), [vec![1u8]]);
+        let result: SaveResult<ServerlessLLMCheckpoint> =
+            ServerlessLLMCheckpoint::new(std::iter::empty::<(String, TensorEntry)>(), [vec![1u8]]);
         assert!(result.is_err());
     }
 
     #[test]
     fn validates_empty_tensor_name() {
-        let result = Checkpoint::new(
+        let result = ServerlessLLMCheckpoint::new(
             [(
                 "".to_owned(),
                 entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
@@ -296,7 +299,7 @@ mod tests {
 
     #[test]
     fn validates_partition_out_of_bounds() {
-        let result = Checkpoint::new(
+        let result = ServerlessLLMCheckpoint::new(
             [(
                 "w".to_owned(),
                 entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 5),
@@ -309,7 +312,7 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let dir = TempDir::new().unwrap();
-        let cp = Checkpoint::new(
+        let cp = ServerlessLLMCheckpoint::new(
             [(
                 "test".to_owned(),
                 entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
@@ -320,7 +323,7 @@ mod tests {
 
         cp.save(dir.path()).unwrap();
 
-        let model = Checkpoint::load(dir.path(), Backend::Sync).unwrap();
+        let model = ServerlessLLMCheckpoint::load(dir.path(), Backend::Sync).unwrap();
         assert_eq!(model.len(), 1);
         assert!(model.contains("test"));
 
@@ -332,7 +335,7 @@ mod tests {
     #[test]
     fn multi_tensor_roundtrip() {
         let dir = TempDir::new().unwrap();
-        Checkpoint::new(
+        ServerlessLLMCheckpoint::new(
             [
                 (
                     "a".to_owned(),
@@ -349,7 +352,7 @@ mod tests {
         .save(dir.path())
         .unwrap();
 
-        let model = Checkpoint::load(dir.path(), Backend::Sync).unwrap();
+        let model = ServerlessLLMCheckpoint::load(dir.path(), Backend::Sync).unwrap();
         assert_eq!(model.len(), 2);
         assert_eq!(model.tensor("a").unwrap().dtype(), Dtype::F32);
         assert_eq!(model.tensor("b").unwrap().dtype(), Dtype::F64);

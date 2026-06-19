@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use tensora::formats::serverlessllm::Checkpoint as ServerlessLLMCheckpoint;
 use tensora::formats::serverlessllm::Model;
-use tensora::formats::traits::Checkpoint as _;
+use tensora::formats::traits::Checkpoint;
 use tensora::LoadResult;
 
 use super::run_async;

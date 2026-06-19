@@ -6,7 +6,6 @@
 
 use crate::formats::error::{LoadError, LoadResult};
 use crate::formats::tensor::Dtype;
-use crate::formats::traits::Model as ModelTrait;
 use crate::io::buffer::{MmapRegion, OwnedBytes};
 use safetensors::tensor::Metadata;
 use std::collections::HashMap;
@@ -143,7 +142,7 @@ fn arc_to_str(arc: &Arc<str>) -> &str {
     arc.as_ref()
 }
 
-impl ModelTrait for Model {
+impl crate::formats::traits::Model for Model {
     type Tensor<'a>
         = Tensor<'a>
     where
@@ -176,8 +175,9 @@ impl ModelTrait for Model {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::traits::Tensor as _;
+    use super::{FileData, Model as SafeTensorsModel, Tensor as SafeTensorsTensor};
+    use crate::formats::tensor::Dtype;
+    use crate::formats::traits::{Model, Tensor};
     use crate::io::buffer::OwnedBytes;
 
     fn minimal_file_data() -> FileData {
@@ -192,7 +192,8 @@ mod tests {
 
     #[test]
     fn model_from_single_file() {
-        let model = Model::from_files(vec![minimal_file_data()]).expect("single file ok");
+        let model =
+            SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("single file ok");
         assert!(model.is_empty());
         assert!(model.tensor_names().next().is_none());
     }
@@ -201,31 +202,31 @@ mod tests {
     fn model_from_multiple_files() {
         let f1 = minimal_file_data();
         let f2 = minimal_file_data();
-        let model = Model::from_files(vec![f1, f2]).expect("two files ok");
+        let model = SafeTensorsModel::from_files(vec![f1, f2]).expect("two files ok");
         assert!(model.is_empty());
     }
 
     #[test]
     fn model_len_is_zero_for_empty_file() {
-        let model = Model::from_files(vec![minimal_file_data()]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert_eq!(model.len(), 0);
     }
 
     #[test]
     fn model_is_empty_when_no_tensors() {
-        let model = Model::from_files(vec![minimal_file_data()]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(model.is_empty());
     }
 
     #[test]
     fn tensor_returns_none_for_missing() {
-        let model = Model::from_files(vec![minimal_file_data()]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(model.tensor("nonexistent").is_none());
     }
 
     #[test]
     fn model_contains_uses_tensor_lookup() {
-        let model = Model::from_files(vec![minimal_file_data()]).expect("parse");
+        let model = SafeTensorsModel::from_files(vec![minimal_file_data()]).expect("parse");
         assert!(!model.contains("any"));
     }
 
@@ -234,7 +235,7 @@ mod tests {
         // SafeTensors tensors do not store explicit stride
         let shape = vec![2, 3, 4];
         let data = vec![0u8; 2 * 3 * 4 * 4]; // f32
-        let tensor = Tensor::new(&shape, Dtype::F32, &data);
+        let tensor = SafeTensorsTensor::new(&shape, Dtype::F32, &data);
         assert_eq!(tensor.stride(), None);
     }
 }

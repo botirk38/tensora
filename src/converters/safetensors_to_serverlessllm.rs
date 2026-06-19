@@ -749,7 +749,8 @@ impl ConversionPlan {
 mod tests {
     use super::*;
     use crate::formats::Backend;
-    use crate::formats::traits::{Checkpoint as _, Model as _};
+    use crate::formats::serverlessllm::Checkpoint as ServerlessLLMCheckpoint;
+    use crate::formats::traits::{Checkpoint, Model};
 
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
@@ -875,8 +876,7 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted =
-            crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted = ServerlessLLMCheckpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
@@ -910,8 +910,7 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted =
-            crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted = ServerlessLLMCheckpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 

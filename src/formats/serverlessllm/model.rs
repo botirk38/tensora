@@ -3,7 +3,6 @@
 //! The model type only provides read-only access to loaded tensors. Loading is
 //! owned by [`Checkpoint`](crate::formats::serverlessllm::Checkpoint).
 
-use crate::formats::traits::Model as ModelTrait;
 use crate::io::buffer::MmapRegion;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,7 +66,7 @@ impl Model {
     }
 }
 
-impl ModelTrait for Model {
+impl crate::formats::traits::Model for Model {
     type Tensor<'a>
         = Tensor<'a>
     where
@@ -121,23 +120,25 @@ impl ModelTrait for Model {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::formats::serverlessllm::checkpoint::Checkpoint;
+    use std::collections::HashMap;
+
+    use super::{Index, Model as ServerlessLLMModel, ModelStorage};
+    use crate::formats::serverlessllm::checkpoint::Checkpoint as ServerlessLLMCheckpoint;
     use crate::formats::serverlessllm::ids::PartitionId;
     use crate::formats::serverlessllm::tensor::TensorEntry;
     use crate::formats::tensor::{Dtype, TensorMeta};
-    use crate::formats::traits::{Checkpoint as _, Tensor as TensorTrait};
+    use crate::formats::traits::{Checkpoint, Model, Tensor as TensorTrait};
     use tempfile::TempDir;
 
-    fn sample_checkpoint() -> Checkpoint {
+    fn sample_checkpoint() -> ServerlessLLMCheckpoint {
         let meta = TensorMeta::new(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32).unwrap();
         let pt = TensorEntry::new(meta, PartitionId::new(0));
-        Checkpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
+        ServerlessLLMCheckpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
     }
 
     #[test]
     fn model_empty() {
-        let model = Model {
+        let model = ServerlessLLMModel {
             storage: ModelStorage::Eager {
                 index: Index::new(),
                 partitions: HashMap::new(),
@@ -153,7 +154,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         sample_checkpoint().save(dir.path()).unwrap();
 
-        let model = Checkpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
+        let model =
+            ServerlessLLMCheckpoint::load(dir.path(), crate::formats::Backend::Sync).unwrap();
         assert_eq!(model.len(), 1);
         assert!(model.contains("w"));
 
@@ -168,7 +170,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         sample_checkpoint().save(dir.path()).unwrap();
 
-        let model = Checkpoint::open(dir.path()).unwrap();
+        let model = ServerlessLLMCheckpoint::open(dir.path()).unwrap();
         assert!(model.is_lazy());
         assert_eq!(model.len(), 1);
 
