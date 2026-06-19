@@ -3,7 +3,7 @@
 //! All partition info is computed once at parse time and cached.
 
 use crate::formats::error::{LoadError, LoadResult};
-use crate::formats::tensor::Dtype;
+use crate::formats::tensor::{Dtype, TensorMeta};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -180,10 +180,9 @@ impl Index {
                 .or_default()
                 .push(name.clone());
 
-            let pt = TensorEntry::from_parts(offset, size, shape, stride, dtype, partition_id)
+            let meta = TensorMeta::new(offset, size, shape, stride, dtype)
                 .map_err(|e| LoadError::InvalidMetadata(e.to_string()))?;
-
-            tensors.insert(name, pt);
+            tensors.insert(name, TensorEntry::new(meta, partition_id));
         }
 
         let mut partition_ids: Vec<PartitionId> = partition_max_sizes.keys().copied().collect();

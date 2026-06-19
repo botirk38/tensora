@@ -259,7 +259,7 @@ impl CheckpointTrait for Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::tensor::Dtype;
+    use crate::formats::tensor::{Dtype, TensorMeta};
     use crate::formats::traits::Model as _;
     use tempfile::TempDir;
 
@@ -271,7 +271,8 @@ mod tests {
         dtype: Dtype,
         pid: usize,
     ) -> TensorEntry {
-        TensorEntry::from_parts(offset, size, shape, stride, dtype, PartitionId::new(pid)).unwrap()
+        let meta = TensorMeta::new(offset, size, shape, stride, dtype).unwrap();
+        TensorEntry::new(meta, PartitionId::new(pid))
     }
 
     #[test]

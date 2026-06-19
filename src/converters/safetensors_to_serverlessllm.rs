@@ -14,7 +14,7 @@ use crate::formats::error::{SaveError, SaveResult};
 use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
-use crate::formats::tensor::Dtype;
+use crate::formats::tensor::{Dtype, TensorMeta};
 #[cfg(target_os = "linux")]
 use crate::io::availability::{IoCapabilities, IoKind};
 use crate::io::sync::Sync;
@@ -395,14 +395,14 @@ impl ConversionPlan {
             partition_source_files[best_partition].insert(tensor.source_file_index);
 
             let size_u64 = tensor.size as u64;
-            let pt = TensorEntry::from_parts(
+            let meta = TensorMeta::new(
                 offset,
                 size_u64,
                 tensor.shape.clone(),
                 tensor.stride.clone(),
                 tensor.dtype,
-                PartitionId::new(best_partition),
             )?;
+            let pt = TensorEntry::new(meta, PartitionId::new(best_partition));
             index.insert(tensor.name.clone(), pt);
 
             copy_ops.push(CopyOp {

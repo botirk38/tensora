@@ -125,20 +125,13 @@ mod tests {
     use crate::formats::serverlessllm::checkpoint::Checkpoint;
     use crate::formats::serverlessllm::ids::PartitionId;
     use crate::formats::serverlessllm::tensor::TensorEntry;
-    use crate::formats::tensor::Dtype;
+    use crate::formats::tensor::{Dtype, TensorMeta};
     use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
     use tempfile::TempDir;
 
     fn sample_checkpoint() -> Checkpoint {
-        let pt = TensorEntry::from_parts(
-            0,
-            4,
-            vec![2usize, 2],
-            vec![2usize, 1],
-            Dtype::F32,
-            PartitionId::new(0),
-        )
-        .unwrap();
+        let meta = TensorMeta::new(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32).unwrap();
+        let pt = TensorEntry::new(meta, PartitionId::new(0));
         Checkpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
     }
 

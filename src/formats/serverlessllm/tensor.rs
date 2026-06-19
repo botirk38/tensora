@@ -5,7 +5,6 @@
 //! produced when a model is loaded, borrowing metadata from a [`TensorEntry`]
 //! and holding the actual bytes.
 
-use crate::formats::error::SaveError;
 use crate::formats::tensor::{Dtype, TensorMeta};
 use crate::io::buffer::MmapRegion;
 use std::sync::Arc;
@@ -22,8 +21,9 @@ use super::ids::PartitionId;
 /// in its partition file (`offset`, `size`), its logical layout (`shape`,
 /// `stride`, `dtype`), and which partition holds its bytes (`partition_id`).
 ///
-/// Construct via [`TensorEntry::from_parts`] (raw fields) or
-/// [`TensorEntry::new`] (from an existing [`TensorMeta`]).
+/// Construct via [`TensorEntry::new`] (from an existing [`TensorMeta`]).
+/// To build from raw components, construct the [`TensorMeta`] first:
+/// `TensorMeta::new(offset, size, shape, stride, dtype)?` then pass it here.
 #[derive(Debug, Clone)]
 pub struct TensorEntry {
     pub(crate) meta: TensorMeta,
@@ -36,27 +36,6 @@ impl TensorEntry {
     #[must_use]
     pub fn new(meta: TensorMeta, partition_id: PartitionId) -> Self {
         Self { meta, partition_id }
-    }
-
-    /// Build from raw components, running [`TensorMeta`] validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SaveError::InvalidInput` if `dtype` is [`Dtype::Unknown`],
-    /// `shape.len() != stride.len()`, or `offset + size` overflows `u64`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_parts(
-        offset: u64,
-        size: u64,
-        shape: impl Into<Arc<[usize]>>,
-        stride: impl Into<Arc<[usize]>>,
-        dtype: Dtype,
-        partition_id: PartitionId,
-    ) -> Result<Self, SaveError> {
-        Ok(Self {
-            meta: TensorMeta::new(offset, size, shape, stride, dtype)?,
-            partition_id,
-        })
     }
 
     /// Returns the underlying format-agnostic metadata.
@@ -198,28 +177,14 @@ mod tests {
     use crate::formats::traits::Tensor as TensorTrait;
 
     fn entry() -> TensorEntry {
-        TensorEntry::from_parts(
-            0,
-            4,
-            vec![2usize, 2],
-            vec![2usize, 1],
-            Dtype::F32,
-            PartitionId::new(0),
-        )
-        .unwrap()
+        let meta = TensorMeta::new(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32).unwrap();
+        TensorEntry::new(meta, PartitionId::new(0))
     }
 
     #[test]
     fn entry_accessors() {
-        let e = TensorEntry::from_parts(
-            8,
-            16,
-            vec![4usize],
-            vec![1usize],
-            Dtype::F64,
-            PartitionId::new(2),
-        )
-        .unwrap();
+        let meta = TensorMeta::new(8, 16, vec![4usize], vec![1usize], Dtype::F64).unwrap();
+        let e = TensorEntry::new(meta, PartitionId::new(2));
         assert_eq!(e.offset(), 8);
         assert_eq!(e.size(), 16);
         assert_eq!(e.shape(), &[4]);
@@ -238,17 +203,7 @@ mod tests {
 
     #[test]
     fn entry_rejects_unknown_dtype() {
-        assert!(
-            TensorEntry::from_parts(
-                0,
-                4,
-                vec![1usize],
-                vec![1usize],
-                Dtype::Unknown,
-                PartitionId::new(0)
-            )
-            .is_err()
-        );
+        assert!(TensorMeta::new(0, 4, vec![1usize], vec![1usize], Dtype::Unknown).is_err());
     }
 
     #[test]
