@@ -28,7 +28,10 @@ fn bench_default(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
+            let model =
+                SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio)
+                    .await
+                    .unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -48,7 +51,8 @@ fn bench_sync(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::Sync).unwrap();
+            let model =
+                SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::Sync).unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -69,7 +73,10 @@ fn bench_tokio(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.to_async(&rt).iter(|| async {
-            let model = SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio).await.unwrap();
+            let model =
+                SafeTensorsCheckpoint::aload(black_box(&dir_str), tensora::AsyncBackend::Tokio)
+                    .await
+                    .unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });
@@ -90,7 +97,8 @@ fn bench_io_uring(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let model = SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::IoUring).unwrap();
+            let model = SafeTensorsCheckpoint::load(black_box(&dir_str), tensora::Backend::IoUring)
+                .unwrap();
             black_box(bench_util::touch_all_tensors(&model))
         });
     });

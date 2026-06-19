@@ -68,7 +68,8 @@ impl ShardData {
     pub(crate) fn parse(backing: impl Into<Backing>) -> LoadResult<Self> {
         const N_LEN: usize = std::mem::size_of::<u64>();
         let backing = backing.into();
-        let (header_json_len, metadata) = safetensors::SafeTensors::read_metadata(backing.as_slice())?;
+        let (header_json_len, metadata) =
+            safetensors::SafeTensors::read_metadata(backing.as_slice())?;
         Ok(Self {
             metadata,
             data_start: header_json_len + N_LEN,
@@ -156,17 +157,26 @@ impl Model {
     pub fn is_lazy(&self) -> bool {
         match &self.storage {
             ModelStorage::Single { shard, .. } => matches!(shard.backing, Backing::Mmap(_)),
-            ModelStorage::Sharded { shards, .. } => shards.iter().any(|s| matches!(s.backing, Backing::Mmap(_))),
+            ModelStorage::Sharded { shards, .. } => {
+                shards.iter().any(|s| matches!(s.backing, Backing::Mmap(_)))
+            }
         }
     }
 }
 
-fn arc_to_str(arc: &Arc<str>) -> &str { arc.as_ref() }
+fn arc_to_str(arc: &Arc<str>) -> &str {
+    arc.as_ref()
+}
 
 impl ModelTrait for Model {
-    type Tensor<'a> = Tensor<'a> where Self: 'a;
-    type Names<'a> = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
-        where Self: 'a;
+    type Tensor<'a>
+        = Tensor<'a>
+    where
+        Self: 'a;
+    type Names<'a>
+        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         match &self.storage {
@@ -184,8 +194,14 @@ impl ModelTrait for Model {
 
     fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
         let (metadata, data_start, backing) = match &self.storage {
-            ModelStorage::Single { shard, .. } => (&shard.metadata, shard.data_start, &shard.backing),
-            ModelStorage::Sharded { shards, tensor_shards, .. } => {
+            ModelStorage::Single { shard, .. } => {
+                (&shard.metadata, shard.data_start, &shard.backing)
+            }
+            ModelStorage::Sharded {
+                shards,
+                tensor_shards,
+                ..
+            } => {
                 let shard = &shards[tensor_shards.get(name)?.as_usize()];
                 (&shard.metadata, shard.data_start, &shard.backing)
             }

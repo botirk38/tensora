@@ -40,11 +40,15 @@ pub struct Model {
 
 impl Model {
     pub(crate) fn from_eager(index: Index, partitions: HashMap<PartitionId, Arc<[u8]>>) -> Self {
-        Self { storage: ModelStorage::Eager { index, partitions } }
+        Self {
+            storage: ModelStorage::Eager { index, partitions },
+        }
     }
 
     pub(crate) fn from_mmap(index: Index, partitions: HashMap<PartitionId, MmapRegion>) -> Self {
-        Self { storage: ModelStorage::Mmap { index, partitions } }
+        Self {
+            storage: ModelStorage::Mmap { index, partitions },
+        }
     }
 
     /// Returns true if this model uses lazy (mmap-backed) storage.
@@ -64,9 +68,14 @@ impl Model {
 }
 
 impl ModelTrait for Model {
-    type Tensor<'a> = Tensor<'a> where Self: 'a;
-    type Names<'a> = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
-        where Self: 'a;
+    type Tensor<'a>
+        = Tensor<'a>
+    where
+        Self: 'a;
+    type Names<'a>
+        = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         match &self.storage {
@@ -97,7 +106,9 @@ impl ModelTrait for Model {
                 let start = usize::try_from(pt.offset()).ok()?;
                 let size = usize::try_from(pt.size()).ok()?;
                 let end = start.checked_add(size)?;
-                if end > partition.len() { return None; }
+                if end > partition.len() {
+                    return None;
+                }
                 Some(Tensor::mmap(pt, partition.subregion(start, size)?))
             }
         }
@@ -111,15 +122,23 @@ impl ModelTrait for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::tensor::Dtype;
     use crate::formats::serverlessllm::checkpoint::Checkpoint;
     use crate::formats::serverlessllm::ids::PartitionId;
     use crate::formats::serverlessllm::tensor::TensorEntry;
+    use crate::formats::tensor::Dtype;
     use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
     use tempfile::TempDir;
 
     fn sample_checkpoint() -> Checkpoint {
-        let pt = TensorEntry::from_parts(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32, PartitionId::new(0)).unwrap();
+        let pt = TensorEntry::from_parts(
+            0,
+            4,
+            vec![2usize, 2],
+            vec![2usize, 1],
+            Dtype::F32,
+            PartitionId::new(0),
+        )
+        .unwrap();
         Checkpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
     }
 

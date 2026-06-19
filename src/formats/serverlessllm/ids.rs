@@ -279,7 +279,14 @@ mod tests {
     #[test]
     fn partition_count_iter() {
         let ids: Vec<PartitionId> = PartitionCount::new(3).unwrap().iter().collect();
-        assert_eq!(ids, vec![PartitionId::new(0), PartitionId::new(1), PartitionId::new(2)]);
+        assert_eq!(
+            ids,
+            vec![
+                PartitionId::new(0),
+                PartitionId::new(1),
+                PartitionId::new(2)
+            ]
+        );
     }
 
     #[test]
@@ -308,7 +315,10 @@ mod tests {
     #[test]
     fn default_is_default_target() {
         let sizing = PartitionSizing::default();
-        assert_eq!(sizing.target_bytes_u64(), PartitionSizing::DEFAULT_TARGET_BYTES);
+        assert_eq!(
+            sizing.target_bytes_u64(),
+            PartitionSizing::DEFAULT_TARGET_BYTES
+        );
     }
 
     #[test]
@@ -317,11 +327,15 @@ mod tests {
         assert_eq!(sizing.recommended_count(0).as_usize(), 1);
         assert_eq!(sizing.recommended_count(1).as_usize(), 1);
         assert_eq!(
-            sizing.recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES - 1).as_usize(),
+            sizing
+                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES - 1)
+                .as_usize(),
             1
         );
         assert_eq!(
-            sizing.recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES).as_usize(),
+            sizing
+                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES)
+                .as_usize(),
             1
         );
     }
@@ -330,15 +344,21 @@ mod tests {
     fn recommended_partition_count_scales_by_target() {
         let sizing = PartitionSizing::default_target();
         assert_eq!(
-            sizing.recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES + 1).as_usize(),
+            sizing
+                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES + 1)
+                .as_usize(),
             2
         );
         assert_eq!(
-            sizing.recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES).as_usize(),
+            sizing
+                .recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES)
+                .as_usize(),
             2
         );
         assert_eq!(
-            sizing.recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES + 1).as_usize(),
+            sizing
+                .recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES + 1)
+                .as_usize(),
             3
         );
     }

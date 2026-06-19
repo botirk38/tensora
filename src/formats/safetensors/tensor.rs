@@ -44,11 +44,17 @@ impl<'a> Tensor<'a> {
 
 impl crate::formats::traits::Tensor for Tensor<'_> {
     #[inline]
-    fn shape(&self) -> &[usize] { self.shape }
+    fn shape(&self) -> &[usize] {
+        self.shape
+    }
     #[inline]
-    fn dtype(&self) -> Dtype { self.dtype }
+    fn dtype(&self) -> Dtype {
+        self.dtype
+    }
     #[inline]
-    fn data(&self) -> &[u8] { self.data }
+    fn data(&self) -> &[u8] {
+        self.data
+    }
     #[inline]
     fn stride(&self) -> Option<&[usize]> {
         // SafeTensors are always contiguous; stride is not stored

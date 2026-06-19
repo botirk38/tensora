@@ -53,36 +53,60 @@ impl TensorEntry {
         dtype: Dtype,
         partition_id: PartitionId,
     ) -> Result<Self, SaveError> {
-        Ok(Self { meta: TensorMeta::new(offset, size, shape, stride, dtype)?, partition_id })
+        Ok(Self {
+            meta: TensorMeta::new(offset, size, shape, stride, dtype)?,
+            partition_id,
+        })
     }
 
     /// Returns the underlying format-agnostic metadata.
-    #[inline] #[must_use]
-    pub fn meta(&self) -> &TensorMeta { &self.meta }
+    #[inline]
+    #[must_use]
+    pub fn meta(&self) -> &TensorMeta {
+        &self.meta
+    }
 
     /// Byte offset within the partition file.
-    #[inline] #[must_use]
-    pub fn offset(&self) -> u64 { self.meta.offset }
+    #[inline]
+    #[must_use]
+    pub fn offset(&self) -> u64 {
+        self.meta.offset
+    }
 
     /// Size in bytes.
-    #[inline] #[must_use]
-    pub fn size(&self) -> u64 { self.meta.size }
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        self.meta.size
+    }
 
     /// Shape in elements per dimension.
-    #[inline] #[must_use]
-    pub fn shape(&self) -> &[usize] { self.meta.shape() }
+    #[inline]
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        self.meta.shape()
+    }
 
     /// Stride in elements per dimension.
-    #[inline] #[must_use]
-    pub fn stride(&self) -> &[usize] { self.meta.stride() }
+    #[inline]
+    #[must_use]
+    pub fn stride(&self) -> &[usize] {
+        self.meta.stride()
+    }
 
     /// Element type.
-    #[inline] #[must_use]
-    pub fn dtype(&self) -> Dtype { self.meta.dtype() }
+    #[inline]
+    #[must_use]
+    pub fn dtype(&self) -> Dtype {
+        self.meta.dtype()
+    }
 
     /// Partition this tensor lives in.
-    #[inline] #[must_use]
-    pub fn partition_id(&self) -> PartitionId { self.partition_id }
+    #[inline]
+    #[must_use]
+    pub fn partition_id(&self) -> PartitionId {
+        self.partition_id
+    }
 }
 
 // ============================================================================
@@ -107,23 +131,36 @@ enum TensorData<'a> {
 
 impl<'a> Tensor<'a> {
     pub(crate) fn eager(entry: &'a TensorEntry, data: &'a [u8]) -> Self {
-        Self { meta: &entry.meta, data: TensorData::Eager(data) }
+        Self {
+            meta: &entry.meta,
+            data: TensorData::Eager(data),
+        }
     }
 
     pub(crate) fn mmap(entry: &'a TensorEntry, data: MmapRegion) -> Self {
-        Self { meta: &entry.meta, data: TensorData::Mmap(data) }
+        Self {
+            meta: &entry.meta,
+            data: TensorData::Mmap(data),
+        }
     }
 
     /// Shape in elements per dimension.
-    #[inline] #[must_use]
-    pub fn shape(&self) -> &[usize] { self.meta.shape() }
+    #[inline]
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        self.meta.shape()
+    }
 
     /// Element type.
-    #[inline] #[must_use]
-    pub fn dtype(&self) -> Dtype { self.meta.dtype() }
+    #[inline]
+    #[must_use]
+    pub fn dtype(&self) -> Dtype {
+        self.meta.dtype()
+    }
 
     /// Raw tensor bytes.
-    #[inline] #[must_use]
+    #[inline]
+    #[must_use]
     pub fn data(&self) -> &[u8] {
         match &self.data {
             TensorData::Eager(b) => b,
@@ -133,10 +170,22 @@ impl<'a> Tensor<'a> {
 }
 
 impl crate::formats::traits::Tensor for Tensor<'_> {
-    #[inline] fn shape(&self) -> &[usize] { self.shape() }
-    #[inline] fn dtype(&self) -> Dtype { self.dtype() }
-    #[inline] fn data(&self) -> &[u8] { self.data() }
-    #[inline] fn stride(&self) -> Option<&[usize]> { Some(self.meta.stride()) }
+    #[inline]
+    fn shape(&self) -> &[usize] {
+        self.shape()
+    }
+    #[inline]
+    fn dtype(&self) -> Dtype {
+        self.dtype()
+    }
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.data()
+    }
+    #[inline]
+    fn stride(&self) -> Option<&[usize]> {
+        Some(self.meta.stride())
+    }
 }
 
 // ============================================================================
@@ -149,12 +198,28 @@ mod tests {
     use crate::formats::traits::Tensor as TensorTrait;
 
     fn entry() -> TensorEntry {
-        TensorEntry::from_parts(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32, PartitionId::new(0)).unwrap()
+        TensorEntry::from_parts(
+            0,
+            4,
+            vec![2usize, 2],
+            vec![2usize, 1],
+            Dtype::F32,
+            PartitionId::new(0),
+        )
+        .unwrap()
     }
 
     #[test]
     fn entry_accessors() {
-        let e = TensorEntry::from_parts(8, 16, vec![4usize], vec![1usize], Dtype::F64, PartitionId::new(2)).unwrap();
+        let e = TensorEntry::from_parts(
+            8,
+            16,
+            vec![4usize],
+            vec![1usize],
+            Dtype::F64,
+            PartitionId::new(2),
+        )
+        .unwrap();
         assert_eq!(e.offset(), 8);
         assert_eq!(e.size(), 16);
         assert_eq!(e.shape(), &[4]);
@@ -173,7 +238,17 @@ mod tests {
 
     #[test]
     fn entry_rejects_unknown_dtype() {
-        assert!(TensorEntry::from_parts(0, 4, vec![1usize], vec![1usize], Dtype::Unknown, PartitionId::new(0)).is_err());
+        assert!(
+            TensorEntry::from_parts(
+                0,
+                4,
+                vec![1usize],
+                vec![1usize],
+                Dtype::Unknown,
+                PartitionId::new(0)
+            )
+            .is_err()
+        );
     }
 
     #[test]

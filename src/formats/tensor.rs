@@ -191,7 +191,13 @@ impl TensorMeta {
             .checked_add(size)
             .ok_or_else(|| SaveError::InvalidInput("offset + size overflow".to_owned()))?;
 
-        Ok(Self { offset, size, shape, stride, dtype })
+        Ok(Self {
+            offset,
+            size,
+            shape,
+            stride,
+            dtype,
+        })
     }
 
     /// Byte offset within the storage region.
@@ -287,7 +293,8 @@ mod tests {
     #[test]
     fn tensor_meta_scalar_zero_dims() {
         // Scalar tensor: shape=[], stride=[] is valid
-        let meta = TensorMeta::new(0, 4, Vec::<usize>::new(), Vec::<usize>::new(), Dtype::F32).unwrap();
+        let meta =
+            TensorMeta::new(0, 4, Vec::<usize>::new(), Vec::<usize>::new(), Dtype::F32).unwrap();
         assert_eq!(meta.shape(), &[] as &[usize]);
         assert_eq!(meta.stride(), &[] as &[usize]);
     }

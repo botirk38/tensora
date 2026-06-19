@@ -5,14 +5,15 @@
 use crate::formats::error::{LoadError, LoadResult};
 use crate::formats::tensor::Dtype;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use super::ids::PartitionId;
 use super::tensor::TensorEntry;
 
 /// Iterator type for tensor names.
-pub type TensorNamesIter<'a> = std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>;
+pub type TensorNamesIter<'a> =
+    std::iter::Map<std::slice::Iter<'a, Arc<str>>, fn(&'a Arc<str>) -> &'a str>;
 
 // ============================================================================
 // PartitionPlan
@@ -166,7 +167,9 @@ impl Index {
 
             let required = offset
                 .checked_add(size)
-                .ok_or_else(|| LoadError::OffsetOverflow { name: name.to_string() })?;
+                .ok_or_else(|| LoadError::OffsetOverflow {
+                    name: name.to_string(),
+                })?;
 
             let max = partition_max_sizes.entry(partition_id).or_insert(0);
             if required > *max {
@@ -193,11 +196,14 @@ impl Index {
             .map(|&id| {
                 let max_size = partition_max_sizes.get(&id).copied().unwrap_or(0);
                 let names: Vec<Arc<str>> = partition_tensors.get(&id).cloned().unwrap_or_default();
-                (id, PartitionPlan {
-                    partition_id: id,
-                    max_required_size: max_size,
-                    tensor_names: names.into(),
-                })
+                (
+                    id,
+                    PartitionPlan {
+                        partition_id: id,
+                        max_required_size: max_size,
+                        tensor_names: names.into(),
+                    },
+                )
             })
             .collect();
 
@@ -232,9 +238,9 @@ struct TensorIndexEntryJson<'a> {
 
 impl<'a> TensorIndexEntryJson<'a> {
     fn new(value: &'a serde_json::Value) -> LoadResult<Self> {
-        let arr = value.as_array().ok_or_else(|| {
-            LoadError::ServerlessLlm("tensor entry must be an array".to_string())
-        })?;
+        let arr = value
+            .as_array()
+            .ok_or_else(|| LoadError::ServerlessLlm("tensor entry must be an array".to_string()))?;
         let arr = arr.as_slice();
         if arr.len() != 6 {
             return Err(LoadError::ServerlessLlm(format!(
@@ -283,9 +289,9 @@ impl<'a> TensorIndexEntryJson<'a> {
 }
 
 fn parse_usize_vec(value: &serde_json::Value, field_name: &str) -> LoadResult<Vec<usize>> {
-    let arr = value.as_array().ok_or_else(|| {
-        LoadError::ServerlessLlm(format!("expected array for {field_name}"))
-    })?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| LoadError::ServerlessLlm(format!("expected array for {field_name}")))?;
     arr.iter()
         .map(|v| {
             v.as_u64()
@@ -323,7 +329,10 @@ mod tests {
             "c": [12, 8, [2, 4], [4, 1], "f32", 2]
         }"#;
         let index = Index::from_bytes(data).expect("parse");
-        assert_eq!(index.partition_ids(), &[PartitionId::new(0), PartitionId::new(2)]);
+        assert_eq!(
+            index.partition_ids(),
+            &[PartitionId::new(0), PartitionId::new(2)]
+        );
     }
 
     #[test]

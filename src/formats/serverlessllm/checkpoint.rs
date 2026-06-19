@@ -90,7 +90,10 @@ impl Checkpoint {
             )));
         }
 
-        Ok(Self { index: index_map, partitions })
+        Ok(Self {
+            index: index_map,
+            partitions,
+        })
     }
 
     /// Encode the index map as canonical `tensor_index.json` bytes.
@@ -104,10 +107,17 @@ impl Checkpoint {
         }
         let mut map = serde_json::Map::with_capacity(index.len());
         for (name, e) in index {
-            map.insert(name.clone(), serde_json::json!([
-                e.offset(), e.size(), e.shape(), e.stride(),
-                e.dtype().as_str(), e.partition_id().as_usize()
-            ]));
+            map.insert(
+                name.clone(),
+                serde_json::json!([
+                    e.offset(),
+                    e.size(),
+                    e.shape(),
+                    e.stride(),
+                    e.dtype().as_str(),
+                    e.partition_id().as_usize()
+                ]),
+            );
         }
         serde_json::to_vec_pretty(&map).map_err(SaveError::from)
     }
@@ -129,7 +139,9 @@ impl CheckpointTrait for Checkpoint {
             Backend::Sync => {
                 let engine = Sync::new();
                 for id in index.partition_ids() {
-                    let bytes = engine.read_file(&dir.join(id.data_file_stem())).map_err(LoadError::from)?;
+                    let bytes = engine
+                        .read_file(&dir.join(id.data_file_stem()))
+                        .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
                 }
             }
@@ -137,7 +149,9 @@ impl CheckpointTrait for Checkpoint {
             Backend::IoUring => {
                 let engine = crate::io::io_uring::IoUring::new();
                 for id in index.partition_ids() {
-                    let bytes = engine.read_file(&dir.join(id.data_file_stem())).map_err(LoadError::from)?;
+                    let bytes = engine
+                        .read_file(&dir.join(id.data_file_stem()))
+                        .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
                 }
             }
@@ -146,16 +160,26 @@ impl CheckpointTrait for Checkpoint {
         Ok(Model::from_eager(index, partitions))
     }
 
-    async fn aload(path: impl AsRef<Path> + Send, backend: AsyncBackend) -> LoadResult<Self::Model> {
+    async fn aload(
+        path: impl AsRef<Path> + Send,
+        backend: AsyncBackend,
+    ) -> LoadResult<Self::Model> {
         let dir = path.as_ref();
-        let index = Index::from_bytes(&Tokio::new().read_file(&dir.join("tensor_index.json")).await?)?;
+        let index = Index::from_bytes(
+            &Tokio::new()
+                .read_file(&dir.join("tensor_index.json"))
+                .await?,
+        )?;
         let mut partitions = HashMap::with_capacity(index.partition_ids().len());
 
         match backend {
             AsyncBackend::Tokio => {
                 let engine = Tokio::new();
                 for id in index.partition_ids() {
-                    let bytes = engine.read_file(&dir.join(id.data_file_stem())).await.map_err(LoadError::from)?;
+                    let bytes = engine
+                        .read_file(&dir.join(id.data_file_stem()))
+                        .await
+                        .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
                 }
             }
@@ -171,7 +195,9 @@ impl CheckpointTrait for Checkpoint {
         let mut partitions = HashMap::with_capacity(index.partition_ids().len());
 
         for id in index.partition_ids() {
-            let mmap = mapper.map_file(&dir.join(id.data_file_stem())).map_err(LoadError::from)?;
+            let mmap = mapper
+                .map_file(&dir.join(id.data_file_stem()))
+                .map_err(LoadError::from)?;
             partitions.insert(*id, mmap);
         }
 
@@ -184,7 +210,9 @@ impl CheckpointTrait for Checkpoint {
         let engine = Sync::new();
 
         let index_path = directory.join("tensor_index.json");
-        engine.write_file(&index_path, &Self::encode_index(&self.index)?).map_err(SaveError::from)?;
+        engine
+            .write_file(&index_path, &Self::encode_index(&self.index)?)
+            .map_err(SaveError::from)?;
         engine.sync_all(&index_path).map_err(SaveError::from)?;
 
         for (id, data) in self.partitions.iter().enumerate() {
@@ -202,12 +230,21 @@ impl CheckpointTrait for Checkpoint {
         let engine = Tokio::new();
 
         let index_path = directory.join("tensor_index.json");
-        engine.write_file(&index_path, &Self::encode_index(&self.index)?).await.map_err(SaveError::from)?;
-        engine.sync_all(&index_path).await.map_err(SaveError::from)?;
+        engine
+            .write_file(&index_path, &Self::encode_index(&self.index)?)
+            .await
+            .map_err(SaveError::from)?;
+        engine
+            .sync_all(&index_path)
+            .await
+            .map_err(SaveError::from)?;
 
         for (id, data) in self.partitions.iter().enumerate() {
             let path = directory.join(PartitionId::new(id).data_file_stem());
-            engine.write_file(&path, data).await.map_err(SaveError::from)?;
+            engine
+                .write_file(&path, data)
+                .await
+                .map_err(SaveError::from)?;
             engine.sync_all(&path).await.map_err(SaveError::from)?;
         }
 
@@ -226,23 +263,31 @@ mod tests {
     use crate::formats::traits::Model as _;
     use tempfile::TempDir;
 
-    fn entry(offset: u64, size: u64, shape: Vec<usize>, stride: Vec<usize>, dtype: Dtype, pid: usize) -> TensorEntry {
+    fn entry(
+        offset: u64,
+        size: u64,
+        shape: Vec<usize>,
+        stride: Vec<usize>,
+        dtype: Dtype,
+        pid: usize,
+    ) -> TensorEntry {
         TensorEntry::from_parts(offset, size, shape, stride, dtype, PartitionId::new(pid)).unwrap()
     }
 
     #[test]
     fn validates_empty_index() {
-        let result: SaveResult<Checkpoint> = Checkpoint::new(
-            std::iter::empty::<(String, TensorEntry)>(),
-            [vec![1u8]],
-        );
+        let result: SaveResult<Checkpoint> =
+            Checkpoint::new(std::iter::empty::<(String, TensorEntry)>(), [vec![1u8]]);
         assert!(result.is_err());
     }
 
     #[test]
     fn validates_empty_tensor_name() {
         let result = Checkpoint::new(
-            [("".to_owned(), entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0))],
+            [(
+                "".to_owned(),
+                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+            )],
             [vec![1u8, 2, 3, 4]],
         );
         assert!(result.is_err());
@@ -251,7 +296,10 @@ mod tests {
     #[test]
     fn validates_partition_out_of_bounds() {
         let result = Checkpoint::new(
-            [("w".to_owned(), entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 5))],
+            [(
+                "w".to_owned(),
+                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 5),
+            )],
             [vec![1u8, 2, 3, 4]], // only partition 0 provided
         );
         assert!(result.is_err());
@@ -261,9 +309,13 @@ mod tests {
     fn save_and_load_roundtrip() {
         let dir = TempDir::new().unwrap();
         let cp = Checkpoint::new(
-            [("test".to_owned(), entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0))],
+            [(
+                "test".to_owned(),
+                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+            )],
             [vec![1u8, 2, 3, 4]],
-        ).unwrap();
+        )
+        .unwrap();
 
         cp.save(dir.path()).unwrap();
 
@@ -281,11 +333,20 @@ mod tests {
         let dir = TempDir::new().unwrap();
         Checkpoint::new(
             [
-                ("a".to_owned(), entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0)),
-                ("b".to_owned(), entry(4, 8, vec![2, 4], vec![4, 1], Dtype::F64, 0)),
+                (
+                    "a".to_owned(),
+                    entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+                ),
+                (
+                    "b".to_owned(),
+                    entry(4, 8, vec![2, 4], vec![4, 1], Dtype::F64, 0),
+                ),
             ],
             [vec![0u8; 12]],
-        ).unwrap().save(dir.path()).unwrap();
+        )
+        .unwrap()
+        .save(dir.path())
+        .unwrap();
 
         let model = Checkpoint::load(dir.path(), Backend::Sync).unwrap();
         assert_eq!(model.len(), 2);

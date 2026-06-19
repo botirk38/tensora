@@ -62,17 +62,28 @@ impl Checkpoint {
     /// - any name is empty
     /// - any dtype is [`Dtype::Unknown`]
     pub fn new(
-        tensors: impl IntoIterator<Item = (impl Into<String>, impl Into<Vec<u8>>, impl Into<Vec<usize>>, Dtype)>,
+        tensors: impl IntoIterator<
+            Item = (
+                impl Into<String>,
+                impl Into<Vec<u8>>,
+                impl Into<Vec<usize>>,
+                Dtype,
+            ),
+        >,
         metadata: Option<MetadataMap>,
     ) -> SaveResult<Self> {
         let mut entries = Vec::new();
         for (name, data, shape, dtype) in tensors {
             let name = name.into();
             if name.is_empty() {
-                return Err(SaveError::InvalidInput("tensor name cannot be empty".to_owned()));
+                return Err(SaveError::InvalidInput(
+                    "tensor name cannot be empty".to_owned(),
+                ));
             }
             if dtype == Dtype::Unknown {
-                return Err(SaveError::InvalidInput("cannot use Unknown dtype for tensor".to_owned()));
+                return Err(SaveError::InvalidInput(
+                    "cannot use Unknown dtype for tensor".to_owned(),
+                ));
             }
             entries.push((name, data.into(), shape.into(), dtype));
         }
@@ -81,7 +92,10 @@ impl Checkpoint {
                 "cannot create checkpoint with empty tensor list".to_owned(),
             ));
         }
-        Ok(Self { tensors: entries, metadata })
+        Ok(Self {
+            tensors: entries,
+            metadata,
+        })
     }
 
     /// Serialize the checkpoint into an owned byte buffer.
@@ -91,11 +105,18 @@ impl Checkpoint {
     }
 
     fn tensor_views(&self) -> SaveResult<Vec<(&str, safetensors::tensor::TensorView<'_>)>> {
-        self.tensors.iter().map(|(name, data, shape, dtype)| {
-            safetensors::tensor::TensorView::new(safetensors::Dtype::from(*dtype), shape.clone(), data)
+        self.tensors
+            .iter()
+            .map(|(name, data, shape, dtype)| {
+                safetensors::tensor::TensorView::new(
+                    safetensors::Dtype::from(*dtype),
+                    shape.clone(),
+                    data,
+                )
                 .map(|v| (name.as_str(), v))
                 .map_err(|e| SaveError::InvalidInput(e.to_string()))
-        }).collect()
+            })
+            .collect()
     }
 
     /// Discover `.safetensors` shard files in a directory.
@@ -171,7 +192,10 @@ impl CheckpointTrait for Checkpoint {
         Model::from_shards(shards)
     }
 
-    async fn aload(path: impl AsRef<Path> + Send, backend: AsyncBackend) -> LoadResult<Self::Model> {
+    async fn aload(
+        path: impl AsRef<Path> + Send,
+        backend: AsyncBackend,
+    ) -> LoadResult<Self::Model> {
         let paths = Self::discover_shards(path)?;
         let mut shards = Vec::with_capacity(paths.len());
 
@@ -207,8 +231,7 @@ impl CheckpointTrait for Checkpoint {
             std::fs::create_dir_all(parent)?;
         }
         let views = self.tensor_views()?;
-        safetensors::serialize_to_file(views, self.metadata.clone(), path)
-            .map_err(SaveError::from)
+        safetensors::serialize_to_file(views, self.metadata.clone(), path).map_err(SaveError::from)
     }
 
     async fn asave(&self, path: impl AsRef<Path> + Send) -> SaveResult<()> {
@@ -259,8 +282,8 @@ mod tests {
     fn sample_checkpoint() -> Checkpoint {
         Checkpoint::new(
             [
-                ("a", vec![0u8; 4], vec![1usize], Dtype::F32),   // 1 × f32 = 4 bytes
-                ("b", vec![0u8; 16], vec![2usize], Dtype::F64),  // 2 × f64 = 16 bytes
+                ("a", vec![0u8; 4], vec![1usize], Dtype::F32), // 1 × f32 = 4 bytes
+                ("b", vec![0u8; 16], vec![2usize], Dtype::F64), // 2 × f64 = 16 bytes
             ],
             None,
         )

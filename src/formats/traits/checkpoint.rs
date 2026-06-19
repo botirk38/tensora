@@ -33,8 +33,5 @@ pub trait Checkpoint {
     fn save(&self, path: impl AsRef<Path>) -> SaveResult<()>;
 
     /// Write the checkpoint to `path` asynchronously.
-    fn asave(
-        &self,
-        path: impl AsRef<Path> + Send,
-    ) -> impl Future<Output = SaveResult<()>> + Send;
+    fn asave(&self, path: impl AsRef<Path> + Send) -> impl Future<Output = SaveResult<()>> + Send;
 }

@@ -44,37 +44,71 @@ mod tests {
     use super::{Model, Tensor as TensorTrait};
     use crate::formats::tensor::Dtype;
 
-    struct DummyTensor { shape: Vec<usize>, dtype: Dtype, data: Vec<u8>, stride: Vec<usize> }
+    struct DummyTensor {
+        shape: Vec<usize>,
+        dtype: Dtype,
+        data: Vec<u8>,
+        stride: Vec<usize>,
+    }
 
     impl TensorTrait for DummyTensor {
-        fn shape(&self) -> &[usize] { &self.shape }
-        fn dtype(&self) -> Dtype { self.dtype }
-        fn data(&self) -> &[u8] { &self.data }
-        fn stride(&self) -> Option<&[usize]> { Some(&self.stride) }
+        fn shape(&self) -> &[usize] {
+            &self.shape
+        }
+        fn dtype(&self) -> Dtype {
+            self.dtype
+        }
+        fn data(&self) -> &[u8] {
+            &self.data
+        }
+        fn stride(&self) -> Option<&[usize]> {
+            Some(&self.stride)
+        }
     }
 
     impl TensorTrait for &DummyTensor {
-        fn shape(&self) -> &[usize] { (**self).shape() }
-        fn dtype(&self) -> Dtype { (**self).dtype() }
-        fn data(&self) -> &[u8] { (**self).data() }
-        fn stride(&self) -> Option<&[usize]> { (**self).stride() }
+        fn shape(&self) -> &[usize] {
+            (**self).shape()
+        }
+        fn dtype(&self) -> Dtype {
+            (**self).dtype()
+        }
+        fn data(&self) -> &[u8] {
+            (**self).data()
+        }
+        fn stride(&self) -> Option<&[usize]> {
+            (**self).stride()
+        }
     }
 
-    struct DummyModel { names: Vec<String>, tensors: Vec<DummyTensor> }
+    struct DummyModel {
+        names: Vec<String>,
+        tensors: Vec<DummyTensor>,
+    }
 
     impl Model for DummyModel {
-        type Tensor<'a> = &'a DummyTensor where Self: 'a;
-        type Names<'a> = std::iter::Map<std::slice::Iter<'a, String>, fn(&'a String) -> &'a str>
-            where Self: 'a;
+        type Tensor<'a>
+            = &'a DummyTensor
+        where
+            Self: 'a;
+        type Names<'a>
+            = std::iter::Map<std::slice::Iter<'a, String>, fn(&'a String) -> &'a str>
+        where
+            Self: 'a;
 
-        fn len(&self) -> usize { self.tensors.len() }
+        fn len(&self) -> usize {
+            self.tensors.len()
+        }
 
         fn tensor_names(&self) -> Self::Names<'_> {
             self.names.iter().map(|s| s.as_str())
         }
 
         fn tensor(&self, name: &str) -> Option<Self::Tensor<'_>> {
-            self.names.iter().position(|n| n == name).map(|i| &self.tensors[i])
+            self.names
+                .iter()
+                .position(|n| n == name)
+                .map(|i| &self.tensors[i])
         }
     }
 
@@ -82,8 +116,18 @@ mod tests {
         DummyModel {
             names: vec!["a".into(), "b".into()],
             tensors: vec![
-                DummyTensor { shape: vec![2], dtype: Dtype::F32, data: vec![0; 8], stride: vec![4] },
-                DummyTensor { shape: vec![3], dtype: Dtype::U8,  data: vec![1; 3], stride: vec![1] },
+                DummyTensor {
+                    shape: vec![2],
+                    dtype: Dtype::F32,
+                    data: vec![0; 8],
+                    stride: vec![4],
+                },
+                DummyTensor {
+                    shape: vec![3],
+                    dtype: Dtype::U8,
+                    data: vec![1; 3],
+                    stride: vec![1],
+                },
             ],
         }
     }
@@ -113,7 +157,10 @@ mod tests {
 
     #[test]
     fn empty_model() {
-        let m = DummyModel { names: vec![], tensors: vec![] };
+        let m = DummyModel {
+            names: vec![],
+            tensors: vec![],
+        };
         assert!(m.is_empty());
         assert_eq!(m.len(), 0);
     }
@@ -122,7 +169,12 @@ mod tests {
     fn missing_tensor_returns_none() {
         let m = DummyModel {
             names: vec!["x".into()],
-            tensors: vec![DummyTensor { shape: vec![1], dtype: Dtype::F32, data: vec![0; 4], stride: vec![4] }],
+            tensors: vec![DummyTensor {
+                shape: vec![1],
+                dtype: Dtype::F32,
+                data: vec![0; 4],
+                stride: vec![4],
+            }],
         };
         assert!(m.tensor("nonexistent").is_none());
         assert!(!m.contains("nonexistent"));

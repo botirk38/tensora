@@ -32,10 +32,18 @@ mod tests {
     }
 
     impl TensorTrait for DummyTensor {
-        fn shape(&self) -> &[usize] { &self.shape }
-        fn dtype(&self) -> Dtype { self.dtype }
-        fn data(&self) -> &[u8] { &self.data }
-        fn stride(&self) -> Option<&[usize]> { Some(&self.stride) }
+        fn shape(&self) -> &[usize] {
+            &self.shape
+        }
+        fn dtype(&self) -> Dtype {
+            self.dtype
+        }
+        fn data(&self) -> &[u8] {
+            &self.data
+        }
+        fn stride(&self) -> Option<&[usize]> {
+            Some(&self.stride)
+        }
     }
 
     #[test]
@@ -57,9 +65,15 @@ mod tests {
     fn stride_default_is_none() {
         struct Bare;
         impl TensorTrait for Bare {
-            fn shape(&self) -> &[usize] { &[2, 2] }
-            fn dtype(&self) -> Dtype { Dtype::F32 }
-            fn data(&self) -> &[u8] { &[0; 16] }
+            fn shape(&self) -> &[usize] {
+                &[2, 2]
+            }
+            fn dtype(&self) -> Dtype {
+                Dtype::F32
+            }
+            fn data(&self) -> &[u8] {
+                &[0; 16]
+            }
         }
         assert_eq!(Bare.stride(), None);
     }

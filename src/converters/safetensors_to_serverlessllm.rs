@@ -11,8 +11,8 @@
 
 use crate::formats::error::{SaveError, SaveResult};
 use crate::formats::safetensors::ids::ShardId;
-use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
+use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::Dtype;
 #[cfg(target_os = "linux")]
@@ -157,18 +157,26 @@ impl SafeTensorsToServerlessLLM {
     }
 
     /// Convert using adaptive storage-engine choice.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await"
+    )]
     #[inline]
     pub async fn convert(
         input_dir: &str,
         output_dir: &str,
         partition_count: usize,
     ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?.convert_async().await
+        Self::new(input_dir, output_dir, partition_count)?
+            .convert_async()
+            .await
     }
 
     /// Convert using synchronous I/O.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()"
+    )]
     #[inline]
     pub fn convert_static(
         input_dir: &str,
@@ -181,7 +189,10 @@ impl SafeTensorsToServerlessLLM {
     }
 
     /// Convert using Tokio async I/O.
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await"
+    )]
     #[inline]
     pub async fn convert_static_async(
         input_dir: &str,
@@ -196,7 +207,10 @@ impl SafeTensorsToServerlessLLM {
 
     /// Convert using Linux io_uring I/O.
     #[cfg(target_os = "linux")]
-    #[deprecated(since = "0.1.0", note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()"
+    )]
     #[inline]
     pub fn convert_static_io_uring(
         input_dir: &str,
@@ -606,8 +620,14 @@ impl ConversionPlan {
 
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Tokio::new().write_file(&index_path, &index_bytes).await.map_err(SaveError::from)?;
-        Tokio::new().sync_all(&index_path).await.map_err(SaveError::from)?;
+        Tokio::new()
+            .write_file(&index_path, &index_bytes)
+            .await
+            .map_err(SaveError::from)?;
+        Tokio::new()
+            .sync_all(&index_path)
+            .await
+            .map_err(SaveError::from)?;
 
         Ok(())
     }
@@ -617,7 +637,9 @@ impl ConversionPlan {
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
+        Sync::new()
+            .write_file(&index_path, &index_bytes)
+            .map_err(SaveError::from)?;
         Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
@@ -628,7 +650,9 @@ impl ConversionPlan {
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Sync::new().write_file(&index_path, &index_bytes).map_err(SaveError::from)?;
+        Sync::new()
+            .write_file(&index_path, &index_bytes)
+            .map_err(SaveError::from)?;
         Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
@@ -731,8 +755,8 @@ impl ConversionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
     use crate::formats::Backend;
+    use crate::formats::traits::{Checkpoint as _, Model as _, Tensor as TensorTrait};
     use safetensors::serialize;
     use safetensors::tensor::TensorView as StTensorView;
     use tempfile::TempDir;
@@ -754,8 +778,7 @@ mod tests {
     fn convert_rejects_zero_partitions() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
-            .unwrap_err();
+        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
@@ -858,7 +881,8 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted =
+            crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
@@ -892,7 +916,8 @@ mod tests {
             .convert_sync()
             .unwrap();
 
-        let converted = crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
+        let converted =
+            crate::formats::serverlessllm::Checkpoint::load(&out, Backend::Sync).unwrap();
         let a_tensor = converted.tensor("a").unwrap();
         let b_tensor = converted.tensor("b").unwrap();
 
@@ -994,8 +1019,7 @@ mod tests {
         let out = tmp.path().join("out_async_zero");
 
         crate::test_utils::run_async(async {
-            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0)
-                .unwrap_err();
+            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
             assert!(matches!(err, SaveError::InvalidInput(_)));
         });
     }
