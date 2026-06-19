@@ -7,7 +7,6 @@
 
 use crate::formats::tensor::{Dtype, TensorMeta};
 use crate::io::buffer::MmapRegion;
-use std::sync::Arc;
 
 use super::ids::PartitionId;
 
@@ -173,6 +172,8 @@ impl crate::formats::traits::Tensor for Tensor<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::formats::traits::Tensor as TensorTrait;
 

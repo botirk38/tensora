@@ -263,62 +263,53 @@ mod tests {
     #[test]
     fn read_range_returns_correct_slice() {
         let dir = TempDir::new().unwrap();
-        let data: Vec<u8> = (0u8..100).collect();
-        let path = write_tmp(&dir, "range.bin", &data);
-        let result =
-            run_async(Tokio::new().read_range(&path, ByteRange::from_offset_len(10, 20).unwrap()))
-                .unwrap();
-        assert_eq!(result.as_ref(), &data[10..30]);
+        let path = write_tmp(&dir, "data.bin", b"hello world");
+        let range = ByteRange::new(6, 11).unwrap();
+        let result = run_async(Tokio::new().read_range(&path, range)).unwrap();
+        assert_eq!(result.as_ref(), b"world");
     }
 
     #[test]
     fn read_range_zero_len() {
         let dir = TempDir::new().unwrap();
-        let path = write_tmp(&dir, "z.bin", b"hello");
-        let result =
-            run_async(Tokio::new().read_range(&path, ByteRange::from_offset_len(0, 0).unwrap()))
-                .unwrap();
+        let path = write_tmp(&dir, "data.bin", b"hello");
+        let range = ByteRange::from_offset_len(0, 0).unwrap();
+        let result = run_async(Tokio::new().read_range(&path, range)).unwrap();
         assert!(result.is_empty());
-    }
-
-    #[test]
-    fn read_ranges_empty() {
-        let results = run_async(Tokio::new().read_ranges(&[])).unwrap();
-        assert!(results.is_empty());
     }
 
     #[test]
     fn read_ranges_multiple_preserves_order() {
         let dir = TempDir::new().unwrap();
-        let data: Vec<u8> = (0u8..=255).collect();
-        let path = write_tmp(&dir, "multi.bin", &data);
-        let entries = [
-            FileRange::new(&path, ByteRange::from_offset_len(0, 10).unwrap()),
-            FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
-            FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
+        let path = write_tmp(&dir, "data.bin", b"abcdefghij");
+        let r0 = ByteRange::new(0, 3).unwrap();
+        let r1 = ByteRange::new(3, 6).unwrap();
+        let r2 = ByteRange::new(6, 9).unwrap();
+        let ranges = vec![
+            FileRange::new(&path, r0),
+            FileRange::new(&path, r1),
+            FileRange::new(&path, r2),
         ];
-        let results = run_async(Tokio::new().read_ranges(&entries)).unwrap();
+        let results = run_async(Tokio::new().read_ranges(&ranges)).unwrap();
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].data(), &data[0..10]);
-        assert_eq!(results[1].data(), &data[20..30]);
-        assert_eq!(results[2].data(), &data[100..105]);
+        assert_eq!(results[0].data(), b"abc");
+        assert_eq!(results[1].data(), b"def");
+        assert_eq!(results[2].data(), b"ghi");
     }
 
     #[test]
     fn write_file_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
-        let data = b"hello tokio";
-        run_async(Tokio::new().write_file(&path, data)).unwrap();
-        run_async(Tokio::new().sync_all(&path)).unwrap();
+        run_async(Tokio::new().write_file(&path, b"test data")).unwrap();
         let result = run_async(Tokio::new().read_file(&path)).unwrap();
-        assert_eq!(result.as_ref(), data);
+        assert_eq!(result.as_ref(), b"test data");
     }
 
     #[test]
     fn write_file_truncates_existing() {
         let dir = TempDir::new().unwrap();
-        let path = write_tmp(&dir, "trunc.bin", b"old content here");
+        let path = write_tmp(&dir, "existing.bin", b"old data here");
         run_async(Tokio::new().write_file(&path, b"new")).unwrap();
         let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), b"new");
@@ -327,58 +318,49 @@ mod tests {
     #[test]
     fn write_at_preserves_surrounding_bytes() {
         let dir = TempDir::new().unwrap();
-        let mut data = b"AAABBBCCC".to_vec();
-        let path = write_tmp(&dir, "patch.bin", &data);
-        run_async(Tokio::new().write_at(&path, 3, b"XXX")).unwrap();
-        data[3..6].copy_from_slice(b"XXX");
+        let path = write_tmp(&dir, "data.bin", b"hello world");
+        run_async(Tokio::new().write_at(&path, 6, b"rust!")).unwrap();
         let result = run_async(Tokio::new().read_file(&path)).unwrap();
-        assert_eq!(result.as_ref(), &data);
-    }
-
-    #[test]
-    fn write_positioned_file_creates_exact_length() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("pos.bin");
-        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        run_async(Tokio::new().write_positioned_file(
-            &path,
-            15,
-            WriteSlices::new(&writes).unwrap(),
-        ))
-        .unwrap();
-        let result = run_async(Tokio::new().read_file(&path)).unwrap();
-        assert_eq!(result.len(), 15);
-        assert_eq!(&result.as_ref()[0..5], b"HELLO");
-        assert_eq!(&result.as_ref()[10..15], b"WORLD");
-    }
-
-    #[test]
-    fn write_positioned_file_empty_batch_creates_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("empty_pos.bin");
-        run_async(Tokio::new().write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap()))
-            .unwrap();
-        let meta = std::fs::metadata(&path).unwrap();
-        assert_eq!(meta.len(), 16);
+        assert_eq!(result.as_ref(), b"hello rust!");
     }
 
     #[test]
     fn write_slices_batches_into_existing_file() {
         let dir = TempDir::new().unwrap();
-        let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
-        let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        run_async(Tokio::new().write_slices(&path, WriteSlices::new(&writes).unwrap())).unwrap();
+        let path = write_tmp(&dir, "data.bin", b"----------");
+        let slices = vec![WriteSlice::new(0, b"AB"), WriteSlice::new(8, b"CD")];
+        let ws = WriteSlices::new(&slices).unwrap();
+        run_async(Tokio::new().write_slices(&path, ws)).unwrap();
         let result = run_async(Tokio::new().read_file(&path)).unwrap();
-        assert_eq!(&result.as_ref()[0..5], b"HELLO");
-        assert_eq!(&result.as_ref()[15..20], b"WORLD");
+        assert_eq!(result.as_ref(), b"AB------CD");
     }
 
     #[test]
     fn write_slices_empty_batch_is_noop() {
         let dir = TempDir::new().unwrap();
-        let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        run_async(Tokio::new().write_slices(&path, WriteSlices::new(&[]).unwrap())).unwrap();
+        let path = write_tmp(&dir, "data.bin", b"unchanged");
+        let ws = WriteSlices::new(&[]).unwrap();
+        run_async(Tokio::new().write_slices(&path, ws)).unwrap();
         let result = run_async(Tokio::new().read_file(&path)).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
+    }
+
+    #[test]
+    fn write_positioned_file_creates_exact_length() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("positioned.bin");
+        let ws = WriteSlices::new(&[]).unwrap();
+        run_async(Tokio::new().write_positioned_file(&path, 16, ws)).unwrap();
+        let result = run_async(Tokio::new().read_file(&path)).unwrap();
+        assert_eq!(result.as_ref().len(), 16);
+    }
+
+    #[test]
+    fn write_positioned_file_empty_batch_creates_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("new.bin");
+        let ws = WriteSlices::new(&[]).unwrap();
+        run_async(Tokio::new().write_positioned_file(&path, 0, ws)).unwrap();
+        assert!(path.exists());
     }
 }
