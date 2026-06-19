@@ -5,8 +5,10 @@
 pub mod checkpoint;
 pub mod ids;
 pub mod model;
+pub mod tensor;
 
 pub use checkpoint::{Checkpoint, MetadataMap, TensorWriteData};
 pub use ids::{ShardCount, ShardId};
-pub use model::{Model, Tensor};
+pub use model::Model;
 pub use safetensors::serialize;
+pub use tensor::Tensor;

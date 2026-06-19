@@ -71,23 +71,24 @@ impl Model {
     pub fn tensor(&self, name: &str) -> Option<Tensor<'_>> {
         match &self.storage {
             ModelStorage::Eager { index, partitions } => {
-                let desc = index.get(name)?;
-                let partition = partitions.get(&desc.partition_id())?;
-                let start = usize::try_from(desc.offset()).ok()?;
-                let end = start.checked_add(desc.size())?;
+                let pt = index.get(name)?;
+                let partition = partitions.get(&pt.partition_id())?;
+                let start = usize::try_from(pt.offset()).ok()?;
+                let end = start.checked_add(usize::try_from(pt.size()).ok()?)?;
                 let data = partition.get(start..end)?;
-                Some(Tensor::eager(desc, data))
+                Some(Tensor::eager(pt, data))
             }
             ModelStorage::Mmap { index, partitions } => {
-                let desc = index.get(name)?;
-                let partition = partitions.get(&desc.partition_id())?;
-                let start = usize::try_from(desc.offset()).ok()?;
-                let end = start.checked_add(desc.size())?;
+                let pt = index.get(name)?;
+                let partition = partitions.get(&pt.partition_id())?;
+                let start = usize::try_from(pt.offset()).ok()?;
+                let size = usize::try_from(pt.size()).ok()?;
+                let end = start.checked_add(size)?;
                 if end > partition.len() {
                     return None;
                 }
-                let region = partition.subregion(start, desc.size())?;
-                Some(Tensor::mmap(desc, region))
+                let region = partition.subregion(start, size)?;
+                Some(Tensor::mmap(pt, region))
             }
         }
     }
@@ -157,26 +158,16 @@ impl ModelTrait for Model {
 mod tests {
     use super::*;
     use crate::formats::tensor::Dtype;
-    use crate::formats::serverlessllm::checkpoint::{Checkpoint, TensorWriteEntry};
+    use crate::formats::serverlessllm::checkpoint::Checkpoint;
     use crate::formats::serverlessllm::ids::PartitionId;
+    use crate::formats::serverlessllm::tensor::TensorEntry;
     use crate::formats::traits::Checkpoint as _;
     use std::collections::HashMap;
     use tempfile::TempDir;
 
     fn sample_checkpoint() -> Checkpoint {
-        let mut index = HashMap::new();
-        index.insert(
-            "w".to_owned(),
-            TensorWriteEntry::new(
-                0,
-                4,
-                vec![2, 2],
-                vec![2, 1],
-                Dtype::F32,
-                PartitionId::new(0),
-            ).unwrap(),
-        );
-        Checkpoint::new(index, vec![vec![1, 2, 3, 4]]).unwrap()
+        let pt = TensorEntry::from_parts(0, 4, vec![2usize, 2], vec![2usize, 1], Dtype::F32, PartitionId::new(0)).unwrap();
+        Checkpoint::new([("w".to_owned(), pt)], [vec![1u8, 2, 3, 4]]).unwrap()
     }
 
     #[test]
