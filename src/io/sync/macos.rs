@@ -148,9 +148,10 @@ impl super::super::BlockingIo for Sync {
         }
         use rayon::prelude::*;
         self.in_pool(|| {
-            writes.as_slice().par_iter().try_for_each(|w| {
-                file.write_all_at(w.data, w.offset)
-            })
+            writes
+                .as_slice()
+                .par_iter()
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 
@@ -166,9 +167,10 @@ impl super::super::BlockingIo for Sync {
         let file = std::fs::OpenOptions::new().write(true).open(path)?;
         use rayon::prelude::*;
         self.in_pool(|| {
-            writes.as_slice().par_iter().try_for_each(|w| {
-                file.write_all_at(w.data, w.offset)
-            })
+            writes
+                .as_slice()
+                .par_iter()
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 

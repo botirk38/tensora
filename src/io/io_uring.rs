@@ -179,10 +179,7 @@ impl IoUring {
                     }
                     let n_read = result as usize;
                     if n_read == 0 {
-                        return Err(Error::new(
-                            ErrorKind::UnexpectedEof,
-                            "short io_uring read",
-                        ));
+                        return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
                     }
                     done[idx] += n_read;
                     let chunk_start = idx * chunk_size;
@@ -262,10 +259,7 @@ impl IoUring {
                     }
                     let n_written = result as usize;
                     if n_written == 0 {
-                        return Err(Error::new(
-                            ErrorKind::WriteZero,
-                            "short io_uring write",
-                        ));
+                        return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
                     }
                     done[idx] += n_written;
                     let chunk_start = idx * chunk_size;
@@ -344,10 +338,7 @@ impl IoUring {
                     }
                     let n_written = result as usize;
                     if n_written == 0 {
-                        return Err(Error::new(
-                            ErrorKind::WriteZero,
-                            "short io_uring write",
-                        ));
+                        return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
                     }
                     done[idx] += n_written;
                     if done[idx] < writes[idx].data.len() && next_submit > idx {
@@ -438,11 +429,10 @@ impl super::BlockingIo for IoUring {
                     // The ring holds a reference until the CQE is consumed —
                     // `bufs` outlives the ring borrow.
                     let ptr = unsafe { bufs[idx].as_mut_ptr().add(so_far) };
-                    let entry =
-                        opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
-                            .offset(range.start() + so_far as u64)
-                            .build()
-                            .user_data(idx as u64);
+                    let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
+                        .offset(range.start() + so_far as u64)
+                        .build()
+                        .user_data(idx as u64);
                     {
                         let mut sq = ring.submission();
                         unsafe {
@@ -470,10 +460,7 @@ impl super::BlockingIo for IoUring {
                     }
                     let n_read = result as usize;
                     if n_read == 0 {
-                        return Err(Error::new(
-                            ErrorKind::UnexpectedEof,
-                            "short io_uring read",
-                        ));
+                        return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
                     }
                     done[idx] += n_read;
                     let range = ranges[idx].range;
