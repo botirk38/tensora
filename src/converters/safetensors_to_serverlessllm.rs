@@ -308,11 +308,15 @@ impl ConversionStats {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                return ConversionEngine::IoUring;
+                ConversionEngine::IoUring
             }
-            return ConversionEngine::TokioAsync;
+            #[cfg(not(target_os = "linux"))]
+            {
+                ConversionEngine::TokioAsync
+            }
+        } else {
+            ConversionEngine::Sync
         }
-        ConversionEngine::Sync
     }
 }
 
