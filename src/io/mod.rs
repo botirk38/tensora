@@ -38,6 +38,13 @@ pub mod tokio;
 
 pub use std::io::Result as IoResult;
 
+// Re-export backend structs and options for ergonomic imports.
+#[cfg(target_os = "linux")]
+pub use io_uring::{IoUring, IoUringOptions};
+pub use mmap::Mmap;
+pub use sync::{DirectIo, Sync, SyncOptions};
+pub use self::tokio::{Tokio, TokioOptions};
+
 use std::io::{Error, ErrorKind};
 use std::path::Path;
 

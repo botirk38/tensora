@@ -6,6 +6,21 @@
 //! - macOS: `std::os::unix::fs::FileExt` positioned I/O.
 //! - Windows: `std::os::windows::fs::FileExt` positioned I/O.
 
+/// Controls O_DIRECT usage for bypassing the kernel page cache.
+///
+/// Only takes effect on Linux. On other platforms this option is accepted
+/// but silently ignored (all I/O goes through the page cache).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DirectIo {
+    /// Never use O_DIRECT. All reads go through the kernel page cache.
+    Disabled,
+    /// Require O_DIRECT. Returns an error if the filesystem doesn't support it.
+    Enabled,
+    /// Try O_DIRECT, fall back to buffered I/O if the filesystem doesn't support it.
+    #[default]
+    Auto,
+}
+
 /// Options for the synchronous I/O backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SyncOptions {
@@ -14,6 +29,9 @@ pub struct SyncOptions {
     /// `None` uses the global Rayon thread pool. `Some(n)` creates a backend-local
     /// pool with exactly `n` threads; `n == 0` is rejected by [`Sync::with_options`].
     pub batch_threads: Option<usize>,
+
+    /// Controls whether to use O_DIRECT for reads (Linux only, ignored elsewhere).
+    pub direct_io: DirectIo,
 }
 
 #[cfg(target_os = "linux")]

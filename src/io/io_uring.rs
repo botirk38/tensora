@@ -22,6 +22,7 @@ use crate::io::{
 };
 
 const DEFAULT_RING_DEPTH: u32 = 256;
+const DEFAULT_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 /// Maximum single-op transfer size (io_uring length field is u32).
 const MAX_IO_LEN: usize = u32::MAX as usize;
 
@@ -66,12 +67,18 @@ pub struct IoUring {
 pub struct IoUringOptions {
     /// Depth of each io_uring instance. Also caps batch in-flight operations.
     pub ring_depth: u32,
+    /// Size of each I/O chunk submitted to the ring (default 4 MiB).
+    ///
+    /// Larger values reduce submission overhead for big files; smaller values
+    /// improve concurrency for many small operations.
+    pub chunk_size: usize,
 }
 
 impl Default for IoUringOptions {
     fn default() -> Self {
         Self {
             ring_depth: DEFAULT_RING_DEPTH,
+            chunk_size: DEFAULT_CHUNK_SIZE,
         }
     }
 }
@@ -84,6 +91,7 @@ impl IoUring {
         Self {
             options: IoUringOptions {
                 ring_depth: DEFAULT_RING_DEPTH,
+                chunk_size: DEFAULT_CHUNK_SIZE,
             },
         }
     }
@@ -93,6 +101,12 @@ impl IoUring {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "ring_depth must be greater than zero",
+            ));
+        }
+        if options.chunk_size == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "chunk_size must be greater than zero",
             ));
         }
         Ok(Self { options })
@@ -112,8 +126,8 @@ impl IoUring {
     }
 
     /// Reads exactly `buf.len()` bytes from `file` at `offset` using the
-    /// thread-local ring. Splits the buffer into 4MiB chunks and keeps up
-    /// to `ring_depth` reads in-flight simultaneously.
+    /// thread-local ring. Splits the buffer into chunks and keeps up to
+    /// `ring_depth` reads in-flight simultaneously.
     fn read_exact_at(&self, file: &File, offset: u64, buf: &mut [u8]) -> IoResult<()> {
         if buf.is_empty() {
             return Ok(());
@@ -121,7 +135,7 @@ impl IoUring {
         let depth = self.options.ring_depth;
         with_ring(depth, |ring| {
             let total = buf.len();
-            let chunk_size = (4 * 1024 * 1024).min(total);
+            let chunk_size = self.options.chunk_size.min(total);
             let num_chunks = total.div_ceil(chunk_size);
 
             let mut done = vec![0usize; num_chunks];
@@ -204,7 +218,7 @@ impl IoUring {
         let depth = self.options.ring_depth;
         with_ring(depth, |ring| {
             let total = data.len();
-            let chunk_size = (4 * 1024 * 1024).min(total);
+            let chunk_size = self.options.chunk_size.min(total);
             let num_chunks = total.div_ceil(chunk_size);
 
             let mut done = vec![0usize; num_chunks];
@@ -785,5 +799,31 @@ mod tests {
             let start = i * 32;
             assert_eq!(r.data(), &data[start..start + 32]);
         }
+    }
+
+    #[test]
+    fn custom_chunk_size_reads_correctly() {
+        if skip_if_unavailable() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(32768).collect();
+        let path = write_tmp(&dir, "chunk.bin", &data);
+        let opts = IoUringOptions {
+            chunk_size: 4096,
+            ..Default::default()
+        };
+        let backend = IoUring::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn with_options_rejects_zero_chunk_size() {
+        let opts = IoUringOptions {
+            chunk_size: 0,
+            ..Default::default()
+        };
+        assert!(IoUring::with_options(opts).is_err());
     }
 }

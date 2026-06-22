@@ -5,6 +5,7 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::DirectIo;
 use crate::io::{
     ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
     availability::{IoAvailability, IoKind},
@@ -78,18 +79,31 @@ impl Sync {
         (n + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
     }
 
-    fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
+    /// Opens a file for reading, respecting the configured [`DirectIo`] mode.
+    ///
+    /// Returns the opened file and whether O_DIRECT is active on it.
+    fn open_read(&self, path: &Path) -> IoResult<(std::fs::File, bool)> {
         use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(path)
-        {
-            Ok(f) => Ok((f, true)),
-            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
-                Ok((std::fs::File::open(path)?, false))
+        match self.options.direct_io {
+            DirectIo::Disabled => Ok((std::fs::File::open(path)?, false)),
+            DirectIo::Enabled => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECT)
+                    .open(path)?;
+                Ok((file, true))
             }
-            Err(e) => Err(e),
+            DirectIo::Auto => match std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(path)
+            {
+                Ok(f) => Ok((f, true)),
+                Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+                    Ok((std::fs::File::open(path)?, false))
+                }
+                Err(e) => Err(e),
+            },
         }
     }
 
@@ -108,8 +122,8 @@ impl Sync {
         Ok(())
     }
 
-    fn load_chunked(path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
-        let (file, direct) = Self::open_prefer_direct(path)?;
+    fn load_chunked(&self, path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
+        let (file, direct) = self.open_read(path)?;
         let file_size = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         let raw_chunk = file_size.div_ceil(chunks).max(1);
@@ -160,7 +174,7 @@ impl Sync {
 
                     let start_off = start as u64;
                     handles.push(s.spawn(move || -> IoResult<()> {
-                        let (mut f, _) = Self::open_prefer_direct(path_ref)?;
+                        let (mut f, _) = self.open_read(path_ref)?;
                         f.seek(SeekFrom::Start(start_off))?;
                         Self::read_direct(&mut f, chunk_slice, actual_len)
                     }));
@@ -237,7 +251,7 @@ impl super::super::Io for Sync {
 
 impl super::super::BlockingIo for Sync {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let (mut file, direct) = Self::open_prefer_direct(path)?;
+        let (mut file, direct) = self.open_read(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         if len == 0 {
@@ -245,7 +259,7 @@ impl super::super::BlockingIo for Sync {
         }
         if len > MAX_SINGLE_READ {
             let chunks = (len / (128 * 1024 * 1024)).clamp(1, 8);
-            return Self::load_chunked(path, chunks);
+            return self.load_chunked(path, chunks);
         }
         if direct {
             let aligned_len = Self::round_up_to_block(len);
@@ -268,7 +282,7 @@ impl super::super::BlockingIo for Sync {
         let len = range.len_usize()?;
         let offset = range.start();
 
-        let (mut file, direct) = Self::open_prefer_direct(path)?;
+        let (mut file, direct) = self.open_read(path)?;
 
         if direct {
             let head_skip =
@@ -579,5 +593,49 @@ mod tests {
         // file is created and set to len even with no writes
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!(meta.len(), 16);
+    }
+
+    #[test]
+    fn direct_io_disabled_reads_correctly() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(8192).collect();
+        let path = write_tmp(&dir, "disabled.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Disabled,
+            ..Default::default()
+        };
+        let backend = Sync::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn direct_io_disabled_read_range() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..200).collect();
+        let path = write_tmp(&dir, "range_disabled.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Disabled,
+            ..Default::default()
+        };
+        let backend = Sync::with_options(opts).unwrap();
+        let result = backend
+            .read_range(&path, ByteRange::from_offset_len(10, 50).unwrap())
+            .unwrap();
+        assert_eq!(result.as_ref(), &data[10..60]);
+    }
+
+    #[test]
+    fn direct_io_auto_reads_correctly() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(8192).collect();
+        let path = write_tmp(&dir, "auto.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Auto,
+            ..Default::default()
+        };
+        let backend = Sync::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
     }
 }
