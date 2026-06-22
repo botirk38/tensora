@@ -1,28 +1,55 @@
 //! Linux io_uring storage implementation with batched I/O.
 //!
-//! Single-range and single-slice operations use a dedicated ring per call.
-//! Batch operations (`read_ranges`, `write_positioned_file`, `write_slices`)
-//! saturate a shared ring: up to `ring_depth` ops are in-flight at once,
-//! completions are drained in a tight loop, and partial results are
-//! immediately resubmitted.
+//! A thread-local ring is cached to amortize the `io_uring_setup` syscall
+//! across repeated operations.  Batch operations (`read_ranges`,
+//! `write_positioned_file`, `write_slices`) saturate the ring: up to
+//! `ring_depth` ops are in-flight at once, completions are drained in a
+//! tight loop, and partial results are immediately resubmitted.
 
+use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::Arc;
 
 use io_uring::{IoUring as Uring, opcode, types};
 
 use crate::io::{
     ByteRange, FileRange, Io, IoResult, RangeRead, RequestIndex, WriteSlice, WriteSlices,
-    availability::{IoAvailability, IoKind},
+    availability::{Availability, BackendKind},
     buffer::OwnedBytes,
 };
 
 const DEFAULT_RING_DEPTH: u32 = 256;
+const DEFAULT_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 /// Maximum single-op transfer size (io_uring length field is u32).
 const MAX_IO_LEN: usize = u32::MAX as usize;
+
+// ============================================================================
+// Thread-local ring cache
+// ============================================================================
+
+thread_local! {
+    /// Cached ring per thread — avoids repeated `io_uring_setup` syscalls.
+    /// The ring depth is set on first use and stays for the thread's lifetime.
+    static CACHED_RING: RefCell<Option<Uring>> = const { RefCell::new(None) };
+}
+
+/// Borrow the thread-local ring (creating or resizing it if necessary),
+/// run `f`, then return it. If `f` returns an error the ring is still reusable.
+fn with_ring<T>(depth: u32, f: impl FnOnce(&mut Uring) -> IoResult<T>) -> IoResult<T> {
+    CACHED_RING.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let needs_new = match borrow.as_ref() {
+            None => true,
+            Some(r) => r.params().sq_entries() < depth,
+        };
+        if needs_new {
+            *borrow = Some(Uring::new(depth)?);
+        }
+        f(borrow.as_mut().unwrap())
+    })
+}
 
 // ============================================================================
 // IoUring
@@ -39,12 +66,21 @@ pub struct IoUring {
 pub struct IoUringOptions {
     /// Depth of each io_uring instance. Also caps batch in-flight operations.
     pub ring_depth: u32,
+    /// Size of each I/O chunk submitted to the ring (default 4 MiB).
+    ///
+    /// Larger values reduce submission overhead for big files; smaller values
+    /// improve concurrency for many small operations.
+    pub chunk_size: usize,
+    /// Controls how read buffers are allocated.
+    pub allocator: crate::io::buffer::BufferAllocator,
 }
 
 impl Default for IoUringOptions {
     fn default() -> Self {
         Self {
             ring_depth: DEFAULT_RING_DEPTH,
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            allocator: crate::io::buffer::BufferAllocator::default(),
         }
     }
 }
@@ -57,15 +93,35 @@ impl IoUring {
         Self {
             options: IoUringOptions {
                 ring_depth: DEFAULT_RING_DEPTH,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                allocator: Self::DEFAULT_ALLOCATOR,
             },
         }
     }
+
+    #[cfg(feature = "pool")]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::Pooled(crate::io::buffer::PoolConfig {
+            num_shards: 8,
+            tls_cache_size: 4,
+            max_per_shard: 32,
+            min_buffer_size: 1024 * 1024,
+        });
+    #[cfg(not(feature = "pool"))]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::System;
 
     pub fn with_options(options: IoUringOptions) -> IoResult<Self> {
         if options.ring_depth == 0 {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "ring_depth must be greater than zero",
+            ));
+        }
+        if options.chunk_size == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "chunk_size must be greater than zero",
             ));
         }
         Ok(Self { options })
@@ -79,95 +135,173 @@ impl IoUring {
 
     fn ensure_available() -> IoResult<()> {
         match IoUring::availability() {
-            IoAvailability::Available => Ok(()),
+            Availability::Available => Ok(()),
             unavailable => Err(Error::other(format!("io_uring storage is {unavailable}"))),
         }
     }
 
-    fn open_create_truncate(path: &Path) -> IoResult<File> {
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-    }
+    /// Reads exactly `buf.len()` bytes from `file` at `offset` using the
+    /// thread-local ring. Splits the buffer into chunks and keeps up to
+    /// `ring_depth` reads in-flight simultaneously.
+    fn read_exact_at(&self, file: &File, offset: u64, buf: &mut [u8]) -> IoResult<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let depth = self.options.ring_depth;
+        with_ring(depth, |ring| {
+            let total = buf.len();
+            let chunk_size = self.options.chunk_size.min(total);
+            let num_chunks = total.div_ceil(chunk_size);
 
-    fn open_write_existing(path: &Path) -> IoResult<File> {
-        OpenOptions::new().write(true).open(path)
-    }
+            let mut done = vec![0usize; num_chunks];
+            let mut in_flight: u32 = 0;
+            let mut next_submit = 0usize;
 
-    fn read_exact_at(&self, file: &File, offset: u64, mut buf: &mut [u8]) -> IoResult<()> {
-        let mut ring = Uring::new(self.options.ring_depth)?;
-        let mut absolute_offset = offset;
-
-        while !buf.is_empty() {
-            let chunk_len = buf.len().min(MAX_IO_LEN);
-            let (chunk, rest) = buf.split_at_mut(chunk_len);
-            let mut read = 0usize;
-
-            while read < chunk.len() {
-                let len = (chunk.len() - read).min(MAX_IO_LEN);
-                // SAFETY: `read < chunk.len()` and `len` is bounded by the
-                // remaining bytes, so the resulting pointer stays within
-                // `chunk` for the submitted read.
-                let ptr = unsafe { chunk.as_ptr().add(read) as *mut u8 };
-                let entry = opcode::Read::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
-                    .offset(absolute_offset + read as u64)
-                    .build()
-                    .user_data(0);
-
-                Self::submit_one(&mut ring, &entry)?;
-                let result = Self::wait_one(&mut ring)?;
-                if result == 0 {
-                    return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
+            loop {
+                while in_flight < depth && next_submit < num_chunks {
+                    let idx = next_submit;
+                    let chunk_start = idx * chunk_size;
+                    let chunk_end = total.min(chunk_start + chunk_size);
+                    let chunk_len = chunk_end - chunk_start;
+                    let so_far = done[idx];
+                    let remaining = chunk_len - so_far;
+                    if remaining == 0 {
+                        next_submit += 1;
+                        continue;
+                    }
+                    let len = remaining.min(MAX_IO_LEN) as u32;
+                    let buf_offset = chunk_start + so_far;
+                    // SAFETY: `buf_offset < total` since `chunk_start + so_far <
+                    // chunk_end <= total`. The ring holds a reference to this
+                    // memory until the CQE is consumed below — `buf` outlives
+                    // the ring.
+                    let ptr = unsafe { buf.as_mut_ptr().add(buf_offset) };
+                    let file_offset = offset + buf_offset as u64;
+                    let entry = opcode::Read::new(types::Fd(file.as_raw_fd()), ptr, len)
+                        .offset(file_offset)
+                        .build()
+                        .user_data(idx as u64);
+                    {
+                        let mut sq = ring.submission();
+                        unsafe {
+                            sq.push(&entry)
+                                .map_err(|_| Error::other("io_uring SQ full"))?;
+                        }
+                    }
+                    in_flight += 1;
+                    next_submit += 1;
                 }
-                read += result;
+
+                if in_flight == 0 {
+                    break;
+                }
+
+                ring.submit_and_wait(1)?;
+
+                let cq: Vec<_> = ring.completion().collect();
+                for cqe in cq {
+                    in_flight -= 1;
+                    let idx = cqe.user_data() as usize;
+                    let result = cqe.result();
+                    if result < 0 {
+                        return Err(Error::from_raw_os_error(-result));
+                    }
+                    let n_read = result as usize;
+                    if n_read == 0 {
+                        return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
+                    }
+                    done[idx] += n_read;
+                    let chunk_start = idx * chunk_size;
+                    let chunk_end = total.min(chunk_start + chunk_size);
+                    let chunk_len = chunk_end - chunk_start;
+                    if done[idx] < chunk_len && next_submit > idx {
+                        next_submit = idx;
+                    }
+                }
             }
 
-            absolute_offset = absolute_offset
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "read offset overflow"))?;
-            buf = rest;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
-    fn write_exact_at(&self, file: &File, offset: u64, mut data: &[u8]) -> IoResult<()> {
-        let mut ring = Uring::new(self.options.ring_depth)?;
-        let mut absolute_offset = offset;
+    /// Writes exactly `data.len()` bytes to `file` at `offset` using the
+    /// thread-local ring with multiple in-flight chunks.
+    fn write_exact_at(&self, file: &File, offset: u64, data: &[u8]) -> IoResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let depth = self.options.ring_depth;
+        with_ring(depth, |ring| {
+            let total = data.len();
+            let chunk_size = self.options.chunk_size.min(total);
+            let num_chunks = total.div_ceil(chunk_size);
 
-        while !data.is_empty() {
-            let chunk_len = data.len().min(MAX_IO_LEN);
-            let (chunk, rest) = data.split_at(chunk_len);
-            let mut written = 0usize;
+            let mut done = vec![0usize; num_chunks];
+            let mut in_flight: u32 = 0;
+            let mut next_submit = 0usize;
 
-            while written < chunk.len() {
-                let len = (chunk.len() - written).min(MAX_IO_LEN);
-                // SAFETY: `written < chunk.len()` and `len` is bounded by the
-                // remaining bytes, so the resulting pointer stays within
-                // `chunk` for the submitted write.
-                let ptr = unsafe { chunk.as_ptr().add(written) };
-                let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len as u32)
-                    .offset(absolute_offset + written as u64)
-                    .build()
-                    .user_data(0);
-
-                Self::submit_one(&mut ring, &entry)?;
-                let result = Self::wait_one(&mut ring)?;
-                if result == 0 {
-                    return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
+            loop {
+                while in_flight < depth && next_submit < num_chunks {
+                    let idx = next_submit;
+                    let chunk_start = idx * chunk_size;
+                    let chunk_end = total.min(chunk_start + chunk_size);
+                    let chunk_len = chunk_end - chunk_start;
+                    let so_far = done[idx];
+                    let remaining = chunk_len - so_far;
+                    if remaining == 0 {
+                        next_submit += 1;
+                        continue;
+                    }
+                    let len = remaining.min(MAX_IO_LEN) as u32;
+                    let buf_offset = chunk_start + so_far;
+                    // SAFETY: `buf_offset < total` and `data` outlives the ring.
+                    let ptr = unsafe { data.as_ptr().add(buf_offset) };
+                    let file_offset = offset + buf_offset as u64;
+                    let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len)
+                        .offset(file_offset)
+                        .build()
+                        .user_data(idx as u64);
+                    {
+                        let mut sq = ring.submission();
+                        unsafe {
+                            sq.push(&entry)
+                                .map_err(|_| Error::other("io_uring SQ full"))?;
+                        }
+                    }
+                    in_flight += 1;
+                    next_submit += 1;
                 }
-                written += result;
+
+                if in_flight == 0 {
+                    break;
+                }
+
+                ring.submit_and_wait(1)?;
+
+                let cq: Vec<_> = ring.completion().collect();
+                for cqe in cq {
+                    in_flight -= 1;
+                    let idx = cqe.user_data() as usize;
+                    let result = cqe.result();
+                    if result < 0 {
+                        return Err(Error::from_raw_os_error(-result));
+                    }
+                    let n_written = result as usize;
+                    if n_written == 0 {
+                        return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
+                    }
+                    done[idx] += n_written;
+                    let chunk_start = idx * chunk_size;
+                    let chunk_end = total.min(chunk_start + chunk_size);
+                    let chunk_len = chunk_end - chunk_start;
+                    if done[idx] < chunk_len && next_submit > idx {
+                        next_submit = idx;
+                    }
+                }
             }
 
-            absolute_offset = absolute_offset
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "write offset overflow"))?;
-            data = rest;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Writes every slice in `writes` to `file` using a saturated io_uring ring.
@@ -179,109 +313,82 @@ impl IoUring {
         if writes.is_empty() {
             return Ok(());
         }
-        let n = writes.len();
-        let mut done = vec![0usize; n];
-        let mut ring = Uring::new(self.options.ring_depth)?;
-        let mut in_flight: u32 = 0;
-        let mut next_submit = 0usize;
+        let depth = self.options.ring_depth;
+        with_ring(depth, |ring| {
+            let n = writes.len();
+            let mut done = vec![0usize; n];
+            let mut in_flight: u32 = 0;
+            let mut next_submit = 0usize;
 
-        loop {
-            while in_flight < self.options.ring_depth && next_submit < n {
-                let idx = next_submit;
-                let w = &writes[idx];
-                let so_far = done[idx];
-                let remaining = w.data.len() - so_far;
-                if remaining == 0 {
+            loop {
+                while in_flight < depth && next_submit < n {
+                    let idx = next_submit;
+                    let w = &writes[idx];
+                    let so_far = done[idx];
+                    let remaining = w.data.len() - so_far;
+                    if remaining == 0 {
+                        next_submit += 1;
+                        continue;
+                    }
+                    let len = remaining.min(MAX_IO_LEN) as u32;
+                    // SAFETY: `w.data` is a shared slice with lifetime tied to
+                    // the caller's `WriteSlice`. The ring holds a reference to
+                    // this memory until the CQE is consumed below — `writes`
+                    // outlives the ring borrow.
+                    let ptr = unsafe { w.data.as_ptr().add(so_far) };
+                    let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len)
+                        .offset(w.offset + so_far as u64)
+                        .build()
+                        .user_data(idx as u64);
+                    {
+                        let mut sq = ring.submission();
+                        unsafe {
+                            sq.push(&entry)
+                                .map_err(|_| Error::other("io_uring SQ full"))?;
+                        }
+                    }
+                    in_flight += 1;
                     next_submit += 1;
-                    continue;
                 }
-                let len = remaining.min(MAX_IO_LEN) as u32;
-                // SAFETY: `w.data` is a shared slice with lifetime tied to the
-                // caller's `WriteSlice`.  The ring holds a reference to this
-                // memory until the corresponding CQE is consumed below —
-                // `writes` (and therefore `w.data`) outlives the ring in this
-                // stack frame.
-                let ptr = unsafe { w.data.as_ptr().add(so_far) };
-                let entry = opcode::Write::new(types::Fd(file.as_raw_fd()), ptr, len)
-                    .offset(w.offset + so_far as u64)
-                    .build()
-                    .user_data(idx as u64);
-                {
-                    let mut sq = ring.submission();
-                    // SAFETY: see pointer comment above.
-                    unsafe {
-                        sq.push(&entry)
-                            .map_err(|_| Error::other("io_uring SQ full"))?;
+
+                if in_flight == 0 {
+                    break;
+                }
+
+                ring.submit_and_wait(1)?;
+
+                let cq: Vec<_> = ring.completion().collect();
+                for cqe in cq {
+                    in_flight -= 1;
+                    let idx = cqe.user_data() as usize;
+                    let result = cqe.result();
+                    if result < 0 {
+                        return Err(Error::from_raw_os_error(-result));
+                    }
+                    let n_written = result as usize;
+                    if n_written == 0 {
+                        return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
+                    }
+                    done[idx] += n_written;
+                    if done[idx] < writes[idx].data.len() && next_submit > idx {
+                        next_submit = idx;
                     }
                 }
-                in_flight += 1;
-                next_submit += 1;
             }
 
-            if in_flight == 0 {
-                break;
-            }
-
-            ring.submit_and_wait(1)?;
-
-            let cq: Vec<_> = ring.completion().collect();
-            for cqe in cq {
-                in_flight -= 1;
-                let idx = cqe.user_data() as usize;
-                let result = cqe.result();
-                if result < 0 {
-                    return Err(Error::from_raw_os_error(-result));
-                }
-                let n_written = result as usize;
-                if n_written == 0 {
-                    return Err(Error::new(ErrorKind::WriteZero, "short io_uring write"));
-                }
-                done[idx] += n_written;
-                if done[idx] < writes[idx].data.len() && next_submit > idx {
-                    next_submit = idx;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn submit_one(ring: &mut Uring, entry: &io_uring::squeue::Entry) -> IoResult<()> {
-        {
-            let mut submission = ring.submission();
-            // SAFETY: `entry` references buffers owned by the caller and those
-            // buffers remain alive until `submit_and_wait` completes below.
-            unsafe {
-                submission
-                    .push(entry)
-                    .map_err(|_| Error::other("io_uring submission queue is full"))?;
-            }
-        }
-        ring.submit_and_wait(1)?;
-        Ok(())
-    }
-
-    fn wait_one(ring: &mut Uring) -> IoResult<usize> {
-        let completion = ring
-            .completion()
-            .next()
-            .ok_or_else(|| Error::other("io_uring completion queue was empty"))?;
-        let result = completion.result();
-        if result < 0 {
-            return Err(Error::from_raw_os_error(-result));
-        }
-        Ok(result as usize)
+            Ok(())
+        })
     }
 }
 
 impl super::Io for IoUring {
-    const KIND: IoKind = IoKind::IoUring;
+    const KIND: BackendKind = BackendKind::IoUring;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        crate::io::availability::IoCapabilities::cached()
+        crate::io::availability::Capabilities::cached()
             .io_uring
             .clone()
     }
@@ -294,22 +401,23 @@ impl super::BlockingIo for IoUring {
         let len =
             usize::try_from(file.metadata()?.len()).map_err(|_| Error::other("file too large"))?;
         if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
-        let mut buf = vec![0u8; len];
-        self.read_exact_at(&file, 0, &mut buf)?;
-        Ok(OwnedBytes::Vec(buf))
+        let mut buf = self.options.allocator.alloc(len);
+        self.read_exact_at(&file, 0, buf.as_mut_slice().unwrap())?;
+        Ok(buf)
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         Self::ensure_available()?;
         let file = OpenOptions::new().read(true).open(path)?;
-        let mut buf = vec![0u8; range.len_usize()?];
-        self.read_exact_at(&file, range.start(), &mut buf)?;
-        Ok(OwnedBytes::Vec(buf))
+        let len = range.len_usize()?;
+        let mut buf = self.options.allocator.alloc(len);
+        self.read_exact_at(&file, range.start(), buf.as_mut_slice().unwrap())?;
+        Ok(buf)
     }
 
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
@@ -318,99 +426,93 @@ impl super::BlockingIo for IoUring {
         }
         Self::ensure_available()?;
 
-        // Allocate a buffer for each range and open each file.
         let n = ranges.len();
-        let mut bufs: Vec<Vec<u8>> = ranges
+        let mut bufs: Vec<_> = ranges
             .iter()
-            .map(|e| e.range.len_usize().map(|len| vec![0u8; len]))
+            .map(|e| {
+                e.range
+                    .len_usize()
+                    .map(|len| self.options.allocator.alloc(len))
+            })
             .collect::<IoResult<_>>()?;
         let files: Vec<File> = ranges
             .iter()
             .map(|e| OpenOptions::new().read(true).open(e.path))
             .collect::<IoResult<_>>()?;
 
-        // Per-request state: (bytes_done, range).
         let mut done = vec![0usize; n];
-        let mut ring = Uring::new(self.options.ring_depth)?;
+        let depth = self.options.ring_depth;
 
-        // How many ops are currently in the ring.
-        let mut in_flight: u32 = 0;
-        // Next request to submit.
-        let mut next_submit = 0usize;
+        with_ring(depth, |ring| {
+            let mut in_flight: u32 = 0;
+            let mut next_submit = 0usize;
 
-        loop {
-            // Submit as many as the ring can hold.
-            while in_flight < self.options.ring_depth && next_submit < n {
-                let idx = next_submit;
-                let range = ranges[idx].range;
-                let so_far = done[idx];
-                let remaining = range.len_usize()? - so_far;
-                if remaining == 0 {
-                    next_submit += 1;
-                    continue;
-                }
-                let len = remaining.min(MAX_IO_LEN) as u32;
-                // SAFETY: `bufs[idx]` is allocated above with `range.len()` bytes.
-                // `so_far < range.len()` is guaranteed by the `remaining > 0` check.
-                // The ring holds a live reference to this memory until the completion
-                // is drained below — `bufs` outlives the ring borrow because both
-                // are owned in this stack frame.
-                let ptr = unsafe { bufs[idx].as_mut_ptr().add(so_far) };
-                let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
-                    .offset(range.start() + so_far as u64)
-                    .build()
-                    .user_data(idx as u64);
-                {
-                    let mut sq = ring.submission();
-                    // SAFETY: see pointer comment above.
-                    unsafe {
-                        sq.push(&entry)
-                            .map_err(|_| Error::other("io_uring SQ full"))?;
+            loop {
+                while in_flight < depth && next_submit < n {
+                    let idx = next_submit;
+                    let range = ranges[idx].range;
+                    let so_far = done[idx];
+                    let remaining = range.len_usize()? - so_far;
+                    if remaining == 0 {
+                        next_submit += 1;
+                        continue;
                     }
+                    let len = remaining.min(MAX_IO_LEN) as u32;
+                    // SAFETY: `bufs[idx]` is allocated with `range.len()` bytes.
+                    // The ring holds a reference until the CQE is consumed —
+                    // `bufs` outlives the ring borrow.
+                    let ptr = unsafe { bufs[idx].as_mut_slice().unwrap().as_mut_ptr().add(so_far) };
+                    let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
+                        .offset(range.start() + so_far as u64)
+                        .build()
+                        .user_data(idx as u64);
+                    {
+                        let mut sq = ring.submission();
+                        unsafe {
+                            sq.push(&entry)
+                                .map_err(|_| Error::other("io_uring SQ full"))?;
+                        }
+                    }
+                    in_flight += 1;
+                    next_submit += 1;
                 }
-                in_flight += 1;
-                next_submit += 1;
-            }
 
-            if in_flight == 0 {
-                break;
-            }
-
-            ring.submit_and_wait(1)?;
-
-            // Drain all available completions.
-            let cq: Vec<_> = ring.completion().collect();
-            for cqe in cq {
-                in_flight -= 1;
-                let idx = cqe.user_data() as usize;
-                let result = cqe.result();
-                if result < 0 {
-                    return Err(Error::from_raw_os_error(-result));
+                if in_flight == 0 {
+                    break;
                 }
-                let n_read = result as usize;
-                if n_read == 0 {
-                    return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
-                }
-                done[idx] += n_read;
-                // If this request is not yet complete, resubmit it.
-                let range = ranges[idx].range;
-                if done[idx] < range.len_usize()? {
-                    // Back up next_submit so it re-submits this index.
-                    if next_submit > idx {
+
+                ring.submit_and_wait(1)?;
+
+                let cq: Vec<_> = ring.completion().collect();
+                for cqe in cq {
+                    in_flight -= 1;
+                    let idx = cqe.user_data() as usize;
+                    let result = cqe.result();
+                    if result < 0 {
+                        return Err(Error::from_raw_os_error(-result));
+                    }
+                    let n_read = result as usize;
+                    if n_read == 0 {
+                        return Err(Error::new(ErrorKind::UnexpectedEof, "short io_uring read"));
+                    }
+                    done[idx] += n_read;
+                    let range = ranges[idx].range;
+                    if done[idx] < range.len_usize()? && next_submit > idx {
                         next_submit = idx;
                     }
                 }
             }
-        }
 
-        // All ranges complete — assemble results.
+            Ok(())
+        })?;
+
         let results = bufs
             .into_iter()
             .enumerate()
             .map(|(i, buf)| RangeRead {
                 request_index: RequestIndex::new(i),
                 range: ranges[i].range,
-                bytes: Arc::from(buf),
+                bytes: buf,
             })
             .collect();
         Ok(results)
@@ -418,7 +520,11 @@ impl super::BlockingIo for IoUring {
 
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
-        let file = Self::open_create_truncate(path)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         self.write_exact_at(&file, 0, data)
     }
 
@@ -429,14 +535,18 @@ impl super::BlockingIo for IoUring {
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
         Self::ensure_available()?;
-        let file = Self::open_create_truncate(path)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.set_len(len)?;
         self.ring_batch_writes(&file, writes.as_slice())
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
         Self::ensure_available()?;
-        let file = Self::open_write_existing(path)?;
+        let file = OpenOptions::new().write(true).open(path)?;
         self.write_exact_at(&file, offset, data)
     }
 
@@ -445,7 +555,7 @@ impl super::BlockingIo for IoUring {
             return Ok(());
         }
         Self::ensure_available()?;
-        let file = Self::open_write_existing(path)?;
+        let file = OpenOptions::new().write(true).open(path)?;
         self.ring_batch_writes(&file, writes.as_slice())
     }
 
@@ -482,7 +592,7 @@ mod tests {
 
     #[test]
     fn kind_is_io_uring() {
-        assert_eq!(IoUring::new().kind(), IoKind::IoUring);
+        assert_eq!(IoUring::new().kind(), BackendKind::IoUring);
     }
 
     #[test]
@@ -708,5 +818,31 @@ mod tests {
             let start = i * 32;
             assert_eq!(r.data(), &data[start..start + 32]);
         }
+    }
+
+    #[test]
+    fn custom_chunk_size_reads_correctly() {
+        if skip_if_unavailable() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(32768).collect();
+        let path = write_tmp(&dir, "chunk.bin", &data);
+        let opts = IoUringOptions {
+            chunk_size: 4096,
+            ..Default::default()
+        };
+        let backend = IoUring::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn with_options_rejects_zero_chunk_size() {
+        let opts = IoUringOptions {
+            chunk_size: 0,
+            ..Default::default()
+        };
+        assert!(IoUring::with_options(opts).is_err());
     }
 }

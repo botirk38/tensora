@@ -30,17 +30,33 @@
 
 pub mod availability;
 pub mod buffer;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub mod io_uring;
+#[cfg(feature = "mmap")]
 pub mod mmap;
+#[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(feature = "tokio")]
 pub mod tokio;
 
 pub use std::io::Result as IoResult;
 
+// Re-export backend structs and options for ergonomic imports.
+#[cfg(feature = "tokio")]
+pub use self::tokio::{Tokio, TokioOptions};
+pub use availability::{Availability, BackendKind, Capabilities};
+#[cfg(feature = "pool")]
+pub use buffer::PoolConfig;
+pub use buffer::{BufferAllocator, MmapRegion, OwnedBytes};
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub use io_uring::{IoUring, IoUringOptions};
+#[cfg(feature = "mmap")]
+pub use mmap::Mmap;
+#[cfg(feature = "sync")]
+pub use sync::{DirectIo, SyncIo, SyncOptions};
+
 use std::io::{Error, ErrorKind};
 use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange {
@@ -152,23 +168,11 @@ impl std::fmt::Display for RequestIndex {
     }
 }
 
-impl From<usize> for RequestIndex {
-    fn from(n: usize) -> Self {
-        Self(n)
-    }
-}
-
-impl From<RequestIndex> for usize {
-    fn from(r: RequestIndex) -> Self {
-        r.0
-    }
-}
-
 #[derive(Debug)]
 pub struct RangeRead {
     pub request_index: RequestIndex,
     pub range: ByteRange,
-    pub bytes: Arc<[u8]>,
+    pub bytes: OwnedBytes,
 }
 
 impl RangeRead {
@@ -212,7 +216,7 @@ impl<'a> WriteSlice<'a> {
 /// overlap and that no entry overflows `u64`.  Backends receive `WriteSlices`
 /// and can assume the invariant holds without re-checking.
 #[derive(Debug, Clone, Copy)]
-pub struct WriteSlices<'a>(pub &'a [WriteSlice<'a>]);
+pub struct WriteSlices<'a>(&'a [WriteSlice<'a>]);
 
 impl<'a> WriteSlices<'a> {
     /// Validates `slices` and wraps them.
@@ -235,14 +239,12 @@ impl<'a> WriteSlices<'a> {
 
     /// Wraps `slices` without validation.
     ///
-    /// # Safety
-    ///
     /// The caller must guarantee that the slices are non-overlapping and that
-    /// no slice overflows `u64`.  Violating this is not UB but will cause
-    /// incorrect (non-deterministic) writes when backends parallelize.
+    /// no slice overflows `u64`.  Violating this causes incorrect
+    /// (non-deterministic) writes when backends parallelize, but is not UB.
     #[inline]
     #[must_use]
-    pub unsafe fn new_unchecked(slices: &'a [WriteSlice<'a>]) -> Self {
+    pub fn new_unchecked(slices: &'a [WriteSlice<'a>]) -> Self {
         Self(slices)
     }
 
@@ -251,6 +253,13 @@ impl<'a> WriteSlices<'a> {
     #[must_use]
     pub fn as_slice(self) -> &'a [WriteSlice<'a>] {
         self.0
+    }
+
+    /// Returns the number of slices.
+    #[inline]
+    #[must_use]
+    pub fn len(self) -> usize {
+        self.0.len()
     }
 
     /// Returns `true` if there are no slices.
@@ -264,15 +273,15 @@ impl<'a> WriteSlices<'a> {
 /// Common metadata every I/O backend exposes.
 pub trait Io {
     /// Compile-time kind identifier for this backend.
-    const KIND: availability::IoKind;
+    const KIND: BackendKind;
 
     /// Returns the kind identifier for this backend value.
-    fn kind(&self) -> availability::IoKind {
+    fn kind(&self) -> BackendKind {
         Self::KIND
     }
 
     /// Reports whether this backend can run in the current environment.
-    fn availability() -> availability::IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized;
 }
@@ -280,12 +289,12 @@ pub trait Io {
 /// Blocking path-based I/O operations.
 pub trait BlockingIo: Io {
     /// Reads an entire file into owned bytes.
-    fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
+    fn read_file(&self, path: &Path) -> IoResult<OwnedBytes>;
 
     /// Reads exactly `range` from `path`.
     ///
     /// Empty ranges are valid and return empty bytes.
-    fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+    fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes>;
 
     /// Reads a batch of file ranges concurrently.
     ///
@@ -335,7 +344,7 @@ pub trait AsyncIo: Io {
     fn read_file<'a>(
         &'a self,
         path: &'a Path,
-    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
+    ) -> impl std::future::Future<Output = IoResult<OwnedBytes>> + Send + 'a;
 
     /// Reads exactly `range` from `path`.
     ///
@@ -344,7 +353,7 @@ pub trait AsyncIo: Io {
         &'a self,
         path: &'a Path,
         range: ByteRange,
-    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
+    ) -> impl std::future::Future<Output = IoResult<OwnedBytes>> + Send + 'a;
 
     /// Reads a batch of file ranges concurrently.
     fn read_ranges<'a>(
@@ -405,13 +414,13 @@ pub trait AsyncIo: Io {
 /// Memory-mapped path-based I/O operations.
 pub trait MmapIo: Io {
     /// Maps the entire file at `path`.
-    fn map_file(&self, path: &Path) -> IoResult<buffer::MmapRegion>;
+    fn map_file(&self, path: &Path) -> IoResult<MmapRegion>;
 
     /// Maps exactly `range` from `path`.
     ///
     /// Empty ranges are rejected because zero-length memory maps are not
     /// portable.
-    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::MmapRegion>;
+    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<MmapRegion>;
 }
 
 #[cfg(test)]
@@ -454,7 +463,7 @@ mod tests {
 
     #[test]
     fn range_read_data_slice() {
-        let bytes: Arc<[u8]> = Arc::from(vec![2u8, 3, 4]);
+        let bytes = OwnedBytes::from_vec(vec![2u8, 3, 4]);
         let range = ByteRange::new(0, 3).unwrap();
         let result = RangeRead {
             request_index: RequestIndex::new(0),

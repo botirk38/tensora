@@ -13,7 +13,7 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 use tensora::io::io_uring::IoUring;
 use tensora::io::mmap::Mmap;
-use tensora::io::sync::Sync;
+use tensora::io::sync::SyncIo;
 use tensora::io::tokio::Tokio;
 use tensora::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo};
 
@@ -34,7 +34,7 @@ fn bench_sync_reader_load(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let reader = Sync::new();
+            let reader = SyncIo::new();
             let data = reader.read_file(black_box(shard.as_path())).unwrap();
             black_box(data.len())
         });
@@ -106,7 +106,7 @@ fn bench_sync_reader_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load_batch", &slug), |b| {
         b.iter(|| {
-            let reader = Sync::new();
+            let reader = SyncIo::new();
             let total_len: usize = black_box(&shards)
                 .iter()
                 .map(|path| reader.read_file(path.as_path()).unwrap().len())
@@ -201,7 +201,7 @@ fn bench_sync_reader_range_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("range_batch", &slug), |b| {
         b.iter(|| {
-            let reader = Sync::new();
+            let reader = SyncIo::new();
             let ranges: Vec<FileRange<'_>> = requests
                 .iter()
                 .map(|(path, offset, len)| {

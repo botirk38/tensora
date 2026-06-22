@@ -7,28 +7,28 @@ use std::sync::Arc;
 
 use crate::io::{
     ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
-    availability::{IoAvailability, IoKind},
-    buffer::{OwnedBytes, get_buffer_pool},
+    availability::{Availability, BackendKind},
+    buffer::OwnedBytes,
 };
 
 // ============================================================================
-// Sync
+// SyncIo
 // ============================================================================
 
 /// Synchronous blocking I/O backend (macOS std::fs implementation).
 #[derive(Debug, Clone)]
-pub struct Sync {
+pub struct SyncIo {
     options: super::SyncOptions,
     pool: Option<Arc<rayon::ThreadPool>>,
 }
 
-impl Default for Sync {
+impl Default for SyncIo {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Sync {
+impl SyncIo {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -69,67 +69,41 @@ impl Sync {
             None => f(),
         }
     }
-
-    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-    }
-
-    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new().write(true).open(path)
-    }
-
-    fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        let mut written = 0usize;
-        while written < data.len() {
-            let n = file.write_at(&data[written..], offset + written as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "write_at returned zero bytes",
-                ));
-            }
-            written += n;
-        }
-        Ok(())
-    }
 }
 
-impl super::super::Io for Sync {
-    const KIND: IoKind = IoKind::Sync;
+impl super::super::Io for SyncIo {
+    const KIND: BackendKind = BackendKind::Sync;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        IoAvailability::Available
+        Availability::Available
     }
 }
 
-impl super::super::BlockingIo for Sync {
+impl super::super::BlockingIo for SyncIo {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         let mut file = std::fs::File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
-        let mut buf = get_buffer_pool().get(len);
-        file.read_exact(&mut buf[..])?;
-        Ok(OwnedBytes::Pooled(buf))
+        let mut buf = self.options.allocator.alloc(len);
+        file.read_exact(buf.as_mut_slice().unwrap())?;
+        Ok(buf)
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         let file = std::fs::File::open(path)?;
-        let mut buf = get_buffer_pool().get(range.len_usize()?);
-        file.read_exact_at(&mut buf[..], range.start())?;
-        Ok(OwnedBytes::Pooled(buf))
+        let len = range.len_usize()?;
+        let mut buf = self.options.allocator.alloc(len);
+        file.read_exact_at(buf.as_mut_slice().unwrap(), range.start())?;
+        Ok(buf)
     }
 
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
@@ -139,7 +113,7 @@ impl super::super::BlockingIo for Sync {
                 .par_iter()
                 .enumerate()
                 .map(|(i, entry)| {
-                    let bytes = self.read_range(entry.path, entry.range)?.into_shared();
+                    let bytes = self.read_range(entry.path, entry.range)?;
                     Ok(RangeRead {
                         request_index: RequestIndex::new(i),
                         range: entry.range,
@@ -150,7 +124,11 @@ impl super::super::BlockingIo for Sync {
         })
     }
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
-        let mut file = Self::open_create_truncate(path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(data)
     }
 
@@ -160,7 +138,11 @@ impl super::super::BlockingIo for Sync {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        let file = Self::open_create_truncate(path)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.set_len(len)?;
         if writes.is_empty() {
             return Ok(());
@@ -170,26 +152,26 @@ impl super::super::BlockingIo for Sync {
             writes
                 .as_slice()
                 .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let file = Self::open_write_existing(path)?;
-        Self::write_all_at_file(&file, offset, data)
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
+        file.write_all_at(data, offset)
     }
 
     fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
         if writes.is_empty() {
             return Ok(());
         }
-        let file = Self::open_write_existing(path)?;
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
         use rayon::prelude::*;
         self.in_pool(|| {
             writes
                 .as_slice()
                 .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 
@@ -230,7 +212,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -239,7 +221,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert!(result.is_empty());
     }
 
@@ -249,7 +231,7 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(10, 20).unwrap())
             .unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
@@ -260,7 +242,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(0, 0).unwrap())
             .unwrap();
         assert!(result.is_empty());
@@ -268,7 +250,7 @@ mod tests {
 
     #[test]
     fn read_ranges_empty() {
-        let results = Sync::new().read_ranges(&[]).unwrap();
+        let results = SyncIo::new().read_ranges(&[]).unwrap();
         assert!(results.is_empty());
     }
 
@@ -282,7 +264,7 @@ mod tests {
             &path,
             ByteRange::from_offset_len(50, 30).unwrap(),
         )];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].data(), &data[50..80]);
@@ -299,7 +281,7 @@ mod tests {
             FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
             FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
         ];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
@@ -309,12 +291,12 @@ mod tests {
 
     #[test]
     fn kind_is_sync() {
-        assert_eq!(Sync::new().kind(), IoKind::Sync);
+        assert_eq!(SyncIo::new().kind(), BackendKind::Sync);
     }
 
     #[test]
     fn availability_is_available() {
-        assert!(Sync::availability().is_available());
+        assert!(SyncIo::availability().is_available());
     }
 
     #[test]
@@ -322,9 +304,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello macos sync";
-        Sync::new().write_file(&path, data).unwrap();
-        Sync::new().sync_all(&path).unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, data).unwrap();
+        SyncIo::new().sync_all(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
     }
 
@@ -332,8 +314,8 @@ mod tests {
     fn write_file_truncates_existing() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "trunc.bin", b"old content here");
-        Sync::new().write_file(&path, b"new").unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, b"new").unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"new");
     }
 
@@ -342,9 +324,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut data = b"AAABBBCCC".to_vec();
         let path = write_tmp(&dir, "patch.bin", &data);
-        Sync::new().write_at(&path, 3, b"XXX").unwrap();
+        SyncIo::new().write_at(&path, 3, b"XXX").unwrap();
         data[3..6].copy_from_slice(b"XXX");
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data);
     }
 
@@ -353,10 +335,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 15, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.len(), 15);
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[10..15], b"WORLD");
@@ -367,10 +349,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
@@ -379,10 +361,10 @@ mod tests {
     fn write_slices_empty_batch_is_noop() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&[]).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
     }
 
@@ -404,7 +386,7 @@ mod tests {
     fn write_positioned_file_empty_batch_creates_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty_pos.bin");
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap())
             .unwrap();
         let meta = std::fs::metadata(&path).unwrap();

@@ -21,7 +21,7 @@
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::{AsyncBackend, Backend};
 use crate::io::mmap::Mmap;
-use crate::io::sync::Sync;
+use crate::io::sync::SyncIo;
 use crate::io::tokio::Tokio;
 use crate::io::{AsyncIo, BlockingIo, MmapIo};
 use std::collections::HashMap;
@@ -136,7 +136,7 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
 
         match backend {
             Backend::Sync => {
-                let engine = Sync::new();
+                let engine = SyncIo::new();
                 for id in index.partition_ids() {
                     let bytes = engine
                         .read_file(&dir.join(id.data_file_stem()))
@@ -206,7 +206,7 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
     fn save(&self, directory: impl AsRef<Path>) -> SaveResult<()> {
         let directory = directory.as_ref();
         std::fs::create_dir_all(directory)?;
-        let engine = Sync::new();
+        let engine = SyncIo::new();
 
         let index_path = directory.join("tensor_index.json");
         engine

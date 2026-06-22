@@ -6,10 +6,10 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use tensora::io::availability::IoCapabilities;
+//! use tensora::io::availability::Capabilities;
 //!
-//! let caps = IoCapabilities::probe();
-//! if caps.is_available(IoKind::IoUring) {
+//! let caps = Capabilities::probe();
+//! if caps.is_available(BackendKind::IoUring) {
 //!     // use io_uring path
 //! }
 //! ```
@@ -18,7 +18,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 // ============================================================================
-// IoKind
+// BackendKind
 // ============================================================================
 
 /// Identifies a I/O backend.
@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 /// Sync and Tokio have explicit implementations for Linux, macOS, and Windows.
 /// IoUring is Linux-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IoKind {
+pub enum BackendKind {
     /// Synchronous blocking I/O.
     ///
     /// Linux: O_DIRECT-aware chunked reads with `write_at` positioned writes.
@@ -46,7 +46,7 @@ pub enum IoKind {
     IoUring,
 }
 
-impl IoKind {
+impl BackendKind {
     /// Returns a short, stable identifier string for this engine.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -59,7 +59,7 @@ impl IoKind {
     }
 }
 
-impl fmt::Display for IoKind {
+impl fmt::Display for BackendKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -119,12 +119,12 @@ impl fmt::Display for UnavailableReason {
 }
 
 // ============================================================================
-// IoAvailability
+// Availability
 // ============================================================================
 
 /// Availability status for a single I/O backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IoAvailability {
+pub enum Availability {
     /// The engine is available and can be used.
     Available,
     /// The engine cannot be used; `reason` and `details` explain why.
@@ -136,7 +136,7 @@ pub enum IoAvailability {
     },
 }
 
-impl IoAvailability {
+impl Availability {
     /// Returns `true` if the engine is available.
     #[inline]
     #[must_use]
@@ -154,7 +154,7 @@ impl IoAvailability {
     }
 }
 
-impl fmt::Display for IoAvailability {
+impl fmt::Display for Availability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Available => f.write_str("available"),
@@ -170,52 +170,52 @@ impl fmt::Display for IoAvailability {
 }
 
 // ============================================================================
-// IoCapabilities
+// Capabilities
 // ============================================================================
 
 /// Snapshot of all I/O backend availability for deterministic selection.
 ///
-/// Obtain via [`IoCapabilities::probe`] at startup; cache the result
+/// Obtain via [`Capabilities::probe`] at startup; cache the result
 /// rather than calling `probe` on every I/O decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IoCapabilities {
+pub struct Capabilities {
     /// Sync engine availability.
-    pub sync: IoAvailability,
+    pub sync: Availability,
     /// Tokio async engine availability.
-    pub tokio: IoAvailability,
+    pub tokio: Availability,
     /// Mmap engine availability.
-    pub mmap: IoAvailability,
+    pub mmap: Availability,
     /// io_uring engine availability (Linux only; always `Unavailable` elsewhere).
-    pub io_uring: IoAvailability,
+    pub io_uring: Availability,
 }
 
-impl IoCapabilities {
+impl Capabilities {
     /// Returns the availability of the given engine.
     #[must_use]
-    pub fn availability(&self, kind: IoKind) -> &IoAvailability {
+    pub fn availability(&self, kind: BackendKind) -> &Availability {
         match kind {
-            IoKind::Sync => &self.sync,
-            IoKind::Tokio => &self.tokio,
-            IoKind::Mmap => &self.mmap,
-            IoKind::IoUring => &self.io_uring,
+            BackendKind::Sync => &self.sync,
+            BackendKind::Tokio => &self.tokio,
+            BackendKind::Mmap => &self.mmap,
+            BackendKind::IoUring => &self.io_uring,
         }
     }
 
     /// Returns `true` if the given engine is available.
     #[inline]
     #[must_use]
-    pub fn is_available(&self, kind: IoKind) -> bool {
+    pub fn is_available(&self, kind: BackendKind) -> bool {
         self.availability(kind).is_available()
     }
 
     /// Returns all four `(kind, availability)` pairs.
     #[must_use]
-    pub fn iter(&self) -> [(IoKind, &IoAvailability); 4] {
+    pub fn iter(&self) -> [(BackendKind, &Availability); 4] {
         [
-            (IoKind::Sync, &self.sync),
-            (IoKind::Tokio, &self.tokio),
-            (IoKind::Mmap, &self.mmap),
-            (IoKind::IoUring, &self.io_uring),
+            (BackendKind::Sync, &self.sync),
+            (BackendKind::Tokio, &self.tokio),
+            (BackendKind::Mmap, &self.mmap),
+            (BackendKind::IoUring, &self.io_uring),
         ]
     }
 
@@ -229,8 +229,8 @@ impl IoCapabilities {
         let mmap = Self::probe_mmap();
         let io_uring = Self::probe_io_uring();
         Self {
-            sync: IoAvailability::Available,
-            tokio: IoAvailability::Available,
+            sync: Availability::Available,
+            tokio: Availability::Available,
             mmap,
             io_uring,
         }
@@ -238,45 +238,45 @@ impl IoCapabilities {
 
     /// Returns a process-wide cached capability snapshot.
     ///
-    /// Use this for format heuristics and hot paths. Use [`IoCapabilities::probe`]
+    /// Use this for format heuristics and hot paths. Use [`Capabilities::probe`]
     /// only when a fresh environment probe is explicitly required.
     #[must_use]
     pub fn cached() -> &'static Self {
-        static CAPABILITIES: OnceLock<IoCapabilities> = OnceLock::new();
+        static CAPABILITIES: OnceLock<Capabilities> = OnceLock::new();
         CAPABILITIES.get_or_init(Self::probe)
     }
 
-    fn probe_mmap() -> IoAvailability {
+    fn probe_mmap() -> Availability {
         let page_size = region::page::size();
         if page_size == 0 {
-            return IoAvailability::unavailable(
+            return Availability::unavailable(
                 UnavailableReason::MissingDependency,
                 "region returned a zero page size",
             );
         }
-        IoAvailability::Available
+        Availability::Available
     }
 
     #[cfg(target_os = "linux")]
-    fn probe_io_uring() -> IoAvailability {
+    fn probe_io_uring() -> Availability {
         // Attempt to create a minimal ring to verify the kernel supports it
         // and the process has the required privileges.
         match io_uring::IoUring::new(2) {
-            Ok(_) => IoAvailability::Available,
+            Ok(_) => Availability::Available,
             Err(e) => {
                 use std::io::ErrorKind;
                 let reason = match e.kind() {
                     ErrorKind::PermissionDenied => UnavailableReason::PermissionDenied,
                     _ => UnavailableReason::MissingKernelFeature,
                 };
-                IoAvailability::unavailable(reason, e.to_string())
+                Availability::unavailable(reason, e.to_string())
             }
         }
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn probe_io_uring() -> IoAvailability {
-        IoAvailability::unavailable(
+    fn probe_io_uring() -> Availability {
+        Availability::unavailable(
             UnavailableReason::UnsupportedPlatform,
             "io_uring is only available on Linux",
         )
@@ -293,15 +293,20 @@ mod tests {
 
     #[test]
     fn storage_kind_as_str() {
-        assert_eq!(IoKind::Sync.as_str(), "sync");
-        assert_eq!(IoKind::Tokio.as_str(), "tokio");
-        assert_eq!(IoKind::Mmap.as_str(), "mmap");
-        assert_eq!(IoKind::IoUring.as_str(), "io-uring");
+        assert_eq!(BackendKind::Sync.as_str(), "sync");
+        assert_eq!(BackendKind::Tokio.as_str(), "tokio");
+        assert_eq!(BackendKind::Mmap.as_str(), "mmap");
+        assert_eq!(BackendKind::IoUring.as_str(), "io-uring");
     }
 
     #[test]
     fn storage_kind_display_matches_as_str() {
-        for kind in [IoKind::Sync, IoKind::Tokio, IoKind::Mmap, IoKind::IoUring] {
+        for kind in [
+            BackendKind::Sync,
+            BackendKind::Tokio,
+            BackendKind::Mmap,
+            BackendKind::IoUring,
+        ] {
             assert_eq!(format!("{kind}"), kind.as_str());
         }
     }
@@ -365,20 +370,18 @@ mod tests {
 
     #[test]
     fn storage_availability_is_available() {
-        assert!(IoAvailability::Available.is_available());
-        assert!(
-            !IoAvailability::unavailable(UnavailableReason::PermissionDenied, "").is_available()
-        );
+        assert!(Availability::Available.is_available());
+        assert!(!Availability::unavailable(UnavailableReason::PermissionDenied, "").is_available());
     }
 
     #[test]
     fn storage_availability_display_available() {
-        assert_eq!(IoAvailability::Available.to_string(), "available");
+        assert_eq!(Availability::Available.to_string(), "available");
     }
 
     #[test]
     fn storage_availability_display_unavailable_with_details() {
-        let s = IoAvailability::unavailable(
+        let s = Availability::unavailable(
             UnavailableReason::PermissionDenied,
             "io_uring_setup returned EPERM",
         );
@@ -390,33 +393,33 @@ mod tests {
 
     #[test]
     fn storage_availability_display_unavailable_no_details() {
-        let s = IoAvailability::unavailable(UnavailableReason::UnsupportedPlatform, "");
+        let s = Availability::unavailable(UnavailableReason::UnsupportedPlatform, "");
         assert_eq!(s.to_string(), "unavailable: unsupported platform");
     }
 
     #[test]
     fn capabilities_probe_sync_and_tokio_always_available() {
-        let caps = IoCapabilities::probe();
-        assert!(caps.is_available(IoKind::Sync));
-        assert!(caps.is_available(IoKind::Tokio));
+        let caps = Capabilities::probe();
+        assert!(caps.is_available(BackendKind::Sync));
+        assert!(caps.is_available(BackendKind::Tokio));
     }
 
     #[test]
     #[cfg(not(target_os = "linux"))]
     fn capabilities_probe_io_uring_unavailable_on_non_linux() {
-        let caps = IoCapabilities::probe();
-        assert!(!caps.is_available(IoKind::IoUring));
+        let caps = Capabilities::probe();
+        assert!(!caps.is_available(BackendKind::IoUring));
     }
 
     #[test]
     fn capabilities_iter_returns_four_entries() {
-        let caps = IoCapabilities::probe();
+        let caps = Capabilities::probe();
         let entries = caps.iter();
         assert_eq!(entries.len(), 4);
         let kinds: Vec<_> = entries.iter().map(|(k, _)| *k).collect();
-        assert!(kinds.contains(&IoKind::Sync));
-        assert!(kinds.contains(&IoKind::Tokio));
-        assert!(kinds.contains(&IoKind::Mmap));
-        assert!(kinds.contains(&IoKind::IoUring));
+        assert!(kinds.contains(&BackendKind::Sync));
+        assert!(kinds.contains(&BackendKind::Tokio));
+        assert!(kinds.contains(&BackendKind::Mmap));
+        assert!(kinds.contains(&BackendKind::IoUring));
     }
 }

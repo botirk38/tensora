@@ -29,21 +29,33 @@ harness = false
 name = "storage"
 harness = false
 
+[[bench]]
+name = "io_profile"
+harness = false
+
 [[bin]]
 name = "convert"
 path = "src/bin/convert/main.rs"
 
+[features]
+default = ["sync", "mmap", "pool", "tokio", "io-uring"]
+sync = ["dep:rayon"]
+mmap = ["dep:memmap2"]
+pool = ["dep:zeropool"]
+tokio = ["dep:tokio", "dep:futures"]
+io-uring = ["dep:io-uring", "dep:libc"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 dirs = "6"
-futures = "0.3"
+futures = { version = "0.3", optional = true }
 num_cpus = "1.16"
 region = "3.0.2"
 safetensors = "0.7.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.132"
 thiserror = "2.0"
-tokio = { version = "1.48.0", features = [
+tokio = { version = "1.48.0", optional = true, features = [
   "rt",
   "rt-multi-thread",
   "fs",
@@ -51,14 +63,14 @@ tokio = { version = "1.48.0", features = [
   "io-util",
   "time",
 ] }
-rayon = "1.10"
-memmap2 = "0.9"
-zeropool = { version = "0.3.1", default-features = false }
+rayon = { version = "1.10", optional = true }
+memmap2 = { version = "0.9", optional = true }
+zeropool = { version = "0.3.1", default-features = false, optional = true }
 hf-hub = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
-io-uring = "0.7"
+libc = { version = "0.2", optional = true }
+io-uring = { version = "0.7", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.0", features = ["async_tokio"] }

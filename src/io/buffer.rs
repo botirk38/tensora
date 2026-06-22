@@ -1,19 +1,21 @@
 //! Owned byte buffer types for storage I/O.
 //!
 //! [`OwnedBytes`] is a zero-copy owned byte container that can be backed by
-//! pooled, aligned, shared, memory-mapped, or plain `Vec` storage. All variants
+//! pooled, aligned, memory-mapped, or plain `Vec` storage. All variants
 //! implement `AsRef<[u8]>` and `Deref<Target = [u8]>` for uniform read access.
 //!
 //! # Buffer pool
 //!
-//! [`get_buffer_pool`] returns the process-wide sharded buffer pool. Engines
-//! that read into reusable buffers should obtain buffers from this pool via
-//! `get_buffer_pool().get(len)` and wrap the result in [`OwnedBytes::Pooled`].
+//! The process-wide buffer pool is configured via [`PoolConfig`]. Backends
+//! that have pooling enabled obtain buffers via the pool and return
+//! [`OwnedBytes::Pooled`]; when disabled they return [`OwnedBytes::Vec`].
 
 use std::sync::Arc;
 
+#[cfg(feature = "pool")]
 use zeropool::BufferPool;
-pub use zeropool::PooledBuffer;
+#[cfg(feature = "pool")]
+pub(crate) use zeropool::PooledBuffer;
 
 // ============================================================================
 // AlignedBuffer — O_DIRECT aligned heap buffer (Linux only)
@@ -108,10 +110,15 @@ impl std::fmt::Debug for AlignedBuffer {
 }
 
 #[cfg(target_os = "linux")]
-// SAFETY: AlignedBuffer owns its allocation and only exposes shared/mutable
-// access through Rust references; moving it to another thread transfers
-// ownership of the allocation.
+// SAFETY: AlignedBuffer owns its allocation exclusively and only exposes
+// shared/mutable access through Rust references; moving it to another thread
+// transfers ownership of the allocation.
 unsafe impl Send for AlignedBuffer {}
+
+#[cfg(target_os = "linux")]
+// SAFETY: &AlignedBuffer only provides &[u8] access (via Deref). Immutable
+// byte slices are trivially safe to share across threads.
+unsafe impl Sync for AlignedBuffer {}
 
 // ============================================================================
 // MmapRegion — Arc-backed memory-mapped file region
@@ -176,29 +183,91 @@ impl std::ops::Deref for MmapRegion {
 }
 
 // ============================================================================
-// Global buffer pool
+// BufferAllocator
 // ============================================================================
 
-const NUM_SHARDS: usize = 8;
-const TLS_CACHE_SIZE: usize = 4;
-const MAX_BUFFERS_PER_SHARD: usize = 32;
-const MIN_BUFFER_SIZE: usize = 1024 * 1024;
+/// Configuration for the buffer pool used by [`BufferAllocator::Pooled`].
+#[cfg(feature = "pool")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolConfig {
+    /// Number of independent shards to reduce contention (default: 8).
+    pub num_shards: usize,
+    /// Thread-local cache capacity per thread (default: 4).
+    pub tls_cache_size: usize,
+    /// Maximum buffers retained per shard (default: 32).
+    pub max_per_shard: usize,
+    /// Minimum buffer size the pool will manage; smaller requests
+    /// bypass the pool and allocate directly (default: 1 MiB).
+    pub min_buffer_size: usize,
+}
+
+#[cfg(feature = "pool")]
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            num_shards: 8,
+            tls_cache_size: 4,
+            max_per_shard: 32,
+            min_buffer_size: 1024 * 1024,
+        }
+    }
+}
+
+/// Controls how I/O backends allocate read buffers.
+///
+/// - [`Pooled`](Self::Pooled): Reuses buffers from a process-wide pool,
+///   amortising allocation cost across repeated reads.
+/// - [`System`](Self::System): Every read allocates a fresh `Vec<u8>` via the
+///   system allocator and frees it on drop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferAllocator {
+    /// Reuse buffers from the process-wide pool.
+    #[cfg(feature = "pool")]
+    Pooled(PoolConfig),
+    /// Allocate fresh `Vec<u8>` buffers via the system allocator.
+    System,
+}
+
+impl Default for BufferAllocator {
+    fn default() -> Self {
+        #[cfg(feature = "pool")]
+        {
+            Self::Pooled(PoolConfig::default())
+        }
+        #[cfg(not(feature = "pool"))]
+        {
+            Self::System
+        }
+    }
+}
+
+impl BufferAllocator {
+    /// Allocate a zeroed buffer of `len` bytes.
+    #[inline]
+    pub fn alloc(&self, len: usize) -> OwnedBytes {
+        match self {
+            #[cfg(feature = "pool")]
+            Self::Pooled(_) => OwnedBytes::Pooled(get_buffer_pool().get(len)),
+            Self::System => OwnedBytes::Vec(vec![0u8; len]),
+        }
+    }
+}
 
 /// Returns the process-wide sharded buffer pool.
 ///
-/// The pool is initialised on first call and reused for the lifetime of the
-/// process. Buffers obtained from the pool are automatically returned when
-/// the `PooledBuffer` handle is dropped.
+/// Initialised on first call with [`PoolConfig::default`] settings.
+#[cfg(feature = "pool")]
 #[must_use]
-pub fn get_buffer_pool() -> &'static BufferPool {
+pub(crate) fn get_buffer_pool() -> &'static BufferPool {
     use std::sync::OnceLock;
     static POOL: OnceLock<BufferPool> = OnceLock::new();
     POOL.get_or_init(|| {
+        let cfg = PoolConfig::default();
         BufferPool::builder()
-            .num_shards(NUM_SHARDS)
-            .tls_cache_size(TLS_CACHE_SIZE)
-            .max_buffers_per_shard(MAX_BUFFERS_PER_SHARD)
-            .min_buffer_size(MIN_BUFFER_SIZE)
+            .num_shards(cfg.num_shards)
+            .tls_cache_size(cfg.tls_cache_size)
+            .max_buffers_per_shard(cfg.max_per_shard)
+            .min_buffer_size(cfg.min_buffer_size)
             .build()
     })
 }
@@ -213,20 +282,20 @@ pub fn get_buffer_pool() -> &'static BufferPool {
 /// Only the `Pooled`, `Aligned`, and `Vec` variants support mutable access.
 pub enum OwnedBytes {
     /// A buffer returned from the global [`BufferPool`].
+    #[cfg(feature = "pool")]
     Pooled(PooledBuffer),
     /// An O_DIRECT aligned buffer (Linux only).
     #[cfg(target_os = "linux")]
     Aligned(AlignedBuffer),
-    /// A reference-counted, immutable shared slice.
-    Shared(Arc<[u8]>),
     /// A memory-mapped file region (zero-copy, read-only).
     Mmap(MmapRegion),
-    /// A plain heap-allocated buffer for I/O backends that need mutable storage.
+    /// A plain heap-allocated buffer.
     Vec(Vec<u8>),
 }
 
 impl OwnedBytes {
     /// Wrap a pooled buffer.
+    #[cfg(feature = "pool")]
     #[inline]
     #[must_use]
     pub fn from_pooled(buf: PooledBuffer) -> Self {
@@ -253,10 +322,10 @@ impl OwnedBytes {
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
+            #[cfg(feature = "pool")]
             Self::Pooled(b) => b.len(),
             #[cfg(target_os = "linux")]
             Self::Aligned(b) => b.len(),
-            Self::Shared(b) => b.len(),
             Self::Mmap(b) => b.len(),
             Self::Vec(b) => b.len(),
         }
@@ -271,16 +340,16 @@ impl OwnedBytes {
 
     /// Returns a mutable byte slice for the variants that own their memory.
     ///
-    /// Returns `None` for [`OwnedBytes::Shared`] and [`OwnedBytes::Mmap`],
-    /// which are immutable.
+    /// Returns `None` for [`OwnedBytes::Mmap`], which is immutable.
     #[inline]
     #[must_use]
     pub fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         match self {
+            #[cfg(feature = "pool")]
             Self::Pooled(b) => Some(b.as_mut_slice()),
             #[cfg(target_os = "linux")]
             Self::Aligned(b) => Some(b.as_mut_slice()),
-            Self::Shared(_) | Self::Mmap(_) => None,
+            Self::Mmap(_) => None,
             Self::Vec(b) => Some(b.as_mut_slice()),
         }
     }
@@ -292,10 +361,10 @@ impl OwnedBytes {
     #[must_use]
     pub fn into_vec(self) -> Vec<u8> {
         match self {
+            #[cfg(feature = "pool")]
             Self::Pooled(b) => b.into_inner(),
             #[cfg(target_os = "linux")]
             Self::Aligned(b) => b.as_slice().to_vec(),
-            Self::Shared(b) => b.to_vec(),
             Self::Mmap(b) => b.as_slice().to_vec(),
             Self::Vec(b) => b,
         }
@@ -307,10 +376,10 @@ impl OwnedBytes {
     #[must_use]
     pub fn into_shared(self) -> Arc<[u8]> {
         match self {
+            #[cfg(feature = "pool")]
             Self::Pooled(b) => b.into_inner().into(),
             #[cfg(target_os = "linux")]
             Self::Aligned(b) => b.as_slice().into(),
-            Self::Shared(b) => b,
             Self::Mmap(b) => Arc::from(b.as_slice()),
             Self::Vec(b) => b.into(),
         }
@@ -321,10 +390,10 @@ impl AsRef<[u8]> for OwnedBytes {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         match self {
+            #[cfg(feature = "pool")]
             Self::Pooled(b) => b.as_ref(),
             #[cfg(target_os = "linux")]
             Self::Aligned(b) => b.as_slice(),
-            Self::Shared(b) => b.as_ref(),
             Self::Mmap(b) => b.as_slice(),
             Self::Vec(b) => b.as_ref(),
         }
@@ -345,6 +414,36 @@ impl std::fmt::Debug for OwnedBytes {
         f.debug_struct("OwnedBytes")
             .field("len", &self.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl From<Vec<u8>> for OwnedBytes {
+    #[inline]
+    fn from(v: Vec<u8>) -> Self {
+        Self::Vec(v)
+    }
+}
+
+#[cfg(feature = "pool")]
+impl From<PooledBuffer> for OwnedBytes {
+    #[inline]
+    fn from(buf: PooledBuffer) -> Self {
+        Self::Pooled(buf)
+    }
+}
+
+impl From<MmapRegion> for OwnedBytes {
+    #[inline]
+    fn from(region: MmapRegion) -> Self {
+        Self::Mmap(region)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl From<AlignedBuffer> for OwnedBytes {
+    #[inline]
+    fn from(buf: AlignedBuffer) -> Self {
+        Self::Aligned(buf)
     }
 }
 
@@ -375,6 +474,7 @@ mod tests {
         assert_eq!(ob.as_ref(), &data[..]);
     }
 
+    #[cfg(feature = "pool")]
     #[test]
     fn from_pooled_roundtrips() {
         let pool = get_buffer_pool();
@@ -385,10 +485,10 @@ mod tests {
     }
 
     #[test]
-    fn shared_variant() {
-        let arc: Arc<[u8]> = Arc::from(vec![5u8, 6, 7]);
-        let ob = OwnedBytes::Shared(arc.clone());
-        assert_eq!(ob.as_ref(), arc.as_ref());
+    fn vec_variant() {
+        let data = vec![5u8, 6, 7];
+        let ob = OwnedBytes::Vec(data.clone());
+        assert_eq!(ob.as_ref(), &data[..]);
     }
 
     #[test]
@@ -426,10 +526,13 @@ mod tests {
         assert_eq!(ob.as_ref()[0], 99);
     }
 
+    #[cfg(feature = "pool")]
     #[test]
-    fn as_mut_slice_none_for_shared() {
-        let mut ob = OwnedBytes::Shared(Arc::from(vec![1u8]));
-        assert!(ob.as_mut_slice().is_none());
+    fn as_mut_slice_some_for_pooled() {
+        let pool = get_buffer_pool();
+        let buf = pool.get(4);
+        let mut ob = OwnedBytes::Pooled(buf);
+        assert!(ob.as_mut_slice().is_some());
     }
 
     #[test]
@@ -442,8 +545,6 @@ mod tests {
     fn into_vec_preserves_bytes() {
         let data = vec![7u8, 8, 9];
         assert_eq!(OwnedBytes::from_vec(data.clone()).into_vec(), data);
-        let arc: Arc<[u8]> = Arc::from(data.clone());
-        assert_eq!(OwnedBytes::Shared(arc).into_vec(), data);
         assert_eq!(
             OwnedBytes::Mmap(make_mmap_region()).into_vec(),
             b"hello_mmap"
@@ -459,6 +560,7 @@ mod tests {
         assert_eq!(shared2.as_ref(), b"hello_mmap");
     }
 
+    #[cfg(feature = "pool")]
     #[test]
     fn buffer_pool_is_singleton() {
         let p1 = get_buffer_pool() as *const _;

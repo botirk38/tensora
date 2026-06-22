@@ -5,10 +5,11 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::DirectIo;
 use crate::io::{
     ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
-    availability::{IoAvailability, IoKind},
-    buffer::{AlignedBuffer, OwnedBytes, get_buffer_pool},
+    availability::{Availability, BackendKind},
+    buffer::{AlignedBuffer, OwnedBytes},
 };
 
 const BLOCK_SIZE: usize = 4096;
@@ -16,23 +17,23 @@ const BLOCK_SIZE_U64: u64 = 4096;
 const MAX_SINGLE_READ: usize = 512 * 1024 * 1024;
 
 // ============================================================================
-// Sync
+// SyncIo
 // ============================================================================
 
 /// Synchronous blocking I/O backend (Linux O_DIRECT implementation).
 #[derive(Debug, Clone)]
-pub struct Sync {
+pub struct SyncIo {
     options: super::SyncOptions,
     pool: Option<Arc<rayon::ThreadPool>>,
 }
 
-impl Default for Sync {
+impl Default for SyncIo {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Sync {
+impl SyncIo {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -78,18 +79,31 @@ impl Sync {
         (n + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
     }
 
-    fn open_prefer_direct(path: &Path) -> IoResult<(std::fs::File, bool)> {
+    /// Opens a file for reading, respecting the configured [`DirectIo`] mode.
+    ///
+    /// Returns the opened file and whether O_DIRECT is active on it.
+    fn open_read(&self, path: &Path) -> IoResult<(std::fs::File, bool)> {
         use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(path)
-        {
-            Ok(f) => Ok((f, true)),
-            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
-                Ok((std::fs::File::open(path)?, false))
+        match self.options.direct_io {
+            DirectIo::Disabled => Ok((std::fs::File::open(path)?, false)),
+            DirectIo::Enabled => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECT)
+                    .open(path)?;
+                Ok((file, true))
             }
-            Err(e) => Err(e),
+            DirectIo::Auto => match std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(path)
+            {
+                Ok(f) => Ok((f, true)),
+                Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+                    Ok((std::fs::File::open(path)?, false))
+                }
+                Err(e) => Err(e),
+            },
         }
     }
 
@@ -108,8 +122,8 @@ impl Sync {
         Ok(())
     }
 
-    fn load_chunked(path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
-        let (file, direct) = Self::open_prefer_direct(path)?;
+    fn load_chunked(&self, path: &Path, chunks: usize) -> IoResult<OwnedBytes> {
+        let (file, direct) = self.open_read(path)?;
         let file_size = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         let raw_chunk = file_size.div_ceil(chunks).max(1);
@@ -160,7 +174,7 @@ impl Sync {
 
                     let start_off = start as u64;
                     handles.push(s.spawn(move || -> IoResult<()> {
-                        let (mut f, _) = Self::open_prefer_direct(path_ref)?;
+                        let (mut f, _) = self.open_read(path_ref)?;
                         f.seek(SeekFrom::Start(start_off))?;
                         Self::read_direct(&mut f, chunk_slice, actual_len)
                     }));
@@ -176,7 +190,7 @@ impl Sync {
             final_buf.set_len(file_size);
             Ok(OwnedBytes::Aligned(final_buf))
         } else {
-            let mut final_buf = get_buffer_pool().get(file_size);
+            let mut buf = self.options.allocator.alloc(file_size);
 
             let task_meta: Vec<(usize, usize)> = (0..chunks)
                 .filter_map(|i| {
@@ -192,8 +206,9 @@ impl Sync {
                 .collect();
 
             let path_ref: &Path = path;
+            let buf_slice = buf.as_mut_slice().unwrap();
             std::thread::scope(|s| -> IoResult<()> {
-                let mut rest: &mut [u8] = final_buf.as_mut_slice();
+                let mut rest: &mut [u8] = buf_slice;
                 let mut consumed = 0usize;
                 let mut handles = Vec::with_capacity(task_meta.len());
 
@@ -218,63 +233,33 @@ impl Sync {
                 Ok(())
             })?;
 
-            final_buf.truncate(file_size);
-            Ok(OwnedBytes::Pooled(final_buf))
+            Ok(buf)
         }
-    }
-
-    // -- Write helpers -------------------------------------------------------
-
-    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-    }
-
-    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new().write(true).open(path)
-    }
-
-    fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        let mut written = 0usize;
-        while written < data.len() {
-            let n = file.write_at(&data[written..], offset + written as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "write_at returned zero bytes",
-                ));
-            }
-            written += n;
-        }
-        Ok(())
     }
 }
 
-impl super::super::Io for Sync {
-    const KIND: IoKind = IoKind::Sync;
+impl super::super::Io for SyncIo {
+    const KIND: BackendKind = BackendKind::Sync;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        IoAvailability::Available
+        Availability::Available
     }
 }
 
-impl super::super::BlockingIo for Sync {
+impl super::super::BlockingIo for SyncIo {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let (mut file, direct) = Self::open_prefer_direct(path)?;
+        let (mut file, direct) = self.open_read(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         if len > MAX_SINGLE_READ {
             let chunks = (len / (128 * 1024 * 1024)).clamp(1, 8);
-            return Self::load_chunked(path, chunks);
+            return self.load_chunked(path, chunks);
         }
         if direct {
             let aligned_len = Self::round_up_to_block(len);
@@ -284,20 +269,20 @@ impl super::super::BlockingIo for Sync {
             buf.set_len(len);
             Ok(OwnedBytes::Aligned(buf))
         } else {
-            let mut buf = get_buffer_pool().get(len);
-            file.read_exact(&mut buf[..])?;
-            Ok(OwnedBytes::Pooled(buf))
+            let mut buf = self.options.allocator.alloc(len);
+            file.read_exact(buf.as_mut_slice().unwrap())?;
+            Ok(buf)
         }
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         let len = range.len_usize()?;
         let offset = range.start();
 
-        let (mut file, direct) = Self::open_prefer_direct(path)?;
+        let (mut file, direct) = self.open_read(path)?;
 
         if direct {
             let head_skip =
@@ -313,12 +298,12 @@ impl super::super::BlockingIo for Sync {
                 return Ok(OwnedBytes::Aligned(buf));
             }
             let slice = &buf.as_slice()[head_skip..head_skip + len];
-            Ok(OwnedBytes::Shared(Arc::from(slice)))
+            Ok(OwnedBytes::Vec(slice.to_vec()))
         } else {
             file.seek(SeekFrom::Start(offset))?;
-            let mut buf = get_buffer_pool().get(len);
-            file.read_exact(&mut buf[..])?;
-            Ok(OwnedBytes::Pooled(buf))
+            let mut buf = self.options.allocator.alloc(len);
+            file.read_exact(buf.as_mut_slice().unwrap())?;
+            Ok(buf)
         }
     }
 
@@ -329,7 +314,7 @@ impl super::super::BlockingIo for Sync {
                 .par_iter()
                 .enumerate()
                 .map(|(i, entry)| {
-                    let bytes = self.read_range(entry.path, entry.range)?.into_shared();
+                    let bytes = self.read_range(entry.path, entry.range)?;
                     Ok(RangeRead {
                         request_index: RequestIndex::new(i),
                         range: entry.range,
@@ -340,7 +325,11 @@ impl super::super::BlockingIo for Sync {
         })
     }
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
-        let mut file = Self::open_create_truncate(path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(data)
     }
 
@@ -350,7 +339,11 @@ impl super::super::BlockingIo for Sync {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        let file = Self::open_create_truncate(path)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.set_len(len)?;
         if writes.is_empty() {
             return Ok(());
@@ -360,26 +353,26 @@ impl super::super::BlockingIo for Sync {
             writes
                 .as_slice()
                 .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let file = Self::open_write_existing(path)?;
-        Self::write_all_at_file(&file, offset, data)
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
+        file.write_all_at(data, offset)
     }
 
     fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
         if writes.is_empty() {
             return Ok(());
         }
-        let file = Self::open_write_existing(path)?;
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
         use rayon::prelude::*;
         self.in_pool(|| {
             writes
                 .as_slice()
                 .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+                .try_for_each(|w| file.write_all_at(w.data, w.offset))
         })
     }
 
@@ -420,7 +413,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -429,7 +422,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert!(result.is_empty());
     }
 
@@ -439,7 +432,7 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(10, 20).unwrap())
             .unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
@@ -450,7 +443,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(0, 0).unwrap())
             .unwrap();
         assert!(result.is_empty());
@@ -458,7 +451,7 @@ mod tests {
 
     #[test]
     fn read_ranges_empty() {
-        let results = Sync::new().read_ranges(&[]).unwrap();
+        let results = SyncIo::new().read_ranges(&[]).unwrap();
         assert!(results.is_empty());
     }
 
@@ -472,7 +465,7 @@ mod tests {
             &path,
             ByteRange::from_offset_len(50, 30).unwrap(),
         )];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].data(), &data[50..80]);
@@ -489,7 +482,7 @@ mod tests {
             FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
             FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
         ];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
@@ -499,12 +492,12 @@ mod tests {
 
     #[test]
     fn kind_is_sync() {
-        assert_eq!(Sync::new().kind(), IoKind::Sync);
+        assert_eq!(SyncIo::new().kind(), BackendKind::Sync);
     }
 
     #[test]
     fn availability_is_available() {
-        assert!(Sync::availability().is_available());
+        assert!(SyncIo::availability().is_available());
     }
 
     #[test]
@@ -512,9 +505,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello linux sync";
-        Sync::new().write_file(&path, data).unwrap();
-        Sync::new().sync_all(&path).unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, data).unwrap();
+        SyncIo::new().sync_all(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
     }
 
@@ -522,8 +515,8 @@ mod tests {
     fn write_file_truncates_existing() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "trunc.bin", b"old content here");
-        Sync::new().write_file(&path, b"new").unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, b"new").unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"new");
     }
 
@@ -532,9 +525,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut data = b"AAABBBCCC".to_vec();
         let path = write_tmp(&dir, "patch.bin", &data);
-        Sync::new().write_at(&path, 3, b"XXX").unwrap();
+        SyncIo::new().write_at(&path, 3, b"XXX").unwrap();
         data[3..6].copy_from_slice(b"XXX");
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data);
     }
 
@@ -543,10 +536,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 15, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.len(), 15);
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[10..15], b"WORLD");
@@ -557,10 +550,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
@@ -569,10 +562,10 @@ mod tests {
     fn write_slices_empty_batch_is_noop() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&[]).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
     }
 
@@ -594,11 +587,55 @@ mod tests {
     fn write_positioned_file_empty_batch_creates_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty_pos.bin");
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap())
             .unwrap();
         // file is created and set to len even with no writes
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!(meta.len(), 16);
+    }
+
+    #[test]
+    fn direct_io_disabled_reads_correctly() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(8192).collect();
+        let path = write_tmp(&dir, "disabled.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Disabled,
+            ..Default::default()
+        };
+        let backend = SyncIo::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
+    }
+
+    #[test]
+    fn direct_io_disabled_read_range() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..200).collect();
+        let path = write_tmp(&dir, "range_disabled.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Disabled,
+            ..Default::default()
+        };
+        let backend = SyncIo::with_options(opts).unwrap();
+        let result = backend
+            .read_range(&path, ByteRange::from_offset_len(10, 50).unwrap())
+            .unwrap();
+        assert_eq!(result.as_ref(), &data[10..60]);
+    }
+
+    #[test]
+    fn direct_io_auto_reads_correctly() {
+        let dir = TempDir::new().unwrap();
+        let data: Vec<u8> = (0u8..=255).cycle().take(8192).collect();
+        let path = write_tmp(&dir, "auto.bin", &data);
+        let opts = super::super::SyncOptions {
+            direct_io: super::DirectIo::Auto,
+            ..Default::default()
+        };
+        let backend = SyncIo::with_options(opts).unwrap();
+        let result = backend.read_file(&path).unwrap();
+        assert_eq!(result.as_ref(), &data[..]);
     }
 }

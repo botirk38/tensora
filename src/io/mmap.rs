@@ -10,7 +10,7 @@
 
 use crate::io::{
     ByteRange, IoResult,
-    availability::{IoAvailability, IoKind},
+    availability::{Availability, BackendKind, Capabilities},
     buffer::MmapRegion,
 };
 use memmap2::MmapOptions as MemmapOptions;
@@ -38,34 +38,15 @@ use std::sync::Arc;
 /// let region = engine.map_file(Path::new("model.bin"))?;
 /// let data: &[u8] = region.as_slice();
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct MmapOptions;
-
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Mmap {
-    options: MmapOptions,
-}
+pub struct Mmap;
 
 impl Mmap {
     /// Create a new `Mmap` backend.
     #[inline]
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            options: MmapOptions,
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    pub const fn with_options(options: MmapOptions) -> Self {
-        Self { options }
-    }
-
-    #[inline]
-    #[must_use]
-    pub const fn options(&self) -> &MmapOptions {
-        &self.options
+        Self
     }
 }
 
@@ -74,22 +55,13 @@ impl Mmap {
 // ============================================================================
 
 impl super::Io for Mmap {
-    const KIND: IoKind = IoKind::Mmap;
+    const KIND: BackendKind = BackendKind::Mmap;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        // mmap is available whenever the OS returns a non-zero page size.
-        use crate::io::availability::UnavailableReason;
-        let page_size = region::page::size();
-        if page_size == 0 {
-            return IoAvailability::unavailable(
-                UnavailableReason::MissingDependency,
-                "region returned a zero page size",
-            );
-        }
-        IoAvailability::Available
+        Capabilities::cached().mmap.clone()
     }
 }
 
@@ -192,7 +164,7 @@ mod tests {
 
     #[test]
     fn kind_is_mmap() {
-        assert_eq!(Mmap::new().kind(), IoKind::Mmap);
+        assert_eq!(Mmap::new().kind(), BackendKind::Mmap);
     }
 
     #[test]
