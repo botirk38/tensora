@@ -25,7 +25,7 @@ pub use formats::safetensors::TensorEntry as SafeTensorsTensorEntry;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
-    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel, PartitionSizing,
+    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel,
     Tensor as ServerlessLLMTensor, TensorEntry as ServerlessLLMTensorEntry,
 };
 

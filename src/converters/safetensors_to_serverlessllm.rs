@@ -31,8 +31,6 @@ use std::path::{Path, PathBuf};
 /// Storage engine preference for conversion operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionEnginePreference {
-    /// Let the library choose based on workload characteristics.
-    Adaptive,
     /// Use synchronous I/O.
     Sync,
     /// Use Tokio async I/O.
@@ -73,7 +71,7 @@ impl SafeTensorsToServerlessLLM {
             input_dir: input_dir.into(),
             output_dir: output_dir.into(),
             partition_count: count,
-            engine_preference: ConversionEnginePreference::Adaptive,
+            engine_preference: ConversionEnginePreference::Sync,
         })
     }
 
@@ -137,7 +135,6 @@ impl SafeTensorsToServerlessLLM {
     /// Execute conversion with the configured settings.
     pub fn convert_sync(&self) -> SaveResult<()> {
         let plan = self.plan()?;
-        // The sync path doesn't use engine selection - it always uses parallel sync I/O
         plan.materialize_sync(&self.output_dir)
     }
 
@@ -145,79 +142,12 @@ impl SafeTensorsToServerlessLLM {
     pub async fn convert_async(&self) -> SaveResult<()> {
         let plan = self.plan_async().await?;
         let engine = match self.engine_preference {
-            ConversionEnginePreference::Adaptive => plan.stats.choose_engine(),
             ConversionEnginePreference::Sync => ConversionEngine::Sync,
             ConversionEnginePreference::Tokio => ConversionEngine::TokioAsync,
             #[cfg(target_os = "linux")]
             ConversionEnginePreference::IoUring => ConversionEngine::IoUring,
         };
         plan.materialize(&self.output_dir, engine).await
-    }
-
-    /// Convert using adaptive storage-engine choice.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await"
-    )]
-    #[inline]
-    pub async fn convert(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .convert_async()
-            .await
-    }
-
-    /// Convert using synchronous I/O.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()"
-    )]
-    #[inline]
-    pub fn convert_static(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::Sync)
-            .convert_sync()
-    }
-
-    /// Convert using Tokio async I/O.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await"
-    )]
-    #[inline]
-    pub async fn convert_static_async(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::Tokio)
-            .convert_async()
-            .await
-    }
-
-    /// Convert using Linux io_uring I/O.
-    #[cfg(target_os = "linux")]
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()"
-    )]
-    #[inline]
-    pub fn convert_static_io_uring(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::IoUring)
-            .convert_sync()
     }
 }
 
@@ -271,7 +201,7 @@ pub struct CopyOp {
     pub size: usize,
 }
 
-/// Statistics about the conversion plan, used for storage-engine selection.
+/// Statistics about the conversion plan.
 #[derive(Debug, Clone)]
 pub struct ConversionStats {
     pub total_bytes: u64,
@@ -289,35 +219,12 @@ pub struct ConversionStats {
     pub max_copy_size: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Storage-engine selection
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConversionEngine {
     Sync,
     TokioAsync,
     #[cfg(target_os = "linux")]
     IoUring,
-}
-
-const LARGE_CONVERSION_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
-
-impl ConversionStats {
-    fn choose_engine(&self) -> ConversionEngine {
-        if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
-            #[cfg(target_os = "linux")]
-            {
-                ConversionEngine::IoUring
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                ConversionEngine::TokioAsync
-            }
-        } else {
-            ConversionEngine::Sync
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1033,66 +940,6 @@ mod tests {
         });
 
         assert!(out.join("tensor_index.json").exists());
-    }
-
-    #[test]
-    fn engine_selection_small_single_partition() {
-        let stats = ConversionStats {
-            total_bytes: 1024,
-            source_file_count: 1,
-            partition_count: 1,
-            tensor_count: 1,
-            max_source_file_bytes: 1024,
-            mean_source_file_bytes: 1024,
-            max_partition_bytes: 1024,
-            mean_partition_bytes: 1024,
-            mean_source_files_per_partition: 1.0,
-            max_source_files_per_partition: 1,
-            copy_op_count: 1,
-            mean_copy_size: 1024.0,
-            max_copy_size: 1024,
-        };
-        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
-    }
-
-    #[test]
-    fn engine_selection_large_multi() {
-        let stats = ConversionStats {
-            total_bytes: 16 * 1024 * 1024 * 1024,
-            source_file_count: 8,
-            partition_count: 32,
-            tensor_count: 500,
-            max_source_file_bytes: 2 * 1024 * 1024 * 1024,
-            mean_source_file_bytes: 2 * 1024 * 1024 * 1024,
-            max_partition_bytes: 512 * 1024 * 1024,
-            mean_partition_bytes: 512 * 1024 * 1024,
-            mean_source_files_per_partition: 2.0,
-            max_source_files_per_partition: 4,
-            copy_op_count: 500,
-            mean_copy_size: 32.0 * 1024.0 * 1024.0,
-            max_copy_size: 64 * 1024 * 1024,
-        };
-        assert_ne!(stats.choose_engine(), ConversionEngine::Sync);
-    }
-
-    #[test]
-    fn choose_sync_for_small_conversion() {
-        let stats = ConversionStats {
-            total_bytes: 1024 * 1024,
-            source_file_count: 2,
-            partition_count: 4,
-            tensor_count: 10,
-            max_source_file_bytes: 512 * 1024,
-            mean_source_file_bytes: 512 * 1024,
-            max_partition_bytes: 256 * 1024,
-            mean_partition_bytes: 256 * 1024,
-            mean_source_files_per_partition: 1.0,
-            max_source_files_per_partition: 2,
-            copy_op_count: 10,
-            mean_copy_size: 100_000.0,
-            max_copy_size: 200_000,
-        };
-        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
     }
 
     #[test]

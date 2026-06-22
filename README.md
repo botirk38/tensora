@@ -1,8 +1,8 @@
 # Tensora
 
-**Adaptive checkpoint loading for large language models.**
+**Checkpoint loading for large language models.**
 
-Tensora is an open-source framework that applies workload-aware heuristics to select optimal I/O strategies for loading LLM checkpoints. It supports SafeTensors and ServerlessLLM storage layouts with pluggable I/O backends (synchronous POSIX, Tokio async, Linux `io_uring`, memory-mapped) and automatically picks the fastest path based on checkpoint size, shard structure, and platform capabilities.
+Tensora is an open-source framework for loading LLM checkpoints. It supports SafeTensors and ServerlessLLM storage layouts with caller-selected I/O backends: synchronous POSIX, Tokio async, Linux `io_uring`, and memory-mapped lazy access.
 
 > **Paper:** *Load by Design: Adaptive Heuristics for LLM Checkpoint Loading*
 > — Botir Khaltaev (2026). Sources in [`paper/`](paper/).
@@ -18,7 +18,7 @@ Tensora is an open-source framework that applies workload-aware heuristics to se
 | Range-heavy ServerlessLLM | `async` | Tokio grouped per-file tasks |
 | Large partitioned ServerlessLLM | `io_uring` | Batched submission with coalescing |
 
-The adaptive `default` I/O backend reproduces these crossovers automatically.
+Use explicit backend flags to reproduce and compare these regimes.
 
 ---
 

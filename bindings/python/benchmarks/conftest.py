@@ -66,7 +66,7 @@ def safetensors_path(model_descriptor):
 def serverlessllm_dir(model_id, cache_dir):
     """Path to a ServerlessLLM artifact for the model.
 
-    Uses the shared size-based heuristic for partition count and supports multi-shard models.
+    Uses the benchmark's explicit partition count and supports multi-shard models.
     """
     from benchmarks.hub_model import get_or_build_serverlessllm
 

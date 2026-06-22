@@ -1,6 +1,6 @@
 # ServerlessLLM Format
 
-Partitioned tensor loading for range-oriented access patterns with adaptive storage-engine selection.
+Partitioned tensor loading for range-oriented access patterns with explicit storage-engine selection.
 
 ## Files
 
@@ -10,7 +10,6 @@ Partitioned tensor loading for range-oriented access patterns with adaptive stor
 | `model.rs` | Model loading (sync, async, io_uring, mmap) |
 | `index.rs` | Partition index (`metadata.json`) parsing |
 | `serializer.rs` | ServerlessLLM serialization |
-| `helpers.rs` | Partition count heuristics |
 | `tensor.rs` | Tensor view types and `TensorMmap` |
 
 ## Layout
@@ -35,11 +34,12 @@ for name in model.tensor_names() {
 }
 ```
 
-## Storage-Engine Selection
+## Storage Engines
 
-- Range-heavy workloads → `async`
-- Large partitioned workloads → `io_uring`
-- Non-Linux → `async`
+- `sync` uses blocking positioned I/O.
+- `async` uses Tokio range reads.
+- `io_uring` is Linux-only.
+- `mmap` provides lazy tensor access through `MmapModel`.
 
 ## Testing
 

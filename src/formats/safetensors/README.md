@@ -1,6 +1,6 @@
 # SafeTensors Format
 
-Whole-file and multi-shard eager loading for HuggingFace SafeTensors checkpoints with adaptive storage-engine selection.
+Whole-file and multi-shard eager loading for HuggingFace SafeTensors checkpoints with explicit storage-engine selection.
 
 ## Files
 
@@ -15,7 +15,7 @@ Whole-file and multi-shard eager loading for HuggingFace SafeTensors checkpoints
 ```rust
 use tensora::safetensors::{MmapModel, Model};
 
-// Adaptive loading (picks best I/O backend automatically)
+// Default loading path
 let model = Model::load("model_dir").await?;
 
 // Explicit I/O backend
@@ -25,11 +25,12 @@ let model = Model::load_io_uring("model_dir")?;  // Linux only
 let model = MmapModel::open("model_dir")?;
 ```
 
-## Storage-Engine Selection
+## Storage Engines
 
-- Single-shard or small multi-shard → `sync`
-- Large multi-shard (≥ 4 GB) → `io_uring`
-- Non-Linux → `sync` or `async`
+- `sync` uses blocking positioned I/O.
+- `async` uses Tokio tasks.
+- `io_uring` is Linux-only.
+- `mmap` provides lazy tensor access through `MmapModel`.
 
 ## Testing
 
