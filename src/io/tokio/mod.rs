@@ -8,7 +8,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ::tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use futures::StreamExt;
 
 use crate::io::{
@@ -126,16 +125,22 @@ fn write_at_positioned(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResu
 
 impl AsyncIo for Tokio {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let meta = ::tokio::fs::metadata(path).await?;
-        let len = usize::try_from(meta.len())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large"))?;
-        if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
-        }
-        let mut buf = get_buffer_pool().get(len);
-        let mut file = ::tokio::fs::File::open(path).await?;
-        file.read_exact(&mut buf[..len]).await?;
-        Ok(OwnedBytes::Pooled(buf))
+        let path = path.to_path_buf();
+        ::tokio::task::spawn_blocking(move || {
+            let meta = std::fs::metadata(&path)?;
+            let len = usize::try_from(meta.len()).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large")
+            })?;
+            if len == 0 {
+                return Ok(OwnedBytes::Shared(Arc::new([])));
+            }
+            let file = std::fs::File::open(&path)?;
+            let mut buf = get_buffer_pool().get(len);
+            read_at_positioned(&file, 0, &mut buf[..len])?;
+            Ok(OwnedBytes::Pooled(buf))
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
@@ -202,70 +207,71 @@ impl AsyncIo for Tokio {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        let file = ::tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .await?;
-        file.set_len(len).await?;
-        if writes.is_empty() {
-            return Ok(());
-        }
-        let std_file = file.into_std().await;
         let slices = writes.as_slice();
         ::tokio::task::block_in_place(|| {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)?;
+            file.set_len(len)?;
+            if slices.is_empty() {
+                return Ok(());
+            }
             use rayon::prelude::*;
             slices
                 .par_iter()
-                .try_for_each(|w| write_at_positioned(&std_file, w.offset, w.data))
+                .try_for_each(|w| write_at_positioned(&file, w.offset, w.data))
         })
     }
 
     async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let mut file = ::tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .await?;
-        file.seek(std::io::SeekFrom::Start(offset)).await?;
-        file.write_all(data).await
+        let path = path.to_path_buf();
+        let data = data.to_vec();
+        ::tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new().write(true).open(&path)?;
+            write_at_positioned(&file, offset, &data)
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     async fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
         if writes.is_empty() {
             return Ok(());
         }
-        let std_file = ::tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .await?
-            .into_std()
-            .await;
         let slices = writes.as_slice();
         ::tokio::task::block_in_place(|| {
+            let file = std::fs::OpenOptions::new().write(true).open(path)?;
             use rayon::prelude::*;
             slices
                 .par_iter()
-                .try_for_each(|w| write_at_positioned(&std_file, w.offset, w.data))
+                .try_for_each(|w| write_at_positioned(&file, w.offset, w.data))
         })
     }
 
     async fn sync_data(&self, path: &Path) -> IoResult<()> {
-        ::tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .await?
-            .sync_data()
-            .await
+        let path = path.to_path_buf();
+        ::tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)?
+                .sync_data()
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     async fn sync_all(&self, path: &Path) -> IoResult<()> {
-        ::tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .await?
-            .sync_all()
-            .await
+        let path = path.to_path_buf();
+        ::tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)?
+                .sync_all()
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 }
 

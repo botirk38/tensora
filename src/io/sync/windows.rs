@@ -69,18 +69,6 @@ impl Sync {
         }
     }
 
-    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-    }
-
-    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new().write(true).open(path)
-    }
-
     fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
         use std::os::windows::fs::FileExt;
         let mut written = 0usize;
@@ -174,7 +162,11 @@ impl super::super::BlockingIo for Sync {
         })
     }
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
-        let mut file = Self::open_create_truncate(path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(data)
     }
 
@@ -184,7 +176,11 @@ impl super::super::BlockingIo for Sync {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        let file = Self::open_create_truncate(path)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.set_len(len)?;
         if writes.is_empty() {
             return Ok(());
@@ -199,7 +195,7 @@ impl super::super::BlockingIo for Sync {
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let file = Self::open_write_existing(path)?;
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
         Self::write_all_at_file(&file, offset, data)
     }
 
@@ -207,7 +203,7 @@ impl super::super::BlockingIo for Sync {
         if writes.is_empty() {
             return Ok(());
         }
-        let file = Self::open_write_existing(path)?;
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
         use rayon::prelude::*;
         self.in_pool(|| {
             writes

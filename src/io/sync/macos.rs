@@ -69,33 +69,6 @@ impl Sync {
             None => f(),
         }
     }
-
-    fn open_create_truncate(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-    }
-
-    fn open_write_existing(path: &Path) -> IoResult<std::fs::File> {
-        std::fs::OpenOptions::new().write(true).open(path)
-    }
-
-    fn write_all_at_file(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
-        let mut written = 0usize;
-        while written < data.len() {
-            let n = file.write_at(&data[written..], offset + written as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "write_at returned zero bytes",
-                ));
-            }
-            written += n;
-        }
-        Ok(())
-    }
 }
 
 impl super::super::Io for Sync {
@@ -150,7 +123,11 @@ impl super::super::BlockingIo for Sync {
         })
     }
     fn write_file(&self, path: &Path, data: &[u8]) -> IoResult<()> {
-        let mut file = Self::open_create_truncate(path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.write_all(data)
     }
 
@@ -160,36 +137,38 @@ impl super::super::BlockingIo for Sync {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        let file = Self::open_create_truncate(path)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         file.set_len(len)?;
         if writes.is_empty() {
             return Ok(());
         }
         use rayon::prelude::*;
         self.in_pool(|| {
-            writes
-                .as_slice()
-                .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+            writes.as_slice().par_iter().try_for_each(|w| {
+                file.write_all_at(w.data, w.offset)
+            })
         })
     }
 
     fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let file = Self::open_write_existing(path)?;
-        Self::write_all_at_file(&file, offset, data)
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
+        file.write_all_at(data, offset)
     }
 
     fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
         if writes.is_empty() {
             return Ok(());
         }
-        let file = Self::open_write_existing(path)?;
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
         use rayon::prelude::*;
         self.in_pool(|| {
-            writes
-                .as_slice()
-                .par_iter()
-                .try_for_each(|w| Self::write_all_at_file(&file, w.offset, w.data))
+            writes.as_slice().par_iter().try_for_each(|w| {
+                file.write_all_at(w.data, w.offset)
+            })
         })
     }
 
