@@ -20,10 +20,10 @@
 
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::{AsyncBackend, Backend};
-use crate::io::mmap::Mmap;
-use crate::io::sync::SyncIo;
-use crate::io::tokio::Tokio;
-use crate::io::{AsyncIo, BlockingIo, MmapIo};
+use fastio::mmap::Mmap;
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, MmapIo};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -146,7 +146,7 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
             }
             #[cfg(target_os = "linux")]
             Backend::IoUring => {
-                let engine = crate::io::io_uring::IoUring::new();
+                let engine = fastio::io_uring::IoUring::new();
                 for id in index.partition_ids() {
                     let bytes = engine
                         .read_file(&dir.join(id.data_file_stem()))
@@ -267,13 +267,13 @@ mod tests {
     use tempfile::TempDir;
 
     fn entry(
-        offset: u64,
-        size: u64,
+        range: (u64, u64),
         shape: Vec<usize>,
         stride: Vec<usize>,
         dtype: Dtype,
         pid: usize,
     ) -> TensorEntry {
+        let (offset, size) = range;
         let meta = TensorMeta::new(offset, size, shape, stride, dtype).unwrap();
         TensorEntry::new(meta, PartitionId::new(pid))
     }
@@ -290,7 +290,7 @@ mod tests {
         let result = ServerlessLLMCheckpoint::new(
             [(
                 "".to_owned(),
-                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+                entry((0, 4), vec![2, 2], vec![2, 1], Dtype::F32, 0),
             )],
             [vec![1u8, 2, 3, 4]],
         );
@@ -302,7 +302,7 @@ mod tests {
         let result = ServerlessLLMCheckpoint::new(
             [(
                 "w".to_owned(),
-                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 5),
+                entry((0, 4), vec![2, 2], vec![2, 1], Dtype::F32, 5),
             )],
             [vec![1u8, 2, 3, 4]], // only partition 0 provided
         );
@@ -315,7 +315,7 @@ mod tests {
         let cp = ServerlessLLMCheckpoint::new(
             [(
                 "test".to_owned(),
-                entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+                entry((0, 4), vec![2, 2], vec![2, 1], Dtype::F32, 0),
             )],
             [vec![1u8, 2, 3, 4]],
         )
@@ -339,11 +339,11 @@ mod tests {
             [
                 (
                     "a".to_owned(),
-                    entry(0, 4, vec![2, 2], vec![2, 1], Dtype::F32, 0),
+                    entry((0, 4), vec![2, 2], vec![2, 1], Dtype::F32, 0),
                 ),
                 (
                     "b".to_owned(),
-                    entry(4, 8, vec![2, 4], vec![4, 1], Dtype::F64, 0),
+                    entry((4, 8), vec![2, 4], vec![4, 1], Dtype::F64, 0),
                 ),
             ],
             [vec![0u8; 12]],

@@ -8,7 +8,7 @@ from collections.abc import Generator
 
 import torch
 
-from benchmarks.hub_model import recommended_partition_count
+from benchmarks.hub_model import BENCH_PARTITION_COUNT
 
 
 def _cache_root() -> str:
@@ -48,8 +48,7 @@ def _ensure_serverlessllm_artifact(
     safetensors_files: list[str],
     revision: str | None,
 ) -> str:
-    total_bytes = sum(os.path.getsize(path) for path in safetensors_files)
-    parts = recommended_partition_count(total_bytes)
+    parts = BENCH_PARTITION_COUNT
     shard_names = ":".join(sorted(os.path.basename(path) for path in safetensors_files))
     key_input = f"{hf_folder}:{revision or 'main'}:{parts}:{shard_names}:v3"
     cache_key = hashlib.sha256(key_input.encode()).hexdigest()[:16]

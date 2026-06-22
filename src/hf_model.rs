@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use hf_hub::Repo;
 use hf_hub::api::sync::ApiBuilder;
 
-use crate::PartitionSizing;
 use crate::SaveError;
 
 /// Slug used for cache subdirectories (`org-name` lowercased).
@@ -89,21 +88,9 @@ pub fn ensure_safetensors_hub_dir(model_id: &str) -> Result<PathBuf, HfModelErro
     parent.ok_or_else(|| HfModelError::Msg("no safetensors directory".to_string()))
 }
 
-fn dir_safetensors_total_bytes(dir: &Path) -> Result<u64, HfModelError> {
-    let mut total = 0u64;
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "safetensors") && path.is_file() {
-            total += path.metadata()?.len();
-        }
-    }
-    Ok(total)
-}
-
 /// ServerlessLLM artifact directory for `model_id`, under the OS cache (`tensora/<slug>/serverlessllm`).
 ///
-/// Builds from `safetensors_dir` when `tensor_index.json` is absent (same partition heuristic as `convert`).
+/// Builds from `safetensors_dir` when `tensor_index.json` is absent.
 pub fn ensure_serverlessllm_cache_dir(
     model_id: &str,
     safetensors_dir: &Path,
@@ -116,18 +103,7 @@ pub fn ensure_serverlessllm_cache_dir(
 
     std::fs::create_dir_all(&out)?;
 
-    let total = dir_safetensors_total_bytes(safetensors_dir)?;
-    if total == 0 {
-        return Err(HfModelError::Msg(format!(
-            "no .safetensors files under {}",
-            safetensors_dir.display()
-        )));
-    }
-    let sizing = PartitionSizing::default_target();
-    let partitions = sizing.recommended_count(total);
-
-    let converter =
-        crate::SafeTensorsToServerlessLLM::new(safetensors_dir, &out, partitions.as_usize())?;
+    let converter = crate::SafeTensorsToServerlessLLM::new(safetensors_dir, &out, 1)?;
     converter.convert_sync()?;
 
     Ok(out)

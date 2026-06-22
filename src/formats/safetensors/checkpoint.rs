@@ -20,10 +20,10 @@
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::tensor::Dtype;
 use crate::formats::{AsyncBackend, Backend};
-use crate::io::mmap::Mmap;
-use crate::io::sync::SyncIo;
-use crate::io::tokio::Tokio;
-use crate::io::{AsyncIo, BlockingIo, MmapIo};
+use fastio::mmap::Mmap;
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, MmapIo};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -150,7 +150,7 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
             }
             #[cfg(target_os = "linux")]
             Backend::IoUring => {
-                let engine = crate::io::io_uring::IoUring::new();
+                let engine = fastio::io_uring::IoUring::new();
                 for path in paths {
                     let bytes = engine.read_file(&path).map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);

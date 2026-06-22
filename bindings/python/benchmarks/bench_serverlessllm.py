@@ -1,7 +1,7 @@
 """ServerlessLLM benchmarks: all backends, access patterns, mmap page-touch.
 
 Benchmarks tensora ServerlessLLM loading with each backend variant, plus
-the lazy open/get_tensor path. Partition count uses the shared size-based heuristic.
+the lazy open/get_tensor path. The conversion fixture uses an explicit partition count.
 """
 
 import platform
@@ -20,7 +20,7 @@ from tensora._tensora_rust import (
 
 
 def test_load_default(benchmark, serverlessllm_dir):
-    """load_serverlessllm with default (adaptive) backend."""
+    """load_serverlessllm with the default backend."""
 
     def run():
         result = load_serverlessllm(serverlessllm_dir)

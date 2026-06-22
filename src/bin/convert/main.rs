@@ -1,41 +1,6 @@
 use std::path::Path;
 use std::process;
 
-fn default_partition_count(input_dir: &str) -> usize {
-    let mut total = 0u64;
-    let entries = std::fs::read_dir(input_dir).unwrap_or_else(|e| {
-        eprintln!("Error reading directory {input_dir}: {e}");
-        process::exit(1);
-    });
-    for entry in entries {
-        let path = entry
-            .unwrap_or_else(|e| {
-                eprintln!("Error reading directory entry in {input_dir}: {e}");
-                process::exit(1);
-            })
-            .path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".safetensors"))
-        {
-            total += path
-                .metadata()
-                .unwrap_or_else(|e| {
-                    eprintln!("Error reading metadata for {}: {e}", path.display());
-                    process::exit(1);
-                })
-                .len();
-        }
-    }
-    if total == 0 {
-        eprintln!("Error: no .safetensors files found in {input_dir}");
-        process::exit(1);
-    }
-    let sizing = tensora::PartitionSizing::default_target();
-    sizing.recommended_count(total).as_usize()
-}
-
 #[derive(clap::Parser, Debug)]
 #[command(
     name = "convert",
@@ -48,18 +13,17 @@ struct Args {
     /// Output directory for ServerlessLLM format
     output_dir: String,
 
-    /// Number of partitions (default: auto from model size)
+    /// Number of partitions
     #[arg(short, long)]
-    partitions: Option<usize>,
+    partitions: usize,
 
-    /// I/O backend to use for conversion (default: adaptive)
-    #[arg(short, long, default_value = "default")]
+    /// I/O backend to use for conversion
+    #[arg(short, long, default_value = "sync")]
     engine: Engine,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum Engine {
-    Default,
     Sync,
     Tokio,
     #[cfg(target_os = "linux")]
@@ -70,9 +34,7 @@ fn main() {
     use clap::Parser;
     let args = Args::parse();
 
-    let partition_count = args
-        .partitions
-        .unwrap_or_else(|| default_partition_count(&args.input_dir));
+    let partition_count = args.partitions;
 
     if partition_count == 0 {
         eprintln!("Error: partition_count must be greater than 0");
@@ -97,7 +59,6 @@ fn main() {
     });
 
     let engine_preference = match args.engine {
-        Engine::Default => tensora::ConversionEnginePreference::Adaptive,
         Engine::Sync => tensora::ConversionEnginePreference::Sync,
         Engine::Tokio => tensora::ConversionEnginePreference::Tokio,
         #[cfg(target_os = "linux")]
@@ -157,7 +118,6 @@ mod tests {
             .collect::<Vec<_>>();
         names.sort();
 
-        assert!(names.contains(&"default".to_string()));
         assert!(names.contains(&"sync".to_string()));
         assert!(names.contains(&"tokio".to_string()));
     }

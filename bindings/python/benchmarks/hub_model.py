@@ -9,21 +9,7 @@ import torch
 from tensora._tensora_rust import convert_safetensors_to_serverlessllm
 
 
-_RECOMMENDED_PARTITION_TARGET_BYTES = 512 * 1024 * 1024
-
-
-def recommended_partition_count(total_bytes: int) -> int:
-    """Default ServerlessLLM partition count: ``max(1, ceil(total_bytes / 512 MiB))``.
-
-    This matches ``tensora::formats::serverlessllm::recommended_partition_count`` in Rust.
-    """
-    if total_bytes <= 0:
-        return 1
-    return max(
-        1,
-        (total_bytes + _RECOMMENDED_PARTITION_TARGET_BYTES - 1)
-        // _RECOMMENDED_PARTITION_TARGET_BYTES,
-    )
+BENCH_PARTITION_COUNT = 1
 
 
 def _cache_root() -> Path:
@@ -102,18 +88,17 @@ def get_model_descriptor(model_name: str, cache_dir: Path) -> ModelDescriptor:
     """Get full metadata for a real model.
 
     Returns a ModelDescriptor with file list, shard count, total size, and
-    recommended partition count based on the size heuristic.
+    the explicit partition count used by the benchmark conversion step.
     """
     files = get_model_safetensors(model_name, cache_dir)
     total_bytes = sum(f.stat().st_size for f in files)
-    parts = recommended_partition_count(total_bytes)
 
     return ModelDescriptor(
         model_id=model_name,
         safetensors_files=files,
         shard_count=len(files),
         total_bytes=total_bytes,
-        partition_count=parts,
+        partition_count=BENCH_PARTITION_COUNT,
     )
 
 
@@ -142,14 +127,13 @@ def ensure_serverlessllm_artifact(
     else:
         cache_dir = Path(cache_dir) / "serverlessllm"
 
-    total_bytes = sum(f.stat().st_size for f in safetensors_files)
-    partition_count_override = recommended_partition_count(total_bytes)
+    partition_count = BENCH_PARTITION_COUNT
 
     source_dir = safetensors_files[0].parent
     shard_names = ":".join(f.name for f in sorted(safetensors_files))
     revision_str = revision or "main"
 
-    key_input = f"{source_dir.resolve()}:{revision_str}:{partition_count_override}:{shard_names}:v3"
+    key_input = f"{source_dir.resolve()}:{revision_str}:{partition_count}:{shard_names}:v3"
     cache_key = hashlib.sha256(key_input.encode()).hexdigest()[:16]
     out_dir = cache_dir / repo_dir_name(model_name) / cache_key
 
@@ -161,13 +145,13 @@ def ensure_serverlessllm_artifact(
 
     print(
         f"Converting {model_name} to ServerlessLLM "
-        f"(partition_count={partition_count_override})..."
+        f"(partition_count={partition_count})..."
     )
 
     convert_safetensors_to_serverlessllm(
         str(source_dir),
         str(out_dir),
-        partition_count_override,
+        partition_count,
     )
 
     return out_dir

@@ -12,7 +12,7 @@ Parse and serialize checkpoint formats. Each format module provides a `Model` ty
 
 ## Conventions
 
-- Storage-engine selection heuristics live in each format's `model.rs`
+- Storage-engine selection is explicit; do not infer it from workload size
 - Error types are unified in `error.rs` (`LoadError`, `SaveError`)
 - Multi-shard discovery is automatic (glob for shard patterns)
 - `MmapModel` variants provide lazy loading without full materialization
@@ -26,5 +26,5 @@ Parse and serialize checkpoint formats. Each format module provides a `Model` ty
 
 ## Do NOT
 
-- Put I/O strategy logic in serializers (that belongs in `model.rs`)
+- Put I/O strategy logic in serializers
 - Return raw bytes without a `TensorView` wrapper

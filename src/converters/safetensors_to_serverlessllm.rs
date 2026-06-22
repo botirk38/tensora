@@ -15,11 +15,9 @@ use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
-#[cfg(target_os = "linux")]
-use crate::io::availability::{BackendKind, Capabilities};
-use crate::io::sync::SyncIo;
-use crate::io::tokio::Tokio;
-use crate::io::{AsyncIo, BlockingIo, ByteRange, WriteSlices};
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, ByteRange, WriteSlice, WriteSlices};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -33,8 +31,6 @@ use std::path::{Path, PathBuf};
 /// Storage engine preference for conversion operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionEnginePreference {
-    /// Let the library choose based on workload characteristics.
-    Adaptive,
     /// Use synchronous I/O.
     Sync,
     /// Use Tokio async I/O.
@@ -75,7 +71,7 @@ impl SafeTensorsToServerlessLLM {
             input_dir: input_dir.into(),
             output_dir: output_dir.into(),
             partition_count: count,
-            engine_preference: ConversionEnginePreference::Adaptive,
+            engine_preference: ConversionEnginePreference::Sync,
         })
     }
 
@@ -139,7 +135,6 @@ impl SafeTensorsToServerlessLLM {
     /// Execute conversion with the configured settings.
     pub fn convert_sync(&self) -> SaveResult<()> {
         let plan = self.plan()?;
-        // The sync path doesn't use engine selection - it always uses parallel sync I/O
         plan.materialize_sync(&self.output_dir)
     }
 
@@ -147,79 +142,12 @@ impl SafeTensorsToServerlessLLM {
     pub async fn convert_async(&self) -> SaveResult<()> {
         let plan = self.plan_async().await?;
         let engine = match self.engine_preference {
-            ConversionEnginePreference::Adaptive => plan.stats.choose_engine(),
             ConversionEnginePreference::Sync => ConversionEngine::Sync,
             ConversionEnginePreference::Tokio => ConversionEngine::TokioAsync,
             #[cfg(target_os = "linux")]
             ConversionEnginePreference::IoUring => ConversionEngine::IoUring,
         };
         plan.materialize(&self.output_dir, engine).await
-    }
-
-    /// Convert using adaptive storage-engine choice.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.convert_async().await"
-    )]
-    #[inline]
-    pub async fn convert(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .convert_async()
-            .await
-    }
-
-    /// Convert using synchronous I/O.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Sync).convert_sync()"
-    )]
-    #[inline]
-    pub fn convert_static(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::Sync)
-            .convert_sync()
-    }
-
-    /// Convert using Tokio async I/O.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::Tokio).convert_async().await"
-    )]
-    #[inline]
-    pub async fn convert_static_async(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::Tokio)
-            .convert_async()
-            .await
-    }
-
-    /// Convert using Linux io_uring I/O.
-    #[cfg(target_os = "linux")]
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use the entity API: SafeTensorsToServerlessLLM::new(input_dir, output_dir, count)?.with_engine(ConversionEnginePreference::IoUring).convert_sync()"
-    )]
-    #[inline]
-    pub fn convert_static_io_uring(
-        input_dir: &str,
-        output_dir: &str,
-        partition_count: usize,
-    ) -> SaveResult<()> {
-        Self::new(input_dir, output_dir, partition_count)?
-            .with_engine(ConversionEnginePreference::IoUring)
-            .convert_sync()
     }
 }
 
@@ -273,7 +201,7 @@ pub struct CopyOp {
     pub size: usize,
 }
 
-/// Statistics about the conversion plan, used for storage-engine selection.
+/// Statistics about the conversion plan.
 #[derive(Debug, Clone)]
 pub struct ConversionStats {
     pub total_bytes: u64,
@@ -291,34 +219,12 @@ pub struct ConversionStats {
     pub max_copy_size: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Storage-engine selection
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConversionEngine {
     Sync,
     TokioAsync,
     #[cfg(target_os = "linux")]
     IoUring,
-}
-
-const LARGE_CONVERSION_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024;
-
-impl ConversionStats {
-    fn choose_engine(&self) -> ConversionEngine {
-        if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
-            #[cfg(target_os = "linux")]
-            {
-                let capabilities = Capabilities::cached();
-                if capabilities.is_available(BackendKind::IoUring) {
-                    return ConversionEngine::IoUring;
-                }
-            }
-            return ConversionEngine::TokioAsync;
-        }
-        ConversionEngine::Sync
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,9 +610,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
+        let write_slices: Vec<WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
@@ -736,9 +642,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
+        let write_slices: Vec<WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
@@ -775,7 +681,7 @@ mod tests {
     fn convert_rejects_zero_partitions() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
+        let err = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 0).unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
@@ -783,7 +689,7 @@ mod tests {
     fn convert_rejects_empty_directory() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let converter = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
@@ -824,7 +730,7 @@ mod tests {
         write_source_file(&src_file2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
-        SafeTensorsToServerlessLLM::new(&src, &out, 4)
+        SafeTensorsToServerlessLLM::new(src, &out, 4)
             .unwrap()
             .convert_sync()
             .expect("convert multi-file");
@@ -853,7 +759,7 @@ mod tests {
         .unwrap();
 
         let out = tmp.path().join("out");
-        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(src, &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
 
         assert!(matches!(err, SaveError::InvalidInput(_)));
@@ -1014,7 +920,7 @@ mod tests {
         let out = tmp.path().join("out_async_zero");
 
         crate::test_utils::run_async(async {
-            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
+            let err = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 0).unwrap_err();
             assert!(matches!(err, SaveError::InvalidInput(_)));
         });
     }
@@ -1037,66 +943,6 @@ mod tests {
     }
 
     #[test]
-    fn engine_selection_small_single_partition() {
-        let stats = ConversionStats {
-            total_bytes: 1024,
-            source_file_count: 1,
-            partition_count: 1,
-            tensor_count: 1,
-            max_source_file_bytes: 1024,
-            mean_source_file_bytes: 1024,
-            max_partition_bytes: 1024,
-            mean_partition_bytes: 1024,
-            mean_source_files_per_partition: 1.0,
-            max_source_files_per_partition: 1,
-            copy_op_count: 1,
-            mean_copy_size: 1024.0,
-            max_copy_size: 1024,
-        };
-        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
-    }
-
-    #[test]
-    fn engine_selection_large_multi() {
-        let stats = ConversionStats {
-            total_bytes: 16 * 1024 * 1024 * 1024,
-            source_file_count: 8,
-            partition_count: 32,
-            tensor_count: 500,
-            max_source_file_bytes: 2 * 1024 * 1024 * 1024,
-            mean_source_file_bytes: 2 * 1024 * 1024 * 1024,
-            max_partition_bytes: 512 * 1024 * 1024,
-            mean_partition_bytes: 512 * 1024 * 1024,
-            mean_source_files_per_partition: 2.0,
-            max_source_files_per_partition: 4,
-            copy_op_count: 500,
-            mean_copy_size: 32.0 * 1024.0 * 1024.0,
-            max_copy_size: 64 * 1024 * 1024,
-        };
-        assert_ne!(stats.choose_engine(), ConversionEngine::Sync);
-    }
-
-    #[test]
-    fn choose_sync_for_small_conversion() {
-        let stats = ConversionStats {
-            total_bytes: 1024 * 1024,
-            source_file_count: 2,
-            partition_count: 4,
-            tensor_count: 10,
-            max_source_file_bytes: 512 * 1024,
-            mean_source_file_bytes: 512 * 1024,
-            max_partition_bytes: 256 * 1024,
-            mean_partition_bytes: 256 * 1024,
-            mean_source_files_per_partition: 1.0,
-            max_source_files_per_partition: 2,
-            copy_op_count: 10,
-            mean_copy_size: 100_000.0,
-            max_copy_size: 200_000,
-        };
-        assert_eq!(stats.choose_engine(), ConversionEngine::Sync);
-    }
-
-    #[test]
     fn convert_duplicate_tensor_name_rejected() {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path();
@@ -1110,7 +956,7 @@ mod tests {
         write_source_file(&src_file2, vec![("same_name", view2)]);
 
         let out = tmp.path().join("out_dup");
-        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(src, &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
@@ -1132,7 +978,7 @@ mod tests {
         write_source_file(&src_file, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
-        SafeTensorsToServerlessLLM::new(&src, &out, 2)
+        SafeTensorsToServerlessLLM::new(src, &out, 2)
             .unwrap()
             .convert_sync()
             .unwrap();

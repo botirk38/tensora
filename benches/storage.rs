@@ -7,15 +7,15 @@
 mod bench_util;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(target_os = "linux")]
+use fastio::io_uring::IoUring;
+use fastio::mmap::Mmap;
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
-#[cfg(target_os = "linux")]
-use tensora::io::io_uring::IoUring;
-use tensora::io::mmap::Mmap;
-use tensora::io::sync::SyncIo;
-use tensora::io::tokio::Tokio;
-use tensora::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo};
 
 // ---------------------------------------------------------------------------
 // Full-file load (single shard)

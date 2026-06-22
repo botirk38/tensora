@@ -1,7 +1,6 @@
 pub mod converters;
 pub mod formats;
 pub mod hf_model;
-pub mod io;
 
 // ============================================================================
 // Convenience re-exports for common types and functions
@@ -26,7 +25,7 @@ pub use formats::safetensors::TensorEntry as SafeTensorsTensorEntry;
 
 // ServerlessLLM types
 pub use formats::serverlessllm::{
-    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel, PartitionSizing,
+    Checkpoint as ServerlessLLMCheckpoint, Index, Model as ServerlessLLMModel,
     Tensor as ServerlessLLMTensor, TensorEntry as ServerlessLLMTensorEntry,
 };
 

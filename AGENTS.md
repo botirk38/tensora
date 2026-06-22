@@ -4,7 +4,7 @@ Guidelines for AI agents working on the Tensora codebase.
 
 ## Project Overview
 
-Tensora is an adaptive checkpoint loading framework for LLMs, written in Rust with Python bindings. It accompanies an academic paper.
+Tensora is a checkpoint loading framework for LLMs, written in Rust with Python bindings. It accompanies an academic paper.
 
 ## Build & Test
 
@@ -29,7 +29,7 @@ cargo clippy --lib --locked -- -D warnings
 1. **I/O backends** handle raw I/O only — no format awareness
 2. **Formats** parse and serialize — no I/O strategy decisions
 3. **Converters** orchestrate full pipelines — use formats + I/O backends together
-4. **Heuristics** live in the format `model.rs` files (storage-engine selection logic)
+4. **I/O strategy** is caller-selected; do not infer it from workload size
 
 ## File Organization
 

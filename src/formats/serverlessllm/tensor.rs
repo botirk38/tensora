@@ -6,7 +6,7 @@
 //! and holding the actual bytes.
 
 use crate::formats::tensor::{Dtype, TensorMeta};
-use crate::io::buffer::MmapRegion;
+use fastio::MmapRegion;
 
 use super::ids::PartitionId;
 

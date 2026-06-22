@@ -6,7 +6,7 @@
 
 use crate::formats::error::{LoadError, LoadResult};
 use crate::formats::tensor::Dtype;
-use crate::io::buffer::{MmapRegion, OwnedBytes};
+use fastio::{MmapRegion, OwnedBytes};
 use safetensors::tensor::Metadata;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -178,7 +178,7 @@ mod tests {
     use super::{FileData, Model as SafeTensorsModel, Tensor as SafeTensorsTensor};
     use crate::formats::tensor::Dtype;
     use crate::formats::traits::{Model, Tensor};
-    use crate::io::buffer::OwnedBytes;
+    use fastio::OwnedBytes;
 
     fn minimal_file_data() -> FileData {
         // Minimal valid SafeTensors: 8-byte LE u64 length + header JSON "{}"

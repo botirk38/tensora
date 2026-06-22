@@ -3,7 +3,7 @@
 //! The model type only provides read-only access to loaded tensors. Loading is
 //! owned by [`Checkpoint`](crate::formats::serverlessllm::Checkpoint).
 
-use crate::io::buffer::MmapRegion;
+use fastio::MmapRegion;
 use std::collections::HashMap;
 use std::sync::Arc;
 

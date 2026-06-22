@@ -1,7 +1,7 @@
 //! ServerlessLLM identity and count types.
 
 use std::fmt;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 /// Identifies a single ServerlessLLM partition file (`tensor.data_<N>`).
 ///
@@ -148,83 +148,6 @@ impl From<PartitionCount> for NonZeroUsize {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PartitionSizing
-// ---------------------------------------------------------------------------
-
-/// Layout sizing policy for ServerlessLLM partitions.
-///
-/// This value object allows configuring the target bytes per partition for
-/// automatic layout decisions.
-#[derive(Debug, Clone, Copy)]
-pub struct PartitionSizing {
-    target_bytes: NonZeroU64,
-}
-
-impl PartitionSizing {
-    /// Default target bytes per partition (512 MiB).
-    pub const DEFAULT_TARGET_BYTES: u64 = 512 * 1024 * 1024;
-
-    /// Returns a sizing policy with the default target (512 MiB).
-    #[must_use]
-    pub fn default_target() -> Self {
-        Self {
-            target_bytes: NonZeroU64::new(Self::DEFAULT_TARGET_BYTES).expect("512 MiB is non-zero"),
-        }
-    }
-
-    /// Create a sizing policy with a custom target bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `None` if `target_bytes` is zero.
-    pub fn with_target_bytes(target_bytes: u64) -> Option<Self> {
-        Some(Self {
-            target_bytes: NonZeroU64::new(target_bytes)?,
-        })
-    }
-
-    /// Returns the target bytes per partition for this sizing policy.
-    #[inline]
-    #[must_use]
-    pub fn target_bytes(&self) -> NonZeroU64 {
-        self.target_bytes
-    }
-
-    /// Returns the target bytes as a `u64`.
-    #[inline]
-    #[must_use]
-    pub fn target_bytes_u64(&self) -> u64 {
-        self.target_bytes.get()
-    }
-
-    /// Recommended partition count for a model of `total_bytes`.
-    ///
-    /// Formula: `max(1, ceil(total_bytes / target_bytes))` with no artificial upper
-    /// bound (beyond `usize`).
-    #[must_use]
-    pub fn recommended_count(&self, total_bytes: u64) -> PartitionCount {
-        if total_bytes == 0 {
-            return PartitionCount::one();
-        }
-        let n = total_bytes.div_ceil(self.target_bytes.get());
-        let n_usize = if n > usize::MAX as u64 {
-            usize::MAX
-        } else {
-            n as usize
-        };
-        PartitionCount::new(n_usize).unwrap_or_else(PartitionCount::one)
-    }
-}
-
-impl Default for PartitionSizing {
-    fn default() -> Self {
-        Self::default_target()
-    }
-}
-
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,93 +215,5 @@ mod tests {
     #[test]
     fn partition_count_display() {
         assert_eq!(PartitionCount::new(8).unwrap().to_string(), "8");
-    }
-
-    // PartitionSizing tests
-    #[test]
-    fn default_target_bytes() {
-        let sizing = PartitionSizing::default_target();
-        assert_eq!(sizing.target_bytes_u64(), 512 * 1024 * 1024);
-    }
-
-    #[test]
-    fn custom_target_bytes() {
-        let sizing = PartitionSizing::with_target_bytes(1024 * 1024).unwrap();
-        assert_eq!(sizing.target_bytes_u64(), 1024 * 1024);
-    }
-
-    #[test]
-    fn zero_target_bytes_is_none() {
-        assert!(PartitionSizing::with_target_bytes(0).is_none());
-    }
-
-    #[test]
-    fn default_is_default_target() {
-        let sizing = PartitionSizing::default();
-        assert_eq!(
-            sizing.target_bytes_u64(),
-            PartitionSizing::DEFAULT_TARGET_BYTES
-        );
-    }
-
-    #[test]
-    fn recommended_partition_count_zero_and_small() {
-        let sizing = PartitionSizing::default_target();
-        assert_eq!(sizing.recommended_count(0).as_usize(), 1);
-        assert_eq!(sizing.recommended_count(1).as_usize(), 1);
-        assert_eq!(
-            sizing
-                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES - 1)
-                .as_usize(),
-            1
-        );
-        assert_eq!(
-            sizing
-                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES)
-                .as_usize(),
-            1
-        );
-    }
-
-    #[test]
-    fn recommended_partition_count_scales_by_target() {
-        let sizing = PartitionSizing::default_target();
-        assert_eq!(
-            sizing
-                .recommended_count(PartitionSizing::DEFAULT_TARGET_BYTES + 1)
-                .as_usize(),
-            2
-        );
-        assert_eq!(
-            sizing
-                .recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES)
-                .as_usize(),
-            2
-        );
-        assert_eq!(
-            sizing
-                .recommended_count(2 * PartitionSizing::DEFAULT_TARGET_BYTES + 1)
-                .as_usize(),
-            3
-        );
-    }
-
-    #[test]
-    fn recommended_partition_count_large() {
-        let sizing = PartitionSizing::default_target();
-        let total = 32 * 1024 * 1024 * 1024u64;
-        let count = sizing.recommended_count(total);
-        assert_eq!(count.as_usize(), 64);
-    }
-
-    #[test]
-    fn custom_target_affects_count() {
-        let sizing = PartitionSizing::with_target_bytes(256 * 1024 * 1024).unwrap(); // 256 MiB
-        // With smaller target, same total needs more partitions
-        let total = 1024 * 1024 * 1024u64; // 1 GiB
-        assert_eq!(sizing.recommended_count(total).as_usize(), 4);
-
-        let larger = PartitionSizing::with_target_bytes(1024 * 1024 * 1024).unwrap(); // 1 GiB
-        assert_eq!(larger.recommended_count(total).as_usize(), 1);
     }
 }

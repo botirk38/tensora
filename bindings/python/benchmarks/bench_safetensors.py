@@ -60,7 +60,7 @@ def test_load_native(benchmark, safetensors_files, model_descriptor):
 
 
 def test_load_default(benchmark, safetensors_dir, model_descriptor):
-    """tensora load_safetensors default (adaptive) backend."""
+    """tensora load_safetensors with the default backend."""
     benchmark.extra_info["total_bytes"] = model_descriptor.total_bytes
 
     def run():
