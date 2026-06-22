@@ -1,7 +1,6 @@
 pub mod converters;
 pub mod formats;
 pub mod hf_model;
-pub mod io;
 
 // ============================================================================
 // Convenience re-exports for common types and functions

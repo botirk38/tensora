@@ -437,6 +437,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastio"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2968117ff182f72131bc2cd42efa56671a317e51ae8a794e566d71b30f51034"
+dependencies = [
+ "futures",
+ "io-uring",
+ "libc",
+ "memmap2",
+ "rayon",
+ "region",
+ "tokio",
+ "zeropool",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1895,15 +1911,13 @@ dependencies = [
  "clap",
  "criterion",
  "dirs",
+ "fastio",
  "futures",
  "hf-hub",
- "io-uring",
- "libc",
  "memmap2",
  "num_cpus",
  "proptest",
  "rayon",
- "region",
  "safetensors",
  "serde",
  "serde_json",
@@ -1911,7 +1925,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-test",
- "zeropool",
 ]
 
 [[package]]

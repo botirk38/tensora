@@ -10,11 +10,11 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 #[cfg(target_os = "linux")]
-use tensora::io::io_uring::IoUring;
-use tensora::io::mmap::Mmap;
-use tensora::io::sync::SyncIo;
-use tensora::io::tokio::Tokio;
-use tensora::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo, WriteSlice, WriteSlices};
+use fastio::io_uring::IoUring;
+use fastio::mmap::Mmap;
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo, WriteSlice, WriteSlices};
 
 const SIZES: &[(usize, &str)] = &[
     (4 * 1024, "4KiB"),

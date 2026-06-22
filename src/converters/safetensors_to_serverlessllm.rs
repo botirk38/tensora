@@ -15,11 +15,9 @@ use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
-#[cfg(target_os = "linux")]
-use crate::io::availability::{BackendKind, Capabilities};
-use crate::io::sync::SyncIo;
-use crate::io::tokio::Tokio;
-use crate::io::{AsyncIo, BlockingIo, ByteRange, WriteSlices};
+use fastio::sync::SyncIo;
+use fastio::tokio::Tokio;
+use fastio::{AsyncIo, BlockingIo, ByteRange, WriteSlice, WriteSlices};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -310,10 +308,7 @@ impl ConversionStats {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                let capabilities = Capabilities::cached();
-                if capabilities.is_available(BackendKind::IoUring) {
-                    return ConversionEngine::IoUring;
-                }
+                return ConversionEngine::IoUring;
             }
             return ConversionEngine::TokioAsync;
         }
@@ -704,9 +699,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
+        let write_slices: Vec<WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
@@ -736,9 +731,9 @@ impl ConversionPlan {
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
 
-        let write_slices: Vec<crate::io::WriteSlice<'_>> = writes
+        let write_slices: Vec<WriteSlice<'_>> = writes
             .iter()
-            .map(|(offset, data)| crate::io::WriteSlice::new(*offset, data))
+            .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
         engine
             .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
@@ -775,7 +770,7 @@ mod tests {
     fn convert_rejects_zero_partitions() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
+        let err = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 0).unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
 
@@ -783,7 +778,7 @@ mod tests {
     fn convert_rejects_empty_directory() {
         let tmp = TempDir::new().unwrap();
         let out = tmp.path().join("out");
-        let converter = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
@@ -824,7 +819,7 @@ mod tests {
         write_source_file(&src_file2, vec![("b", view2)]);
 
         let out = tmp.path().join("out");
-        SafeTensorsToServerlessLLM::new(&src, &out, 4)
+        SafeTensorsToServerlessLLM::new(src, &out, 4)
             .unwrap()
             .convert_sync()
             .expect("convert multi-file");
@@ -853,7 +848,7 @@ mod tests {
         .unwrap();
 
         let out = tmp.path().join("out");
-        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(src, &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
 
         assert!(matches!(err, SaveError::InvalidInput(_)));
@@ -1014,7 +1009,7 @@ mod tests {
         let out = tmp.path().join("out_async_zero");
 
         crate::test_utils::run_async(async {
-            let err = SafeTensorsToServerlessLLM::new(&tmp.path(), &out, 0).unwrap_err();
+            let err = SafeTensorsToServerlessLLM::new(tmp.path(), &out, 0).unwrap_err();
             assert!(matches!(err, SaveError::InvalidInput(_)));
         });
     }
@@ -1110,7 +1105,7 @@ mod tests {
         write_source_file(&src_file2, vec![("same_name", view2)]);
 
         let out = tmp.path().join("out_dup");
-        let converter = SafeTensorsToServerlessLLM::new(&src, &out, 2).unwrap();
+        let converter = SafeTensorsToServerlessLLM::new(src, &out, 2).unwrap();
         let err = converter.convert_sync().unwrap_err();
         assert!(matches!(err, SaveError::InvalidInput(_)));
     }
@@ -1132,7 +1127,7 @@ mod tests {
         write_source_file(&src_file, vec![("a", va), ("b", vb), ("c", vc), ("d", vd)]);
 
         let out = tmp.path().join("out_balance");
-        SafeTensorsToServerlessLLM::new(&src, &out, 2)
+        SafeTensorsToServerlessLLM::new(src, &out, 2)
             .unwrap()
             .convert_sync()
             .unwrap();

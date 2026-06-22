@@ -8,7 +8,6 @@ use std::time::Duration;
 use tensora::formats::safetensors::Checkpoint as SafeTensorsCheckpoint;
 use tensora::formats::traits::Checkpoint as _;
 use tensora::formats::traits::Model as _;
-use tensora::formats::traits::Tensor;
 
 // ---------------------------------------------------------------------------
 // Full-model load benchmarks (one per I/O backend)
