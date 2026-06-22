@@ -36,19 +36,19 @@ thread_local! {
     static CACHED_RING: RefCell<Option<Uring>> = const { RefCell::new(None) };
 }
 
-/// Borrow the thread-local ring (creating it if necessary), run `f`, then
-/// return it. If `f` returns an error the ring is still reusable.
+/// Borrow the thread-local ring (creating or resizing it if necessary),
+/// run `f`, then return it. If `f` returns an error the ring is still reusable.
 fn with_ring<T>(depth: u32, f: impl FnOnce(&mut Uring) -> IoResult<T>) -> IoResult<T> {
     CACHED_RING.with(|cell| {
         let mut borrow = cell.borrow_mut();
-        let ring = match borrow.as_mut() {
-            Some(r) => r,
-            None => {
-                *borrow = Some(Uring::new(depth)?);
-                borrow.as_mut().unwrap()
-            }
+        let needs_new = match borrow.as_ref() {
+            None => true,
+            Some(r) => r.params().sq_entries() < depth,
         };
-        f(ring)
+        if needs_new {
+            *borrow = Some(Uring::new(depth)?);
+        }
+        f(borrow.as_mut().unwrap())
     })
 }
 
@@ -412,9 +412,9 @@ impl super::BlockingIo for IoUring {
         Self::ensure_available()?;
 
         let n = ranges.len();
-        let mut bufs: Vec<Vec<u8>> = ranges
+        let mut bufs: Vec<_> = ranges
             .iter()
-            .map(|e| e.range.len_usize().map(|len| vec![0u8; len]))
+            .map(|e| e.range.len_usize().map(|len| get_buffer_pool().get(len)))
             .collect::<IoResult<_>>()?;
         let files: Vec<File> = ranges
             .iter()
@@ -442,7 +442,7 @@ impl super::BlockingIo for IoUring {
                     // SAFETY: `bufs[idx]` is allocated with `range.len()` bytes.
                     // The ring holds a reference until the CQE is consumed —
                     // `bufs` outlives the ring borrow.
-                    let ptr = unsafe { bufs[idx].as_mut_ptr().add(so_far) };
+                    let ptr = unsafe { bufs[idx].as_mut_slice().as_mut_ptr().add(so_far) };
                     let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
                         .offset(range.start() + so_far as u64)
                         .build()
@@ -493,7 +493,7 @@ impl super::BlockingIo for IoUring {
             .map(|(i, buf)| RangeRead {
                 request_index: RequestIndex::new(i),
                 range: ranges[i].range,
-                bytes: OwnedBytes::Vec(buf),
+                bytes: OwnedBytes::Pooled(buf),
             })
             .collect();
         Ok(results)

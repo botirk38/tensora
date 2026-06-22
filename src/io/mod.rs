@@ -40,6 +40,8 @@ pub use std::io::Result as IoResult;
 
 // Re-export backend structs and options for ergonomic imports.
 pub use self::tokio::{Tokio, TokioOptions};
+pub use availability::{IoAvailability, IoCapabilities, IoKind};
+pub use buffer::{MmapRegion, OwnedBytes};
 #[cfg(target_os = "linux")]
 pub use io_uring::{IoUring, IoUringOptions};
 pub use mmap::Mmap;
@@ -47,8 +49,6 @@ pub use sync::{DirectIo, Sync, SyncOptions};
 
 use std::io::{Error, ErrorKind};
 use std::path::Path;
-
-use buffer::OwnedBytes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange {
@@ -160,18 +160,6 @@ impl std::fmt::Display for RequestIndex {
     }
 }
 
-impl From<usize> for RequestIndex {
-    fn from(n: usize) -> Self {
-        Self(n)
-    }
-}
-
-impl From<RequestIndex> for usize {
-    fn from(r: RequestIndex) -> Self {
-        r.0
-    }
-}
-
 #[derive(Debug)]
 pub struct RangeRead {
     pub request_index: RequestIndex,
@@ -220,7 +208,7 @@ impl<'a> WriteSlice<'a> {
 /// overlap and that no entry overflows `u64`.  Backends receive `WriteSlices`
 /// and can assume the invariant holds without re-checking.
 #[derive(Debug, Clone, Copy)]
-pub struct WriteSlices<'a>(pub &'a [WriteSlice<'a>]);
+pub struct WriteSlices<'a>(&'a [WriteSlice<'a>]);
 
 impl<'a> WriteSlices<'a> {
     /// Validates `slices` and wraps them.
@@ -259,6 +247,13 @@ impl<'a> WriteSlices<'a> {
         self.0
     }
 
+    /// Returns the number of slices.
+    #[inline]
+    #[must_use]
+    pub fn len(self) -> usize {
+        self.0.len()
+    }
+
     /// Returns `true` if there are no slices.
     #[inline]
     #[must_use]
@@ -270,15 +265,15 @@ impl<'a> WriteSlices<'a> {
 /// Common metadata every I/O backend exposes.
 pub trait Io {
     /// Compile-time kind identifier for this backend.
-    const KIND: availability::IoKind;
+    const KIND: IoKind;
 
     /// Returns the kind identifier for this backend value.
-    fn kind(&self) -> availability::IoKind {
+    fn kind(&self) -> IoKind {
         Self::KIND
     }
 
     /// Reports whether this backend can run in the current environment.
-    fn availability() -> availability::IoAvailability
+    fn availability() -> IoAvailability
     where
         Self: Sized;
 }
@@ -286,12 +281,12 @@ pub trait Io {
 /// Blocking path-based I/O operations.
 pub trait BlockingIo: Io {
     /// Reads an entire file into owned bytes.
-    fn read_file(&self, path: &Path) -> IoResult<buffer::OwnedBytes>;
+    fn read_file(&self, path: &Path) -> IoResult<OwnedBytes>;
 
     /// Reads exactly `range` from `path`.
     ///
     /// Empty ranges are valid and return empty bytes.
-    fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::OwnedBytes>;
+    fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes>;
 
     /// Reads a batch of file ranges concurrently.
     ///
@@ -341,7 +336,7 @@ pub trait AsyncIo: Io {
     fn read_file<'a>(
         &'a self,
         path: &'a Path,
-    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
+    ) -> impl std::future::Future<Output = IoResult<OwnedBytes>> + Send + 'a;
 
     /// Reads exactly `range` from `path`.
     ///
@@ -350,7 +345,7 @@ pub trait AsyncIo: Io {
         &'a self,
         path: &'a Path,
         range: ByteRange,
-    ) -> impl std::future::Future<Output = IoResult<buffer::OwnedBytes>> + Send + 'a;
+    ) -> impl std::future::Future<Output = IoResult<OwnedBytes>> + Send + 'a;
 
     /// Reads a batch of file ranges concurrently.
     fn read_ranges<'a>(
@@ -411,13 +406,13 @@ pub trait AsyncIo: Io {
 /// Memory-mapped path-based I/O operations.
 pub trait MmapIo: Io {
     /// Maps the entire file at `path`.
-    fn map_file(&self, path: &Path) -> IoResult<buffer::MmapRegion>;
+    fn map_file(&self, path: &Path) -> IoResult<MmapRegion>;
 
     /// Maps exactly `range` from `path`.
     ///
     /// Empty ranges are rejected because zero-length memory maps are not
     /// portable.
-    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<buffer::MmapRegion>;
+    fn map_range(&self, path: &Path, range: ByteRange) -> IoResult<MmapRegion>;
 }
 
 #[cfg(test)]

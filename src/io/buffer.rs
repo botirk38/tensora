@@ -353,6 +353,42 @@ impl std::fmt::Debug for OwnedBytes {
     }
 }
 
+impl From<Vec<u8>> for OwnedBytes {
+    #[inline]
+    fn from(v: Vec<u8>) -> Self {
+        Self::Vec(v)
+    }
+}
+
+impl From<Arc<[u8]>> for OwnedBytes {
+    #[inline]
+    fn from(arc: Arc<[u8]>) -> Self {
+        Self::Shared(arc)
+    }
+}
+
+impl From<PooledBuffer> for OwnedBytes {
+    #[inline]
+    fn from(buf: PooledBuffer) -> Self {
+        Self::Pooled(buf)
+    }
+}
+
+impl From<MmapRegion> for OwnedBytes {
+    #[inline]
+    fn from(region: MmapRegion) -> Self {
+        Self::Mmap(region)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl From<AlignedBuffer> for OwnedBytes {
+    #[inline]
+    fn from(buf: AlignedBuffer) -> Self {
+        Self::Aligned(buf)
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

@@ -226,14 +226,10 @@ impl AsyncIo for Tokio {
     }
 
     async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
-        let path = path.to_path_buf();
-        let data = data.to_vec();
-        ::tokio::task::spawn_blocking(move || {
-            let file = std::fs::OpenOptions::new().write(true).open(&path)?;
-            write_at_positioned(&file, offset, &data)
+        ::tokio::task::block_in_place(|| {
+            let file = std::fs::OpenOptions::new().write(true).open(path)?;
+            write_at_positioned(&file, offset, data)
         })
-        .await
-        .map_err(std::io::Error::other)?
     }
 
     async fn write_slices(&self, path: &Path, writes: WriteSlices<'_>) -> IoResult<()> {
