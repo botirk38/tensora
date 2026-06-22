@@ -40,7 +40,8 @@ pub use std::io::Result as IoResult;
 
 use std::io::{Error, ErrorKind};
 use std::path::Path;
-use std::sync::Arc;
+
+use buffer::OwnedBytes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange {
@@ -168,7 +169,7 @@ impl From<RequestIndex> for usize {
 pub struct RangeRead {
     pub request_index: RequestIndex,
     pub range: ByteRange,
-    pub bytes: Arc<[u8]>,
+    pub bytes: OwnedBytes,
 }
 
 impl RangeRead {
@@ -235,14 +236,12 @@ impl<'a> WriteSlices<'a> {
 
     /// Wraps `slices` without validation.
     ///
-    /// # Safety
-    ///
     /// The caller must guarantee that the slices are non-overlapping and that
-    /// no slice overflows `u64`.  Violating this is not UB but will cause
-    /// incorrect (non-deterministic) writes when backends parallelize.
+    /// no slice overflows `u64`.  Violating this causes incorrect
+    /// (non-deterministic) writes when backends parallelize, but is not UB.
     #[inline]
     #[must_use]
-    pub unsafe fn new_unchecked(slices: &'a [WriteSlice<'a>]) -> Self {
+    pub fn new_unchecked(slices: &'a [WriteSlice<'a>]) -> Self {
         Self(slices)
     }
 
@@ -454,7 +453,7 @@ mod tests {
 
     #[test]
     fn range_read_data_slice() {
-        let bytes: Arc<[u8]> = Arc::from(vec![2u8, 3, 4]);
+        let bytes = OwnedBytes::from_vec(vec![2u8, 3, 4]);
         let range = ByteRange::new(0, 3).unwrap();
         let result = RangeRead {
             request_index: RequestIndex::new(0),

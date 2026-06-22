@@ -29,6 +29,10 @@ harness = false
 name = "storage"
 harness = false
 
+[[bench]]
+name = "io_profile"
+harness = false
+
 [[bin]]
 name = "convert"
 path = "src/bin/convert/main.rs"

@@ -329,7 +329,7 @@ impl super::super::BlockingIo for Sync {
                 .par_iter()
                 .enumerate()
                 .map(|(i, entry)| {
-                    let bytes = self.read_range(entry.path, entry.range)?.into_shared();
+                    let bytes = self.read_range(entry.path, entry.range)?;
                     Ok(RangeRead {
                         request_index: RequestIndex::new(i),
                         range: entry.range,

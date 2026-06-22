@@ -108,10 +108,15 @@ impl std::fmt::Debug for AlignedBuffer {
 }
 
 #[cfg(target_os = "linux")]
-// SAFETY: AlignedBuffer owns its allocation and only exposes shared/mutable
-// access through Rust references; moving it to another thread transfers
-// ownership of the allocation.
+// SAFETY: AlignedBuffer owns its allocation exclusively and only exposes
+// shared/mutable access through Rust references; moving it to another thread
+// transfers ownership of the allocation.
 unsafe impl Send for AlignedBuffer {}
+
+#[cfg(target_os = "linux")]
+// SAFETY: &AlignedBuffer only provides &[u8] access (via Deref). Immutable
+// byte slices are trivially safe to share across threads.
+unsafe impl Sync for AlignedBuffer {}
 
 // ============================================================================
 // MmapRegion — Arc-backed memory-mapped file region

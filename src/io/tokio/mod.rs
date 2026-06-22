@@ -14,7 +14,7 @@ use futures::StreamExt;
 use crate::io::{
     AsyncIo, ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
     availability::{IoAvailability, IoKind},
-    buffer::OwnedBytes,
+    buffer::{OwnedBytes, get_buffer_pool},
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -82,21 +82,78 @@ impl super::Io for Tokio {
     }
 }
 
+/// Positioned read that doesn't require a seek (uses OS-level pread).
+#[cfg(unix)]
+fn read_at_positioned(file: &std::fs::File, offset: u64, buf: &mut [u8]) -> IoResult<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_at_positioned(file: &std::fs::File, offset: u64, buf: &mut [u8]) -> IoResult<()> {
+    use std::os::windows::fs::FileExt;
+    let mut read = 0;
+    while read < buf.len() {
+        let n = file.seek_read(&mut buf[read..], offset + read as u64)?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "unexpected EOF during positioned read",
+            ));
+        }
+        read += n;
+    }
+    Ok(())
+}
+
+/// Positioned write that doesn't require a seek (uses OS-level pwrite).
+#[cfg(unix)]
+fn write_at_positioned(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+    use std::os::unix::fs::FileExt;
+    file.write_all_at(data, offset)
+}
+
+#[cfg(windows)]
+fn write_at_positioned(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResult<()> {
+    use std::os::windows::fs::FileExt;
+    let mut written = 0;
+    while written < data.len() {
+        let n = file.seek_write(&data[written..], offset + written as u64)?;
+        written += n;
+    }
+    Ok(())
+}
+
 impl AsyncIo for Tokio {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
-        let bytes = ::tokio::fs::read(path).await?;
-        Ok(OwnedBytes::Vec(bytes))
+        let meta = ::tokio::fs::metadata(path).await?;
+        let len = usize::try_from(meta.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large")
+        })?;
+        if len == 0 {
+            return Ok(OwnedBytes::Shared(Arc::new([])));
+        }
+        let mut buf = get_buffer_pool().get(len);
+        let mut file = ::tokio::fs::File::open(path).await?;
+        file.read_exact(&mut buf[..len]).await?;
+        Ok(OwnedBytes::Pooled(buf))
     }
 
     async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
-        let mut file = ::tokio::fs::File::open(path).await?;
-        file.seek(std::io::SeekFrom::Start(range.start())).await?;
-        let mut buf = vec![0u8; range.len_usize()?];
-        file.read_exact(&mut buf).await?;
-        Ok(OwnedBytes::Vec(buf))
+        let path = path.to_path_buf();
+        let len = range.len_usize()?;
+        let start = range.start();
+        ::tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::open(&path)?;
+            let mut buf = get_buffer_pool().get(len);
+            read_at_positioned(&file, start, &mut buf[..len])?;
+            Ok(OwnedBytes::Pooled(buf))
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     async fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
@@ -109,18 +166,23 @@ impl AsyncIo for Tokio {
             .map(|(i, e)| (RequestIndex::new(i), e.path.to_path_buf(), e.range))
             .collect();
 
-        let stream = futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
-            let mut file = ::tokio::fs::File::open(&path).await?;
-            file.seek(std::io::SeekFrom::Start(range.start())).await?;
-            let mut buf = vec![0u8; range.len_usize()?];
-            file.read_exact(&mut buf).await?;
-            let bytes: Arc<[u8]> = Arc::from(buf);
-            Ok::<RangeRead, std::io::Error>(RangeRead {
-                request_index,
-                range,
-                bytes,
-            })
-        });
+        let stream =
+            futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
+                let len = range.len_usize()?;
+                let start = range.start();
+                ::tokio::task::spawn_blocking(move || {
+                    let file = std::fs::File::open(&path)?;
+                    let mut buf = get_buffer_pool().get(len);
+                    read_at_positioned(&file, start, &mut buf[..len])?;
+                    Ok::<RangeRead, std::io::Error>(RangeRead {
+                        request_index,
+                        range,
+                        bytes: OwnedBytes::Pooled(buf),
+                    })
+                })
+                .await
+                .map_err(std::io::Error::other)?
+            });
 
         let mut results: Vec<RangeRead> = stream
             .buffer_unordered(self.options.batch_concurrency)
@@ -142,38 +204,24 @@ impl AsyncIo for Tokio {
         len: u64,
         writes: WriteSlices<'_>,
     ) -> IoResult<()> {
-        {
-            let file = ::tokio::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path)
-                .await?;
-            file.set_len(len).await?;
-        }
+        let file = ::tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .await?;
+        file.set_len(len).await?;
         if writes.is_empty() {
             return Ok(());
         }
-        let tasks: Vec<(PathBuf, u64, Vec<u8>)> = writes
-            .as_slice()
-            .iter()
-            .map(|w| (path.to_path_buf(), w.offset, w.data.to_vec()))
-            .collect();
-
-        futures::stream::iter(tasks)
-            .map(|(path, offset, data)| async move {
-                let mut file = ::tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&path)
-                    .await?;
-                file.seek(std::io::SeekFrom::Start(offset)).await?;
-                file.write_all(&data).await
-            })
-            .buffer_unordered(self.options.batch_concurrency)
-            .collect::<Vec<IoResult<()>>>()
-            .await
-            .into_iter()
-            .collect()
+        let std_file = file.into_std().await;
+        let slices = writes.as_slice();
+        ::tokio::task::block_in_place(|| {
+            use rayon::prelude::*;
+            slices
+                .par_iter()
+                .try_for_each(|w| write_at_positioned(&std_file, w.offset, w.data))
+        })
     }
 
     async fn write_at(&self, path: &Path, offset: u64, data: &[u8]) -> IoResult<()> {
@@ -189,26 +237,19 @@ impl AsyncIo for Tokio {
         if writes.is_empty() {
             return Ok(());
         }
-        let tasks: Vec<(PathBuf, u64, Vec<u8>)> = writes
-            .as_slice()
-            .iter()
-            .map(|w| (path.to_path_buf(), w.offset, w.data.to_vec()))
-            .collect();
-
-        futures::stream::iter(tasks)
-            .map(|(path, offset, data)| async move {
-                let mut file = ::tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&path)
-                    .await?;
-                file.seek(std::io::SeekFrom::Start(offset)).await?;
-                file.write_all(&data).await
-            })
-            .buffer_unordered(self.options.batch_concurrency)
-            .collect::<Vec<IoResult<()>>>()
-            .await
-            .into_iter()
-            .collect()
+        let std_file = ::tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .await?
+            .into_std()
+            .await;
+        let slices = writes.as_slice();
+        ::tokio::task::block_in_place(|| {
+            use rayon::prelude::*;
+            slices
+                .par_iter()
+                .try_for_each(|w| write_at_positioned(&std_file, w.offset, w.data))
+        })
     }
 
     async fn sync_data(&self, path: &Path) -> IoResult<()> {
