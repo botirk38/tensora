@@ -16,7 +16,7 @@ use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
 #[cfg(target_os = "linux")]
-use crate::io::availability::{Capabilities, BackendKind};
+use crate::io::availability::{BackendKind, Capabilities};
 use crate::io::sync::SyncIo;
 use crate::io::tokio::Tokio;
 use crate::io::{AsyncIo, BlockingIo, ByteRange, WriteSlices};
@@ -646,7 +646,9 @@ impl ConversionPlan {
         SyncIo::new()
             .write_file(&index_path, &index_bytes)
             .map_err(SaveError::from)?;
-        SyncIo::new().sync_all(&index_path).map_err(SaveError::from)?;
+        SyncIo::new()
+            .sync_all(&index_path)
+            .map_err(SaveError::from)?;
         Ok(())
     }
 

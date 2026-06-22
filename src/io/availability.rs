@@ -301,7 +301,12 @@ mod tests {
 
     #[test]
     fn storage_kind_display_matches_as_str() {
-        for kind in [BackendKind::Sync, BackendKind::Tokio, BackendKind::Mmap, BackendKind::IoUring] {
+        for kind in [
+            BackendKind::Sync,
+            BackendKind::Tokio,
+            BackendKind::Mmap,
+            BackendKind::IoUring,
+        ] {
             assert_eq!(format!("{kind}"), kind.as_str());
         }
     }
@@ -366,9 +371,7 @@ mod tests {
     #[test]
     fn storage_availability_is_available() {
         assert!(Availability::Available.is_available());
-        assert!(
-            !Availability::unavailable(UnavailableReason::PermissionDenied, "").is_available()
-        );
+        assert!(!Availability::unavailable(UnavailableReason::PermissionDenied, "").is_available());
     }
 
     #[test]

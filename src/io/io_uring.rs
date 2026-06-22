@@ -429,7 +429,11 @@ impl super::BlockingIo for IoUring {
         let n = ranges.len();
         let mut bufs: Vec<_> = ranges
             .iter()
-            .map(|e| e.range.len_usize().map(|len| self.options.allocator.alloc(len)))
+            .map(|e| {
+                e.range
+                    .len_usize()
+                    .map(|len| self.options.allocator.alloc(len))
+            })
             .collect::<IoResult<_>>()?;
         let files: Vec<File> = ranges
             .iter()
@@ -457,8 +461,7 @@ impl super::BlockingIo for IoUring {
                     // SAFETY: `bufs[idx]` is allocated with `range.len()` bytes.
                     // The ring holds a reference until the CQE is consumed —
                     // `bufs` outlives the ring borrow.
-                    let ptr =
-                        unsafe { bufs[idx].as_mut_slice().unwrap().as_mut_ptr().add(so_far) };
+                    let ptr = unsafe { bufs[idx].as_mut_slice().unwrap().as_mut_ptr().add(so_far) };
                     let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
                         .offset(range.start() + so_far as u64)
                         .build()

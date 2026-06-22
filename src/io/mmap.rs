@@ -10,7 +10,7 @@
 
 use crate::io::{
     ByteRange, IoResult,
-    availability::{Availability, Capabilities, BackendKind},
+    availability::{Availability, BackendKind, Capabilities},
     buffer::MmapRegion,
 };
 use memmap2::MmapOptions as MemmapOptions;

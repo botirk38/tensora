@@ -45,9 +45,9 @@ pub use std::io::Result as IoResult;
 #[cfg(feature = "tokio")]
 pub use self::tokio::{Tokio, TokioOptions};
 pub use availability::{Availability, BackendKind, Capabilities};
-pub use buffer::{BufferAllocator, MmapRegion, OwnedBytes};
 #[cfg(feature = "pool")]
 pub use buffer::PoolConfig;
+pub use buffer::{BufferAllocator, MmapRegion, OwnedBytes};
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub use io_uring::{IoUring, IoUringOptions};
 #[cfg(feature = "mmap")]

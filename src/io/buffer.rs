@@ -231,9 +231,13 @@ pub enum BufferAllocator {
 impl Default for BufferAllocator {
     fn default() -> Self {
         #[cfg(feature = "pool")]
-        { Self::Pooled(PoolConfig::default()) }
+        {
+            Self::Pooled(PoolConfig::default())
+        }
         #[cfg(not(feature = "pool"))]
-        { Self::System }
+        {
+            Self::System
+        }
     }
 }
 

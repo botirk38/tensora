@@ -12,7 +12,7 @@ use tempfile::TempDir;
 #[cfg(target_os = "linux")]
 use tensora::io::io_uring::IoUring;
 use tensora::io::mmap::Mmap;
-use tensora::io::sync::Sync;
+use tensora::io::sync::SyncIo;
 use tensora::io::tokio::Tokio;
 use tensora::io::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo, WriteSlice, WriteSlices};
 
@@ -47,7 +47,7 @@ fn bench_read_file(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("sync", label), |b| {
             b.iter(|| {
-                let r = Sync::new();
+                let r = SyncIo::new();
                 black_box(r.read_file(black_box(&path)).unwrap().len())
             });
         });
@@ -116,7 +116,7 @@ fn bench_read_range(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("sync", label), |b| {
             b.iter(|| {
-                let r = Sync::new();
+                let r = SyncIo::new();
                 black_box(r.read_range(black_box(&path), range).unwrap().len())
             });
         });
@@ -172,7 +172,7 @@ fn bench_read_ranges_batch(c: &mut Criterion) {
 
     group.bench_function("sync", |b| {
         b.iter(|| {
-            let r = Sync::new();
+            let r = SyncIo::new();
             let ranges: Vec<FileRange<'_>> = requests
                 .iter()
                 .map(|(off, len)| {
@@ -238,7 +238,7 @@ fn bench_write_file(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("sync", label), |b| {
             let path = dir.path().join(format!("sync_write_{label}.bin"));
             b.iter(|| {
-                let w = Sync::new();
+                let w = SyncIo::new();
                 w.write_file(black_box(&path), black_box(&data)).unwrap();
             });
         });
@@ -296,7 +296,7 @@ fn bench_write_slices(c: &mut Criterion) {
         // Pre-create
         std::fs::write(&path, vec![0u8; total_size]).unwrap();
         b.iter(|| {
-            let w = Sync::new();
+            let w = SyncIo::new();
             w.write_slices(black_box(&path), ws).unwrap();
         });
     });
