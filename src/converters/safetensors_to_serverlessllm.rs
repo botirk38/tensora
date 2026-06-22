@@ -16,8 +16,8 @@ use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
 #[cfg(target_os = "linux")]
-use crate::io::availability::{IoCapabilities, IoKind};
-use crate::io::sync::Sync;
+use crate::io::availability::{Capabilities, BackendKind};
+use crate::io::sync::SyncIo;
 use crate::io::tokio::Tokio;
 use crate::io::{AsyncIo, BlockingIo, ByteRange, WriteSlices};
 use futures::future::try_join_all;
@@ -310,8 +310,8 @@ impl ConversionStats {
         if self.total_bytes >= LARGE_CONVERSION_THRESHOLD && self.partition_count >= 4 {
             #[cfg(target_os = "linux")]
             {
-                let capabilities = IoCapabilities::cached();
-                if capabilities.is_available(IoKind::IoUring) {
+                let capabilities = Capabilities::cached();
+                if capabilities.is_available(BackendKind::IoUring) {
                     return ConversionEngine::IoUring;
                 }
             }
@@ -643,10 +643,10 @@ impl ConversionPlan {
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Sync::new()
+        SyncIo::new()
             .write_file(&index_path, &index_bytes)
             .map_err(SaveError::from)?;
-        Sync::new().sync_all(&index_path).map_err(SaveError::from)?;
+        SyncIo::new().sync_all(&index_path).map_err(SaveError::from)?;
         Ok(())
     }
 
@@ -720,7 +720,7 @@ impl ConversionPlan {
     ) -> SaveResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let engine = Sync::new();
+        let engine = SyncIo::new();
 
         // Read all source ranges, then write everything in one positioned open.
         let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());

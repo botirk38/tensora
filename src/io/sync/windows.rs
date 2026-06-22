@@ -6,28 +6,28 @@ use std::sync::Arc;
 
 use crate::io::{
     ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
-    availability::{IoAvailability, IoKind},
-    buffer::{OwnedBytes, get_buffer_pool},
+    availability::{Availability, BackendKind},
+    buffer::OwnedBytes,
 };
 
 // ============================================================================
-// Sync
+// SyncIo
 // ============================================================================
 
 /// Synchronous blocking I/O backend (Windows std::fs implementation).
 #[derive(Debug, Clone)]
-pub struct Sync {
+pub struct SyncIo {
     options: super::SyncOptions,
     pool: Option<Arc<rayon::ThreadPool>>,
 }
 
-impl Default for Sync {
+impl Default for SyncIo {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Sync {
+impl SyncIo {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -86,30 +86,31 @@ impl Sync {
     }
 }
 
-impl super::super::Io for Sync {
-    const KIND: IoKind = IoKind::Sync;
+impl super::super::Io for SyncIo {
+    const KIND: BackendKind = BackendKind::Sync;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        IoAvailability::Available
+        Availability::Available
     }
 }
 
-impl super::super::BlockingIo for Sync {
+impl super::super::BlockingIo for SyncIo {
     fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         use std::os::windows::fs::FileExt;
         let file = std::fs::File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("file too large"))?;
         if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
-        let mut buf = get_buffer_pool().get(len);
+        let mut buf = self.options.allocator.alloc(len);
+        let slice = buf.as_mut_slice().unwrap();
         let mut read = 0usize;
         while read < len {
-            let n = file.seek_read(&mut buf[read..], read as u64)?;
+            let n = file.seek_read(&mut slice[read..], read as u64)?;
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -118,21 +119,22 @@ impl super::super::BlockingIo for Sync {
             }
             read += n;
         }
-        Ok(OwnedBytes::Pooled(buf))
+        Ok(buf)
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         use std::os::windows::fs::FileExt;
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         let file = std::fs::File::open(path)?;
-        let mut buf = get_buffer_pool().get(range.len_usize()?);
+        let len = range.len_usize()?;
+        let mut buf = self.options.allocator.alloc(len);
+        let slice = buf.as_mut_slice().unwrap();
         let mut read = 0usize;
         let start_offset = range.start();
-        let len = range.len_usize()?;
         while read < len {
-            let n = file.seek_read(&mut buf[read..], start_offset + read as u64)?;
+            let n = file.seek_read(&mut slice[read..], start_offset + read as u64)?;
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -141,7 +143,7 @@ impl super::super::BlockingIo for Sync {
             }
             read += n;
         }
-        Ok(OwnedBytes::Pooled(buf))
+        Ok(buf)
     }
 
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
@@ -250,7 +252,7 @@ mod tests {
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let path = write_tmp(&dir, "file.bin", &data);
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data[..]);
     }
 
@@ -259,7 +261,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "empty.bin", b"");
 
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert!(result.is_empty());
     }
 
@@ -269,7 +271,7 @@ mod tests {
         let data: Vec<u8> = (0u8..100).collect();
         let path = write_tmp(&dir, "range.bin", &data);
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(10, 20).unwrap())
             .unwrap();
         assert_eq!(result.as_ref(), &data[10..30]);
@@ -280,7 +282,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "z.bin", b"hello");
 
-        let result = Sync::new()
+        let result = SyncIo::new()
             .read_range(&path, ByteRange::from_offset_len(0, 0).unwrap())
             .unwrap();
         assert!(result.is_empty());
@@ -288,7 +290,7 @@ mod tests {
 
     #[test]
     fn read_ranges_empty() {
-        let results = Sync::new().read_ranges(&[]).unwrap();
+        let results = SyncIo::new().read_ranges(&[]).unwrap();
         assert!(results.is_empty());
     }
 
@@ -302,7 +304,7 @@ mod tests {
             &path,
             ByteRange::from_offset_len(50, 30).unwrap(),
         )];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].data(), &data[50..80]);
@@ -319,7 +321,7 @@ mod tests {
             FileRange::new(&path, ByteRange::from_offset_len(20, 10).unwrap()),
             FileRange::new(&path, ByteRange::from_offset_len(100, 5).unwrap()),
         ];
-        let results = Sync::new().read_ranges(&entries).unwrap();
+        let results = SyncIo::new().read_ranges(&entries).unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].data(), &data[0..10]);
@@ -332,9 +334,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("out.bin");
         let data = b"hello windows sync";
-        Sync::new().write_file(&path, data).unwrap();
-        Sync::new().sync_all(&path).unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, data).unwrap();
+        SyncIo::new().sync_all(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), data);
     }
 
@@ -342,8 +344,8 @@ mod tests {
     fn write_file_truncates_existing() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "trunc.bin", b"old content here");
-        Sync::new().write_file(&path, b"new").unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        SyncIo::new().write_file(&path, b"new").unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"new");
     }
 
@@ -352,9 +354,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut data = b"AAABBBCCC".to_vec();
         let path = write_tmp(&dir, "patch.bin", &data);
-        Sync::new().write_at(&path, 3, b"XXX").unwrap();
+        SyncIo::new().write_at(&path, 3, b"XXX").unwrap();
         data[3..6].copy_from_slice(b"XXX");
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), &data);
     }
 
@@ -363,10 +365,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("pos.bin");
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(10, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 15, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.len(), 15);
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[10..15], b"WORLD");
@@ -377,10 +379,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "batch_write.bin", &[0u8; 20]);
         let writes = [WriteSlice::new(0, b"HELLO"), WriteSlice::new(15, b"WORLD")];
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&writes).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(&result.as_ref()[0..5], b"HELLO");
         assert_eq!(&result.as_ref()[15..20], b"WORLD");
     }
@@ -389,10 +391,10 @@ mod tests {
     fn write_slices_empty_batch_is_noop() {
         let dir = TempDir::new().unwrap();
         let path = write_tmp(&dir, "noop.bin", b"unchanged");
-        Sync::new()
+        SyncIo::new()
             .write_slices(&path, WriteSlices::new(&[]).unwrap())
             .unwrap();
-        let result = Sync::new().read_file(&path).unwrap();
+        let result = SyncIo::new().read_file(&path).unwrap();
         assert_eq!(result.as_ref(), b"unchanged");
     }
 
@@ -414,7 +416,7 @@ mod tests {
     fn write_positioned_file_empty_batch_creates_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty_pos.bin");
-        Sync::new()
+        SyncIo::new()
             .write_positioned_file(&path, 16, WriteSlices::new(&[]).unwrap())
             .unwrap();
         let meta = std::fs::metadata(&path).unwrap();

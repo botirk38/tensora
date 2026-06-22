@@ -6,14 +6,13 @@
 //! [`AsyncIo`]: crate::io::AsyncIo
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use futures::StreamExt;
 
 use crate::io::{
     AsyncIo, ByteRange, FileRange, IoResult, RangeRead, RequestIndex, WriteSlices,
-    availability::{IoAvailability, IoKind},
-    buffer::{OwnedBytes, get_buffer_pool},
+    availability::{Availability, BackendKind},
+    buffer::OwnedBytes,
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -26,12 +25,15 @@ const DEFAULT_BATCH_CONCURRENCY: usize = 64;
 pub struct TokioOptions {
     /// Maximum number of concurrent tasks for batch reads/writes.
     pub batch_concurrency: usize,
+    /// Controls how read buffers are allocated.
+    pub allocator: crate::io::buffer::BufferAllocator,
 }
 
 impl Default for TokioOptions {
     fn default() -> Self {
         Self {
             batch_concurrency: DEFAULT_BATCH_CONCURRENCY,
+            allocator: crate::io::buffer::BufferAllocator::default(),
         }
     }
 }
@@ -49,9 +51,22 @@ impl Tokio {
         Self {
             options: TokioOptions {
                 batch_concurrency: DEFAULT_BATCH_CONCURRENCY,
+                allocator: Self::DEFAULT_ALLOCATOR,
             },
         }
     }
+
+    #[cfg(feature = "pool")]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::Pooled(crate::io::buffer::PoolConfig {
+            num_shards: 8,
+            tls_cache_size: 4,
+            max_per_shard: 32,
+            min_buffer_size: 1024 * 1024,
+        });
+    #[cfg(not(feature = "pool"))]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::System;
 
     pub fn with_options(options: TokioOptions) -> IoResult<Self> {
         if options.batch_concurrency == 0 {
@@ -71,13 +86,13 @@ impl Tokio {
 }
 
 impl super::Io for Tokio {
-    const KIND: IoKind = IoKind::Tokio;
+    const KIND: BackendKind = BackendKind::Tokio;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        IoAvailability::Available
+        Availability::Available
     }
 }
 
@@ -126,18 +141,19 @@ fn write_at_positioned(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResu
 impl AsyncIo for Tokio {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         let path = path.to_path_buf();
+        let allocator = self.options.allocator;
         ::tokio::task::spawn_blocking(move || {
             let meta = std::fs::metadata(&path)?;
             let len = usize::try_from(meta.len()).map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large")
             })?;
             if len == 0 {
-                return Ok(OwnedBytes::Shared(Arc::new([])));
+                return Ok(OwnedBytes::Vec(Vec::new()));
             }
             let file = std::fs::File::open(&path)?;
-            let mut buf = get_buffer_pool().get(len);
-            read_at_positioned(&file, 0, &mut buf[..len])?;
-            Ok(OwnedBytes::Pooled(buf))
+            let mut buf = allocator.alloc(len);
+            read_at_positioned(&file, 0, buf.as_mut_slice().unwrap())?;
+            Ok(buf)
         })
         .await
         .map_err(std::io::Error::other)?
@@ -145,16 +161,17 @@ impl AsyncIo for Tokio {
 
     async fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         let path = path.to_path_buf();
         let len = range.len_usize()?;
         let start = range.start();
+        let allocator = self.options.allocator;
         ::tokio::task::spawn_blocking(move || {
             let file = std::fs::File::open(&path)?;
-            let mut buf = get_buffer_pool().get(len);
-            read_at_positioned(&file, start, &mut buf[..len])?;
-            Ok(OwnedBytes::Pooled(buf))
+            let mut buf = allocator.alloc(len);
+            read_at_positioned(&file, start, buf.as_mut_slice().unwrap())?;
+            Ok(buf)
         })
         .await
         .map_err(std::io::Error::other)?
@@ -170,17 +187,18 @@ impl AsyncIo for Tokio {
             .map(|(i, e)| (RequestIndex::new(i), e.path.to_path_buf(), e.range))
             .collect();
 
+        let allocator = self.options.allocator;
         let stream = futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
             let len = range.len_usize()?;
             let start = range.start();
             ::tokio::task::spawn_blocking(move || {
                 let file = std::fs::File::open(&path)?;
-                let mut buf = get_buffer_pool().get(len);
-                read_at_positioned(&file, start, &mut buf[..len])?;
+                let mut buf = allocator.alloc(len);
+                read_at_positioned(&file, start, buf.as_mut_slice().unwrap())?;
                 Ok::<RangeRead, std::io::Error>(RangeRead {
                     request_index,
                     range,
-                    bytes: OwnedBytes::Pooled(buf),
+                    bytes: buf,
                 })
             })
             .await

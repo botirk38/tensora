@@ -10,7 +10,7 @@
 
 use crate::io::{
     ByteRange, IoResult,
-    availability::{IoAvailability, IoCapabilities, IoKind},
+    availability::{Availability, Capabilities, BackendKind},
     buffer::MmapRegion,
 };
 use memmap2::MmapOptions as MemmapOptions;
@@ -55,13 +55,13 @@ impl Mmap {
 // ============================================================================
 
 impl super::Io for Mmap {
-    const KIND: IoKind = IoKind::Mmap;
+    const KIND: BackendKind = BackendKind::Mmap;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        IoCapabilities::cached().mmap.clone()
+        Capabilities::cached().mmap.clone()
     }
 }
 
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn kind_is_mmap() {
-        assert_eq!(Mmap::new().kind(), IoKind::Mmap);
+        assert_eq!(Mmap::new().kind(), BackendKind::Mmap);
     }
 
     #[test]

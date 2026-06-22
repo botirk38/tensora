@@ -30,22 +30,30 @@
 
 pub mod availability;
 pub mod buffer;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub mod io_uring;
+#[cfg(feature = "mmap")]
 pub mod mmap;
+#[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(feature = "tokio")]
 pub mod tokio;
 
 pub use std::io::Result as IoResult;
 
 // Re-export backend structs and options for ergonomic imports.
+#[cfg(feature = "tokio")]
 pub use self::tokio::{Tokio, TokioOptions};
-pub use availability::{IoAvailability, IoCapabilities, IoKind};
-pub use buffer::{MmapRegion, OwnedBytes};
-#[cfg(target_os = "linux")]
+pub use availability::{Availability, BackendKind, Capabilities};
+pub use buffer::{BufferAllocator, MmapRegion, OwnedBytes};
+#[cfg(feature = "pool")]
+pub use buffer::PoolConfig;
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub use io_uring::{IoUring, IoUringOptions};
+#[cfg(feature = "mmap")]
 pub use mmap::Mmap;
-pub use sync::{DirectIo, Sync, SyncOptions};
+#[cfg(feature = "sync")]
+pub use sync::{DirectIo, SyncIo, SyncOptions};
 
 use std::io::{Error, ErrorKind};
 use std::path::Path;
@@ -265,15 +273,15 @@ impl<'a> WriteSlices<'a> {
 /// Common metadata every I/O backend exposes.
 pub trait Io {
     /// Compile-time kind identifier for this backend.
-    const KIND: IoKind;
+    const KIND: BackendKind;
 
     /// Returns the kind identifier for this backend value.
-    fn kind(&self) -> IoKind {
+    fn kind(&self) -> BackendKind {
         Self::KIND
     }
 
     /// Reports whether this backend can run in the current environment.
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized;
 }

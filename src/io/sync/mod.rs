@@ -27,27 +27,30 @@ pub struct SyncOptions {
     /// Number of Rayon worker threads for batch reads/writes.
     ///
     /// `None` uses the global Rayon thread pool. `Some(n)` creates a backend-local
-    /// pool with exactly `n` threads; `n == 0` is rejected by [`Sync::with_options`].
+    /// pool with exactly `n` threads; `n == 0` is rejected by [`SyncIo::with_options`].
     pub batch_threads: Option<usize>,
 
     /// Controls whether to use O_DIRECT for reads (Linux only, ignored elsewhere).
     pub direct_io: DirectIo,
+
+    /// Controls how read buffers are allocated.
+    pub allocator: crate::io::buffer::BufferAllocator,
 }
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::Sync;
+pub use linux::SyncIo;
 
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::Sync;
+pub use macos::SyncIo;
 
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::Sync;
+pub use windows::SyncIo;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("tensora io::sync supports Linux, macOS, and Windows only");

@@ -21,7 +21,7 @@ use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::tensor::Dtype;
 use crate::formats::{AsyncBackend, Backend};
 use crate::io::mmap::Mmap;
-use crate::io::sync::Sync;
+use crate::io::sync::SyncIo;
 use crate::io::tokio::Tokio;
 use crate::io::{AsyncIo, BlockingIo, MmapIo};
 use std::collections::HashMap;
@@ -142,7 +142,7 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
 
         match backend {
             Backend::Sync => {
-                let engine = Sync::new();
+                let engine = SyncIo::new();
                 for path in paths {
                     let bytes = engine.read_file(&path).map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);

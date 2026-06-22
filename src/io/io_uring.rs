@@ -11,14 +11,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{Error, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::Arc;
 
 use io_uring::{IoUring as Uring, opcode, types};
 
 use crate::io::{
     ByteRange, FileRange, Io, IoResult, RangeRead, RequestIndex, WriteSlice, WriteSlices,
-    availability::{IoAvailability, IoKind},
-    buffer::{OwnedBytes, get_buffer_pool},
+    availability::{Availability, BackendKind},
+    buffer::OwnedBytes,
 };
 
 const DEFAULT_RING_DEPTH: u32 = 256;
@@ -72,6 +71,8 @@ pub struct IoUringOptions {
     /// Larger values reduce submission overhead for big files; smaller values
     /// improve concurrency for many small operations.
     pub chunk_size: usize,
+    /// Controls how read buffers are allocated.
+    pub allocator: crate::io::buffer::BufferAllocator,
 }
 
 impl Default for IoUringOptions {
@@ -79,6 +80,7 @@ impl Default for IoUringOptions {
         Self {
             ring_depth: DEFAULT_RING_DEPTH,
             chunk_size: DEFAULT_CHUNK_SIZE,
+            allocator: crate::io::buffer::BufferAllocator::default(),
         }
     }
 }
@@ -92,9 +94,22 @@ impl IoUring {
             options: IoUringOptions {
                 ring_depth: DEFAULT_RING_DEPTH,
                 chunk_size: DEFAULT_CHUNK_SIZE,
+                allocator: Self::DEFAULT_ALLOCATOR,
             },
         }
     }
+
+    #[cfg(feature = "pool")]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::Pooled(crate::io::buffer::PoolConfig {
+            num_shards: 8,
+            tls_cache_size: 4,
+            max_per_shard: 32,
+            min_buffer_size: 1024 * 1024,
+        });
+    #[cfg(not(feature = "pool"))]
+    const DEFAULT_ALLOCATOR: crate::io::buffer::BufferAllocator =
+        crate::io::buffer::BufferAllocator::System;
 
     pub fn with_options(options: IoUringOptions) -> IoResult<Self> {
         if options.ring_depth == 0 {
@@ -120,7 +135,7 @@ impl IoUring {
 
     fn ensure_available() -> IoResult<()> {
         match IoUring::availability() {
-            IoAvailability::Available => Ok(()),
+            Availability::Available => Ok(()),
             unavailable => Err(Error::other(format!("io_uring storage is {unavailable}"))),
         }
     }
@@ -367,13 +382,13 @@ impl IoUring {
 }
 
 impl super::Io for IoUring {
-    const KIND: IoKind = IoKind::IoUring;
+    const KIND: BackendKind = BackendKind::IoUring;
 
-    fn availability() -> IoAvailability
+    fn availability() -> Availability
     where
         Self: Sized,
     {
-        crate::io::availability::IoCapabilities::cached()
+        crate::io::availability::Capabilities::cached()
             .io_uring
             .clone()
     }
@@ -386,23 +401,23 @@ impl super::BlockingIo for IoUring {
         let len =
             usize::try_from(file.metadata()?.len()).map_err(|_| Error::other("file too large"))?;
         if len == 0 {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
-        let mut buf = get_buffer_pool().get(len);
-        self.read_exact_at(&file, 0, &mut buf[..len])?;
-        Ok(OwnedBytes::Pooled(buf))
+        let mut buf = self.options.allocator.alloc(len);
+        self.read_exact_at(&file, 0, buf.as_mut_slice().unwrap())?;
+        Ok(buf)
     }
 
     fn read_range(&self, path: &Path, range: ByteRange) -> IoResult<OwnedBytes> {
         if range.is_empty() {
-            return Ok(OwnedBytes::Shared(Arc::new([])));
+            return Ok(OwnedBytes::Vec(Vec::new()));
         }
         Self::ensure_available()?;
         let file = OpenOptions::new().read(true).open(path)?;
         let len = range.len_usize()?;
-        let mut buf = get_buffer_pool().get(len);
-        self.read_exact_at(&file, range.start(), &mut buf[..len])?;
-        Ok(OwnedBytes::Pooled(buf))
+        let mut buf = self.options.allocator.alloc(len);
+        self.read_exact_at(&file, range.start(), buf.as_mut_slice().unwrap())?;
+        Ok(buf)
     }
 
     fn read_ranges(&self, ranges: &[FileRange<'_>]) -> IoResult<Vec<RangeRead>> {
@@ -414,7 +429,7 @@ impl super::BlockingIo for IoUring {
         let n = ranges.len();
         let mut bufs: Vec<_> = ranges
             .iter()
-            .map(|e| e.range.len_usize().map(|len| get_buffer_pool().get(len)))
+            .map(|e| e.range.len_usize().map(|len| self.options.allocator.alloc(len)))
             .collect::<IoResult<_>>()?;
         let files: Vec<File> = ranges
             .iter()
@@ -442,7 +457,8 @@ impl super::BlockingIo for IoUring {
                     // SAFETY: `bufs[idx]` is allocated with `range.len()` bytes.
                     // The ring holds a reference until the CQE is consumed —
                     // `bufs` outlives the ring borrow.
-                    let ptr = unsafe { bufs[idx].as_mut_slice().as_mut_ptr().add(so_far) };
+                    let ptr =
+                        unsafe { bufs[idx].as_mut_slice().unwrap().as_mut_ptr().add(so_far) };
                     let entry = opcode::Read::new(types::Fd(files[idx].as_raw_fd()), ptr, len)
                         .offset(range.start() + so_far as u64)
                         .build()
@@ -493,7 +509,7 @@ impl super::BlockingIo for IoUring {
             .map(|(i, buf)| RangeRead {
                 request_index: RequestIndex::new(i),
                 range: ranges[i].range,
-                bytes: OwnedBytes::Pooled(buf),
+                bytes: buf,
             })
             .collect();
         Ok(results)
@@ -573,7 +589,7 @@ mod tests {
 
     #[test]
     fn kind_is_io_uring() {
-        assert_eq!(IoUring::new().kind(), IoKind::IoUring);
+        assert_eq!(IoUring::new().kind(), BackendKind::IoUring);
     }
 
     #[test]
