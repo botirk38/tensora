@@ -127,9 +127,8 @@ fn write_at_positioned(file: &std::fs::File, offset: u64, data: &[u8]) -> IoResu
 impl AsyncIo for Tokio {
     async fn read_file(&self, path: &Path) -> IoResult<OwnedBytes> {
         let meta = ::tokio::fs::metadata(path).await?;
-        let len = usize::try_from(meta.len()).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large")
-        })?;
+        let len = usize::try_from(meta.len())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large"))?;
         if len == 0 {
             return Ok(OwnedBytes::Shared(Arc::new([])));
         }
@@ -166,23 +165,22 @@ impl AsyncIo for Tokio {
             .map(|(i, e)| (RequestIndex::new(i), e.path.to_path_buf(), e.range))
             .collect();
 
-        let stream =
-            futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
-                let len = range.len_usize()?;
-                let start = range.start();
-                ::tokio::task::spawn_blocking(move || {
-                    let file = std::fs::File::open(&path)?;
-                    let mut buf = get_buffer_pool().get(len);
-                    read_at_positioned(&file, start, &mut buf[..len])?;
-                    Ok::<RangeRead, std::io::Error>(RangeRead {
-                        request_index,
-                        range,
-                        bytes: OwnedBytes::Pooled(buf),
-                    })
+        let stream = futures::stream::iter(tasks).map(|(request_index, path, range)| async move {
+            let len = range.len_usize()?;
+            let start = range.start();
+            ::tokio::task::spawn_blocking(move || {
+                let file = std::fs::File::open(&path)?;
+                let mut buf = get_buffer_pool().get(len);
+                read_at_positioned(&file, start, &mut buf[..len])?;
+                Ok::<RangeRead, std::io::Error>(RangeRead {
+                    request_index,
+                    range,
+                    bytes: OwnedBytes::Pooled(buf),
                 })
-                .await
-                .map_err(std::io::Error::other)?
-            });
+            })
+            .await
+            .map_err(std::io::Error::other)?
+        });
 
         let mut results: Vec<RangeRead> = stream
             .buffer_unordered(self.options.batch_concurrency)

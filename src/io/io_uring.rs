@@ -330,7 +330,6 @@ impl IoUring {
 
         Ok(())
     }
-
 }
 
 impl super::Io for IoUring {

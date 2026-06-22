@@ -229,10 +229,7 @@ fn bench_write_file(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(5));
     group.warm_up_time(Duration::from_secs(1));
 
-    let write_sizes: &[(usize, &str)] = &[
-        (1024 * 1024, "1MiB"),
-        (64 * 1024 * 1024, "64MiB"),
-    ];
+    let write_sizes: &[(usize, &str)] = &[(1024 * 1024, "1MiB"), (64 * 1024 * 1024, "64MiB")];
 
     for &(size, label) in write_sizes {
         let data: Vec<u8> = (0u8..=255).cycle().take(size).collect();
