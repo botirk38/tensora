@@ -15,9 +15,7 @@ use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
-use fastio::sync::SyncIo;
-use fastio::tokio::Tokio;
-use fastio::{AsyncIo, BlockingIo, ByteRange, WriteSlice, WriteSlices};
+use fastio::{WriteSlice, sync, tokio as fastio_tokio};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -527,17 +525,20 @@ impl ConversionPlan {
             ConversionEngine::Sync => self.materialize_sync_parallel(output_dir)?,
             ConversionEngine::TokioAsync => self.materialize_async_inner(output_dir).await?,
             #[cfg(target_os = "linux")]
-            ConversionEngine::IoUring => self.materialize_sync_parallel(output_dir)?,
+            ConversionEngine::IoUring => self.materialize_uring_parallel(output_dir)?,
         }
 
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        Tokio::new()
-            .write_file(&index_path, &index_bytes)
+        fastio_tokio::write(&index_path, &index_bytes)
             .await
             .map_err(SaveError::from)?;
-        Tokio::new()
-            .sync_all(&index_path)
+        fastio_tokio::OpenOptions::new()
+            .write(true)
+            .open(&index_path)
+            .await
+            .map_err(SaveError::from)?
+            .sync_all()
             .await
             .map_err(SaveError::from)?;
 
@@ -549,11 +550,12 @@ impl ConversionPlan {
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        SyncIo::new()
-            .write_file(&index_path, &index_bytes)
-            .map_err(SaveError::from)?;
-        SyncIo::new()
-            .sync_all(&index_path)
+        sync::write(&index_path, &index_bytes).map_err(SaveError::from)?;
+        sync::OpenOptions::new()
+            .write(true)
+            .open(&index_path)
+            .map_err(SaveError::from)?
+            .sync_all()
             .map_err(SaveError::from)?;
         Ok(())
     }
@@ -580,6 +582,16 @@ impl ConversionPlan {
             })
     }
 
+    #[cfg(target_os = "linux")]
+    fn materialize_uring_parallel(&self, output_dir: &Path) -> SaveResult<()> {
+        let partitions = self.group_by_partition();
+        partitions
+            .into_par_iter()
+            .try_for_each(|(partition_id, ops)| {
+                Self::write_partition_uring(output_dir, partition_id, &ops)
+            })
+    }
+
     fn group_by_partition(&self) -> Vec<(PartitionId, Vec<&CopyOp>)> {
         let mut by_partition: HashMap<PartitionId, Vec<&CopyOp>> = HashMap::new();
         for op in &self.copy_ops {
@@ -595,16 +607,15 @@ impl ConversionPlan {
     ) -> SaveResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let engine = Tokio::new();
 
         // Read all source ranges, then write everything in one positioned open.
         let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
         for op in ops {
-            let data = engine
-                .read_range(
-                    &op.source_path,
-                    ByteRange::from_offset_len(op.source_offset, op.size)?,
-                )
+            let source = fastio_tokio::File::open(&op.source_path)
+                .await
+                .map_err(SaveError::from)?;
+            let data = source
+                .read_at(op.source_offset, op.size)
                 .await
                 .map_err(SaveError::from)?;
             writes.push((op.dest_offset, data.as_ref().to_vec()));
@@ -614,11 +625,15 @@ impl ConversionPlan {
             .iter()
             .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
-        engine
-            .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
+        let output = fastio_tokio::File::create(&path)
             .await
             .map_err(SaveError::from)?;
-        engine.sync_all(&path).await.map_err(SaveError::from)
+        output.set_len(total_size).await.map_err(SaveError::from)?;
+        output
+            .write_slices_at(&write_slices)
+            .await
+            .map_err(SaveError::from)?;
+        output.sync_all().await.map_err(SaveError::from)
     }
 
     fn write_partition_sync(
@@ -628,16 +643,13 @@ impl ConversionPlan {
     ) -> SaveResult<()> {
         let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
         let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
-        let engine = SyncIo::new();
 
         // Read all source ranges, then write everything in one positioned open.
         let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
         for op in ops {
-            let data = engine
-                .read_range(
-                    &op.source_path,
-                    ByteRange::from_offset_len(op.source_offset, op.size)?,
-                )
+            let source = sync::File::open(&op.source_path).map_err(SaveError::from)?;
+            let data = source
+                .read_at(op.source_offset, op.size)
                 .map_err(SaveError::from)?;
             writes.push((op.dest_offset, data.as_ref().to_vec()));
         }
@@ -646,10 +658,42 @@ impl ConversionPlan {
             .iter()
             .map(|(offset, data)| WriteSlice::new(*offset, data))
             .collect();
-        engine
-            .write_positioned_file(&path, total_size, WriteSlices::new(&write_slices)?)
+        let output = sync::File::create(&path).map_err(SaveError::from)?;
+        output.set_len(total_size).map_err(SaveError::from)?;
+        output
+            .write_slices_at(&write_slices)
             .map_err(SaveError::from)?;
-        engine.sync_all(&path).map_err(SaveError::from)
+        output.sync_all().map_err(SaveError::from)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_partition_uring(
+        output_dir: &Path,
+        partition_id: PartitionId,
+        ops: &[&CopyOp],
+    ) -> SaveResult<()> {
+        let path = output_dir.join(format!("tensor.data_{}", partition_id.as_usize()));
+        let total_size: u64 = ops.iter().map(|op| op.size as u64).sum();
+
+        let mut writes: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ops.len());
+        for op in ops {
+            let source = fastio::uring::File::open(&op.source_path).map_err(SaveError::from)?;
+            let data = source
+                .read_at(op.source_offset, op.size)
+                .map_err(SaveError::from)?;
+            writes.push((op.dest_offset, data.as_ref().to_vec()));
+        }
+
+        let write_slices: Vec<WriteSlice<'_>> = writes
+            .iter()
+            .map(|(offset, data)| WriteSlice::new(*offset, data))
+            .collect();
+        let output = fastio::uring::File::create(&path).map_err(SaveError::from)?;
+        output.set_len(total_size).map_err(SaveError::from)?;
+        output
+            .write_slices_at(&write_slices)
+            .map_err(SaveError::from)?;
+        output.sync_all().map_err(SaveError::from)
     }
 }
 

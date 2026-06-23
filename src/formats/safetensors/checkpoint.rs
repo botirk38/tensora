@@ -20,10 +20,7 @@
 use crate::formats::error::{LoadError, LoadResult, SaveError, SaveResult};
 use crate::formats::tensor::Dtype;
 use crate::formats::{AsyncBackend, Backend};
-use fastio::mmap::Mmap;
-use fastio::sync::SyncIo;
-use fastio::tokio::Tokio;
-use fastio::{AsyncIo, BlockingIo, MmapIo};
+use fastio::{mmap, sync, tokio as fastio_tokio};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -142,17 +139,15 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
 
         match backend {
             Backend::Sync => {
-                let engine = SyncIo::new();
                 for path in paths {
-                    let bytes = engine.read_file(&path).map_err(LoadError::from)?;
+                    let bytes = sync::read(&path).map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
             #[cfg(target_os = "linux")]
             Backend::IoUring => {
-                let engine = fastio::io_uring::IoUring::new();
                 for path in paths {
-                    let bytes = engine.read_file(&path).map_err(LoadError::from)?;
+                    let bytes = fastio::uring::read(&path).map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
@@ -170,9 +165,8 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
 
         match backend {
             AsyncBackend::Tokio => {
-                let engine = Tokio::new();
                 for path in paths {
-                    let bytes = engine.read_file(&path).await.map_err(LoadError::from)?;
+                    let bytes = fastio_tokio::read(&path).await.map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
@@ -183,11 +177,10 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
 
     fn open(path: impl AsRef<Path>) -> LoadResult<Self::Model> {
         let paths = Self::discover_files(path)?;
-        let mapper = Mmap::new();
         let mut files = Vec::with_capacity(paths.len());
 
         for path in paths {
-            let mmap = mapper.map_file(&path).map_err(LoadError::from)?;
+            let mmap = mmap::map(&path).map_err(LoadError::from)?;
             files.push(FileData::parse(mmap)?);
         }
 
@@ -209,12 +202,17 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
             tokio::fs::create_dir_all(parent).await?;
         }
         let bytes = self.to_bytes()?;
-        let engine = Tokio::new();
-        engine
-            .write_file(path, &bytes)
+        fastio_tokio::write(path, &bytes)
             .await
             .map_err(SaveError::from)?;
-        engine.sync_all(path).await.map_err(SaveError::from)
+        fastio_tokio::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .await
+            .map_err(SaveError::from)?
+            .sync_all()
+            .await
+            .map_err(SaveError::from)
     }
 }
 

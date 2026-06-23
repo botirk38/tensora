@@ -45,7 +45,7 @@ io-uring = ["fastio/io-uring"]
 clap = { version = "4.5", features = ["derive"] }
 dirs = "6"
 futures = { version = "0.3", optional = true }
-fastio = { version = "0.1.1", default-features = false }
+fastio = { version = "0.2.0", default-features = false }
 num_cpus = "1.16"
 safetensors = "0.7.0"
 serde = { version = "1.0.228", features = ["derive"] }

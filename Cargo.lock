@@ -438,15 +438,13 @@ dependencies = [
 
 [[package]]
 name = "fastio"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b378ef2027455d701c886d41cd6002e8c6d89110a3e2ebcf385991e1e661f79"
+checksum = "966e92ca78f9ec28bb256d0f62efbcab13d68ac779371d3369e5be7ea472bd66"
 dependencies = [
- "futures",
  "io-uring",
  "libc",
  "memmap2",
- "rayon",
  "region",
  "tokio",
  "zeropool",

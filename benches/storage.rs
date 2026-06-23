@@ -8,11 +8,8 @@ mod bench_util;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(target_os = "linux")]
-use fastio::io_uring::IoUring;
-use fastio::mmap::Mmap;
-use fastio::sync::SyncIo;
-use fastio::tokio::Tokio;
-use fastio::{AsyncIo, BlockingIo, ByteRange, FileRange, MmapIo};
+use fastio::uring;
+use fastio::{mmap, sync, tokio as fastio_tokio};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -34,8 +31,7 @@ fn bench_sync_reader_load(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let reader = SyncIo::new();
-            let data = reader.read_file(black_box(shard.as_path())).unwrap();
+            let data = sync::read(black_box(shard.as_path())).unwrap();
             black_box(data.len())
         });
     });
@@ -58,8 +54,7 @@ fn bench_tokio_storage_load(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let path = shard.clone();
             async move {
-                let reader = Tokio::new();
-                let data = reader.read_file(black_box(path.as_path())).await.unwrap();
+                let data = fastio_tokio::read(black_box(path.as_path())).await.unwrap();
                 black_box(data.len())
             }
         });
@@ -81,8 +76,7 @@ fn bench_io_uring_reader_load(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("load", &slug), |b| {
         b.iter(|| {
-            let reader = IoUring::new();
-            let data = reader.read_file(black_box(shard.as_path())).unwrap();
+            let data = uring::read(black_box(shard.as_path())).unwrap();
             black_box(data.len())
         });
     });
@@ -106,10 +100,9 @@ fn bench_sync_reader_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load_batch", &slug), |b| {
         b.iter(|| {
-            let reader = SyncIo::new();
             let total_len: usize = black_box(&shards)
                 .iter()
-                .map(|path| reader.read_file(path.as_path()).unwrap().len())
+                .map(|path| sync::read(path.as_path()).unwrap().len())
                 .sum();
             black_box(total_len)
         });
@@ -133,10 +126,9 @@ fn bench_tokio_storage_batch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let paths = shards.clone();
             async move {
-                let reader = Tokio::new();
                 let mut total_len = 0usize;
                 for path in black_box(&paths) {
-                    total_len += reader.read_file(path.as_path()).await.unwrap().len();
+                    total_len += fastio_tokio::read(path.as_path()).await.unwrap().len();
                 }
                 black_box(total_len)
             }
@@ -159,10 +151,9 @@ fn bench_io_uring_reader_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("load_batch", &slug), |b| {
         b.iter(|| {
-            let reader = IoUring::new();
             let total_len: usize = black_box(&shards)
                 .iter()
-                .map(|path| reader.read_file(path.as_path()).unwrap().len())
+                .map(|path| uring::read(path.as_path()).unwrap().len())
                 .sum();
             black_box(total_len)
         });
@@ -201,14 +192,15 @@ fn bench_sync_reader_range_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("range_batch", &slug), |b| {
         b.iter(|| {
-            let reader = SyncIo::new();
-            let ranges: Vec<FileRange<'_>> = requests
+            let results: Vec<_> = requests
                 .iter()
                 .map(|(path, offset, len)| {
-                    FileRange::new(path, ByteRange::from_offset_len(*offset, *len).unwrap())
+                    sync::File::open(path)
+                        .unwrap()
+                        .read_at(*offset, *len)
+                        .unwrap()
                 })
                 .collect();
-            let results = reader.read_ranges(black_box(&ranges)).unwrap();
             black_box(results.len())
         });
     });
@@ -232,14 +224,17 @@ fn bench_tokio_storage_range_batch(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let reqs = requests.clone();
             async move {
-                let reader = Tokio::new();
-                let ranges: Vec<FileRange<'_>> = reqs
-                    .iter()
-                    .map(|(path, offset, len)| {
-                        FileRange::new(path, ByteRange::from_offset_len(*offset, *len).unwrap())
-                    })
-                    .collect();
-                let results = reader.read_ranges(black_box(&ranges)).await.unwrap();
+                let mut results = Vec::with_capacity(reqs.len());
+                for (path, offset, len) in black_box(&reqs) {
+                    results.push(
+                        fastio_tokio::File::open(path)
+                            .await
+                            .unwrap()
+                            .read_at(*offset, *len)
+                            .await
+                            .unwrap(),
+                    );
+                }
                 black_box(results.len())
             }
         });
@@ -262,14 +257,15 @@ fn bench_io_uring_reader_range_batch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(total_bytes));
     group.bench_function(BenchmarkId::new("range_batch", &slug), |b| {
         b.iter(|| {
-            let reader = IoUring::new();
-            let ranges: Vec<FileRange<'_>> = requests
+            let results: Vec<_> = requests
                 .iter()
                 .map(|(path, offset, len)| {
-                    FileRange::new(path, ByteRange::from_offset_len(*offset, *len).unwrap())
+                    uring::File::open(path)
+                        .unwrap()
+                        .read_at(*offset, *len)
+                        .unwrap()
                 })
                 .collect();
-            let results = reader.read_ranges(black_box(&ranges)).unwrap();
             black_box(results.len())
         });
     });
@@ -293,8 +289,7 @@ fn bench_mmap_open_touch(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(shard_bytes));
     group.bench_function(BenchmarkId::new("open_touch", &slug), |b| {
         b.iter(|| {
-            let storage = Mmap::new();
-            let mmap = storage.map_file(black_box(shard.as_path())).unwrap();
+            let mmap = mmap::map(black_box(shard.as_path())).unwrap();
             let data = mmap.as_ref();
             let page_size = 4096;
             let mut sum = 0u8;
