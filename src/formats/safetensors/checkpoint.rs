@@ -140,14 +140,18 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         match backend {
             Backend::Sync => {
                 for path in paths {
-                    let bytes = sync::read(&path).map_err(LoadError::from)?;
+                    let bytes = sync::File::open(&path)
+                        .and_then(|file| file.read_all())
+                        .map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
             #[cfg(target_os = "linux")]
             Backend::IoUring => {
                 for path in paths {
-                    let bytes = fastio::uring::read(&path).map_err(LoadError::from)?;
+                    let bytes = fastio::uring::File::open(&path)
+                        .and_then(|file| file.read_all())
+                        .map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
@@ -166,7 +170,12 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         match backend {
             AsyncBackend::Tokio => {
                 for path in paths {
-                    let bytes = fastio_tokio::read(&path).await.map_err(LoadError::from)?;
+                    let bytes = fastio_tokio::File::open(&path)
+                        .await
+                        .map_err(LoadError::from)?
+                        .read_all()
+                        .await
+                        .map_err(LoadError::from)?;
                     files.push(FileData::parse(bytes)?);
                 }
             }
@@ -180,7 +189,9 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         let mut files = Vec::with_capacity(paths.len());
 
         for path in paths {
-            let mmap = mmap::map(&path).map_err(LoadError::from)?;
+            let mmap = mmap::File::open(&path)
+                .and_then(|file| file.map())
+                .map_err(LoadError::from)?;
             files.push(FileData::parse(mmap)?);
         }
 
@@ -202,17 +213,13 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
             tokio::fs::create_dir_all(parent).await?;
         }
         let bytes = self.to_bytes()?;
-        fastio_tokio::write(path, &bytes)
+        let file = fastio_tokio::File::create(path)
             .await
             .map_err(SaveError::from)?;
-        fastio_tokio::OpenOptions::new()
-            .write(true)
-            .open(path)
+        file.write_all_at(0, &bytes)
             .await
-            .map_err(SaveError::from)?
-            .sync_all()
-            .await
-            .map_err(SaveError::from)
+            .map_err(SaveError::from)?;
+        file.sync_all().await.map_err(SaveError::from)
     }
 }
 

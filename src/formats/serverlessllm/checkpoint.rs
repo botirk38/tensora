@@ -134,15 +134,17 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         match backend {
             Backend::Sync => {
                 for id in index.partition_ids() {
-                    let bytes =
-                        sync::read(dir.join(id.data_file_stem())).map_err(LoadError::from)?;
+                    let bytes = sync::File::open(dir.join(id.data_file_stem()))
+                        .and_then(|file| file.read_all())
+                        .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
                 }
             }
             #[cfg(target_os = "linux")]
             Backend::IoUring => {
                 for id in index.partition_ids() {
-                    let bytes = fastio::uring::read(dir.join(id.data_file_stem()))
+                    let bytes = fastio::uring::File::open(dir.join(id.data_file_stem()))
+                        .and_then(|file| file.read_all())
                         .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
                 }
@@ -157,14 +159,20 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         backend: AsyncBackend,
     ) -> LoadResult<Self::Model> {
         let dir = path.as_ref();
-        let index_bytes = fastio_tokio::read(dir.join("tensor_index.json")).await?;
+        let index_bytes = fastio_tokio::File::open(dir.join("tensor_index.json"))
+            .await?
+            .read_all()
+            .await?;
         let index = Index::from_bytes(index_bytes.as_ref())?;
         let mut partitions = HashMap::with_capacity(index.partition_ids().len());
 
         match backend {
             AsyncBackend::Tokio => {
                 for id in index.partition_ids() {
-                    let bytes = fastio_tokio::read(dir.join(id.data_file_stem()))
+                    let bytes = fastio_tokio::File::open(dir.join(id.data_file_stem()))
+                        .await
+                        .map_err(LoadError::from)?
+                        .read_all()
                         .await
                         .map_err(LoadError::from)?;
                     partitions.insert(*id, bytes.into_shared());
@@ -181,7 +189,9 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         let mut partitions = HashMap::with_capacity(index.partition_ids().len());
 
         for id in index.partition_ids() {
-            let mmap = mmap::map(dir.join(id.data_file_stem())).map_err(LoadError::from)?;
+            let mmap = mmap::File::open(dir.join(id.data_file_stem()))
+                .and_then(|file| file.map())
+                .map_err(LoadError::from)?;
             partitions.insert(*id, mmap);
         }
 
@@ -193,23 +203,17 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         std::fs::create_dir_all(directory)?;
 
         let index_path = directory.join("tensor_index.json");
-        sync::write(&index_path, &Self::encode_index(&self.index)?).map_err(SaveError::from)?;
-        sync::OpenOptions::new()
-            .write(true)
-            .open(&index_path)
-            .map_err(SaveError::from)?
-            .sync_all()
+        let index_file = sync::File::create(&index_path).map_err(SaveError::from)?;
+        index_file
+            .write_all_at(0, &Self::encode_index(&self.index)?)
             .map_err(SaveError::from)?;
+        index_file.sync_all().map_err(SaveError::from)?;
 
         for (id, data) in self.partitions.iter().enumerate() {
             let path = directory.join(PartitionId::new(id).data_file_stem());
-            sync::write(&path, data).map_err(SaveError::from)?;
-            sync::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .map_err(SaveError::from)?
-                .sync_all()
-                .map_err(SaveError::from)?;
+            let file = sync::File::create(&path).map_err(SaveError::from)?;
+            file.write_all_at(0, data).map_err(SaveError::from)?;
+            file.sync_all().map_err(SaveError::from)?;
         }
 
         Ok(())
@@ -220,31 +224,22 @@ impl crate::formats::traits::Checkpoint for Checkpoint {
         tokio::fs::create_dir_all(directory).await?;
 
         let index_path = directory.join("tensor_index.json");
-        fastio_tokio::write(&index_path, &Self::encode_index(&self.index)?)
+        let index_file = fastio_tokio::File::create(&index_path)
             .await
             .map_err(SaveError::from)?;
-        fastio_tokio::OpenOptions::new()
-            .write(true)
-            .open(&index_path)
-            .await
-            .map_err(SaveError::from)?
-            .sync_all()
+        index_file
+            .write_all_at(0, &Self::encode_index(&self.index)?)
             .await
             .map_err(SaveError::from)?;
+        index_file.sync_all().await.map_err(SaveError::from)?;
 
         for (id, data) in self.partitions.iter().enumerate() {
             let path = directory.join(PartitionId::new(id).data_file_stem());
-            fastio_tokio::write(&path, data)
+            let file = fastio_tokio::File::create(&path)
                 .await
                 .map_err(SaveError::from)?;
-            fastio_tokio::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .await
-                .map_err(SaveError::from)?
-                .sync_all()
-                .await
-                .map_err(SaveError::from)?;
+            file.write_all_at(0, data).await.map_err(SaveError::from)?;
+            file.sync_all().await.map_err(SaveError::from)?;
         }
 
         Ok(())

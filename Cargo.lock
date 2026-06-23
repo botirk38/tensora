@@ -438,9 +438,9 @@ dependencies = [
 
 [[package]]
 name = "fastio"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "966e92ca78f9ec28bb256d0f62efbcab13d68ac779371d3369e5be7ea472bd66"
+checksum = "290ca6d2f496b1e9e51d35b71af33d6518eab96ba6af3a973e5ba032e5b5a201"
 dependencies = [
  "io-uring",
  "libc",

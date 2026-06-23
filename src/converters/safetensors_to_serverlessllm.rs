@@ -15,7 +15,7 @@ use crate::formats::serverlessllm::checkpoint::Checkpoint as SllmCheckpoint;
 use crate::formats::serverlessllm::ids::{PartitionCount, PartitionId};
 use crate::formats::serverlessllm::tensor::TensorEntry;
 use crate::formats::tensor::{Dtype, TensorMeta};
-use fastio::{WriteSlice, sync, tokio as fastio_tokio};
+use fastio::{WriteSlice, WriteSlices, sync, tokio as fastio_tokio};
 use futures::future::try_join_all;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -530,17 +530,14 @@ impl ConversionPlan {
 
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        fastio_tokio::write(&index_path, &index_bytes)
+        let index_file = fastio_tokio::File::create(&index_path)
             .await
             .map_err(SaveError::from)?;
-        fastio_tokio::OpenOptions::new()
-            .write(true)
-            .open(&index_path)
-            .await
-            .map_err(SaveError::from)?
-            .sync_all()
+        index_file
+            .write_all_at(0, &index_bytes)
             .await
             .map_err(SaveError::from)?;
+        index_file.sync_all().await.map_err(SaveError::from)?;
 
         Ok(())
     }
@@ -550,13 +547,11 @@ impl ConversionPlan {
         self.materialize_sync_parallel(output_dir)?;
         let index_path = output_dir.join("tensor_index.json");
         let index_bytes = SllmCheckpoint::encode_index(&self.index)?;
-        sync::write(&index_path, &index_bytes).map_err(SaveError::from)?;
-        sync::OpenOptions::new()
-            .write(true)
-            .open(&index_path)
-            .map_err(SaveError::from)?
-            .sync_all()
+        let index_file = sync::File::create(&index_path).map_err(SaveError::from)?;
+        index_file
+            .write_all_at(0, &index_bytes)
             .map_err(SaveError::from)?;
+        index_file.sync_all().map_err(SaveError::from)?;
         Ok(())
     }
 
@@ -630,7 +625,7 @@ impl ConversionPlan {
             .map_err(SaveError::from)?;
         output.set_len(total_size).await.map_err(SaveError::from)?;
         output
-            .write_slices_at(&write_slices)
+            .write_slices_at(WriteSlices::new(&write_slices).map_err(SaveError::from)?)
             .await
             .map_err(SaveError::from)?;
         output.sync_all().await.map_err(SaveError::from)
@@ -661,7 +656,7 @@ impl ConversionPlan {
         let output = sync::File::create(&path).map_err(SaveError::from)?;
         output.set_len(total_size).map_err(SaveError::from)?;
         output
-            .write_slices_at(&write_slices)
+            .write_slices_at(WriteSlices::new(&write_slices).map_err(SaveError::from)?)
             .map_err(SaveError::from)?;
         output.sync_all().map_err(SaveError::from)
     }
@@ -691,7 +686,7 @@ impl ConversionPlan {
         let output = fastio::uring::File::create(&path).map_err(SaveError::from)?;
         output.set_len(total_size).map_err(SaveError::from)?;
         output
-            .write_slices_at(&write_slices)
+            .write_slices_at(WriteSlices::new(&write_slices).map_err(SaveError::from)?)
             .map_err(SaveError::from)?;
         output.sync_all().map_err(SaveError::from)
     }
