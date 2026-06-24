@@ -1,13 +1,30 @@
 """Tensora experiment harness — Modal-based cold-cache profiling on H100.
 
-This library provides domain entities for defining, executing, and reporting
-on Tensora profiling experiments via Modal's serverless GPU infrastructure.
+Public API re-exports for the experiment domain.
 """
 
-from tensora_experiments.config import CellSpec, ExperimentMatrix
+from tensora_experiments.analysis import separability_analysis
+from tensora_experiments.enums import Backend, BenchmarkKind, Format, VllmLoader
 from tensora_experiments.infrastructure import app
-from tensora_experiments.profiler import Profiler
+from tensora_experiments.matrix import RustMatrix, VllmMatrix
+from tensora_experiments.profiler import RustProfiler
 from tensora_experiments.report import Report
-from tensora_experiments.result import CellResult
+from tensora_experiments.result import BenchmarkResult, RustResult, VllmResult
+from tensora_experiments.vllm_profiler import VllmProfiler
 
-__all__ = ["CellResult", "CellSpec", "ExperimentMatrix", "Profiler", "Report", "app"]
+__all__ = [
+    "Backend",
+    "BenchmarkKind",
+    "BenchmarkResult",
+    "Format",
+    "Report",
+    "RustMatrix",
+    "RustProfiler",
+    "RustResult",
+    "VllmLoader",
+    "VllmMatrix",
+    "VllmProfiler",
+    "VllmResult",
+    "app",
+    "separability_analysis",
+]

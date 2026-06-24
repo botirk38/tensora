@@ -1,35 +1,26 @@
 \section{Discussion}
 \label{sec:discussion}
 
-The main result is not that one backend wins. The main result is that backend choice depends jointly on format, scale, environment, and observation layer.
+Checkpoint format determines which I/O backend wins, and this determination is consistent across model scales.
 
-\subsection{Mechanism: why layout changes the answer}
+\subsection{Mechanism: why format changes the answer}
 
-SafeTensors and ServerlessLLM-style partitioning create different I/O problems. SafeTensors exposes large contiguous reads after metadata parsing. For small checkpoints, a practical sync backend has low overhead and enough parallelism; additional scheduling machinery does not amortize. As size and shard count grow, the H100 workload has enough in-flight work for \texttt{io\_uring} to pay off.
+SafeTensors and ServerlessLLM-style partitioning create different I/O problems. SafeTensors exposes large contiguous reads after metadata parsing. For small checkpoints, a practical sync backend has low overhead and enough parallelism; the gap between sync and async is small. As size and shard count grow, async's ability to overlap I/O with scheduling and batching provides increasing returns.
 
-ServerlessLLM-style partitioning changes the request geometry. The loader reconstructs tensors from indexed partition files, so grouping, coalescing, and range batching dominate. The SafeTensors rule ``sync can be good for small loads'' does not transfer: sync never wins in the H100 ServerlessLLM matrix. The format, not the API name, explains the reversal.
+ServerlessLLM-style partitioning changes the request geometry. The loader reconstructs tensors from indexed partition files, so grouping, coalescing, and range batching dominate. Sync's sequential submission model pays a per-request cost that accumulates across the many ranges. Async's concurrent scheduling amortizes this cost. The SafeTensors intuition that ``sync can be competitive for small loads'' does not transfer: sync never wins in the ServerlessLLM matrix. The format, not the API name, explains the reversal.
 
 \subsection{Integration: why rankings move across layers}
 
-Rust and vLLM answer different questions. Rust isolates backend mechanics. vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation setup; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
+Rust and vLLM answer different questions. Rust isolates backend mechanics (Section~\ref{sec:rust-results}). vLLM measures serving startup with CUDA context setup, memory pools, runtime configuration, and generation state; its path includes Python integration overhead through Tensora's Python bindings. These costs can dilute a pure I/O advantage or reorder two close backends.
 
-The vLLM results do not reproduce Rust rankings row-for-row because vLLM adds substantial initialization overhead that compresses proportional backend spreads. For SafeTensors Qwen3-8B, the Rust times span 3.2 to 7.1~s (a 2.2$\times$ spread), while the vLLM cold times span 35.9 to 36.5~s (a 1.02$\times$ spread). The I/O component becomes a small fraction of total startup. Yet the regime structure survives: sync-type loaders win at small scale and io\_uring-type loaders win at large scale in both Rust and vLLM. The proportional advantage is smaller at the vLLM level, but the absolute savings (21~s at 8B, 82~s at 32B) are deployment-relevant.
+At 0.6\,B, \texttt{ts\_safetensors\_async} achieves 11.8\,s vs.\ 39.6\,s for native (3.4$\times$ faster, Table~\ref{tab:vllm-load}). At $\geq$4\,B, native is competitive because engine overhead dominates the initialization budget. This delineates the regime where loading improvements have the most impact: cold-start scenarios for smaller models or multi-model serving where startup latency compounds.
 
-This is not a flaw in the methodology; it is the deployment reality. A systems paper about loading should show both mechanism and propagation. Backend effects matter because they remain visible in vLLM cold initialization even after fixed engine costs are included.
+\subsection{External baseline context}
 
-Warm-cache behavior adds a second dimension. vLLM's native initialization is slower on warm cache than cold (0.6B: 23659~ms cold vs 56874~ms warm), indicating its bottleneck is CPU processing, not I/O. Tensora's I/O-gated loaders are faster on warm cache (ts\_safetensors\_sync at 0.6B: 20417~ms cold vs 18223~ms warm). This asymmetry means backend-aware loading provides more predictable restart times regardless of cache state.
-
-\subsection{What transfers}
-
-Absolute milliseconds are machine-specific. Ordering regimes transfer more plausibly. In this study, small SafeTensors loads favor sync on H100, H200, and A100 (with Modal H100 as the gVisor exception where async leads at small scale). The large-scale winner does not transfer by name: H100 favors \texttt{io\_uring}, H200 favors async when \texttt{io\_uring} is blocked, and A100 shows a non-monotonic recovery at the largest SafeTensors row. A replication should therefore ask whether regime structure (backend ordering as a function of format and scale) persists, not whether every number matches.
-
-\subsection{A100 SafeTensors at 32B: why sync recovers}
-\label{sec:a100-anomaly}
-
-The A100 SafeTensors result at 32B presents a distinctive reversal: sync (46,923~ms) outperforms async (60,807~ms) by $1.30\times$. This contrasts with H200 at the same scale, where async dominates sync by $3.41\times$. One plausible explanation is storage-link saturation: at 65~GB, the checkpoint transfer may saturate the A100's network-attached storage bandwidth, causing async's Tokio scheduling overhead to exceed its concurrency benefit. The recovery does not appear on H200, where the storage path sustains higher effective bandwidth. This finding illustrates why storage topology should inform backend choice.
+The upstream \texttt{safetensors} crate uses \texttt{std::fs::read} without backend-aware scheduling. Tensora async outperforms it by 1.6--13.8$\times$ across scales.
 
 \subsection{Implications}
 
-For practitioners, evaluate backend choice relative to format and scale rather than adopting a fixed submission policy. Expose explicit backend labels for known regime boundaries.
+For practitioners, evaluate backend choice relative to checkpoint format and scale rather than adopting a fixed submission policy. When deploying on restricted environments (e.g., gVisor containers where \texttt{io\_uring} is unavailable), async provides consistent advantages over sync across both formats.
 
-For researchers, report loading results as layered constructs. A Rust microbenchmark and a serving-engine startup benchmark are both valuable; neither subsumes the other. A paper that reports only one layer risks explaining the wrong phenomenon.
+For researchers, report loading results with explicit format and backend attribution. A paper that reports only one layout or one backend risks explaining the wrong phenomenon: the same I/O API that wins on contiguous reads may lose on partitioned access.

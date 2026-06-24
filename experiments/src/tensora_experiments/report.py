@@ -1,35 +1,35 @@
-"""Domain entity: Report — collects results, formats TSV, and analyzes separability."""
+"""Generic Report that collects any BenchmarkResult and writes TSV via csv module."""
 
 from __future__ import annotations
 
-from collections import defaultdict
+import csv
+import io
 from dataclasses import dataclass, field
-from itertools import pairwise
 from pathlib import Path
-from statistics import median
 
-from tensora_experiments.result import CellResult
+from tensora_experiments.result import BenchmarkResult
 
 
 @dataclass(slots=True)
-class Report:
-    """Aggregates CellResult instances and provides output/analysis methods.
+class Report[R: BenchmarkResult]:
+    """Collects benchmark results and writes well-formed TSV output.
 
-    Attributes:
-        name: Experiment name (used in file naming and headers).
-        results: Collected profiling results.
+    Works identically for RustResult and VllmResult because both
+    implement the BenchmarkResult protocol (tsv_columns / to_tsv_dict).
     """
 
     name: str
-    results: list[CellResult] = field(default_factory=list)
+    results: list[R] = field(default_factory=list)
+
+    # ── accessors ─────────────────────────────────────────────────
 
     @property
-    def successes(self) -> list[CellResult]:
+    def successes(self) -> list[R]:
         return [r for r in self.results if r.succeeded]
 
     @property
-    def failures(self) -> list[CellResult]:
-        return [r for r in self.results if r.failed]
+    def failures(self) -> list[R]:
+        return [r for r in self.results if not r.succeeded]
 
     @property
     def success_rate(self) -> float:
@@ -37,52 +37,45 @@ class Report:
             return 0.0
         return len(self.successes) / len(self.results)
 
-    def add(self, result: CellResult) -> None:
-        """Append a single result."""
+    # ── mutation ──────────────────────────────────────────────────
+
+    def add(self, result: R) -> None:
         self.results.append(result)
 
-    def extend(self, results: list[CellResult]) -> None:
-        """Append multiple results."""
+    def extend(self, results: list[R]) -> None:
         self.results.extend(results)
 
-    def to_matrix_tsv(self) -> str:
-        """Format as TSV matching results/h100/rust.tsv schema.
+    # ── TSV serialisation (via csv.DictWriter) ────────────────────
 
-        Columns: model, format, backend, time_ms, tensors, bytes
-        """
-        header = "model\tformat\tbackend\ttime_ms\ttensors\tbytes"
-        rows = [header] + [r.to_matrix_row() for r in self.results]
-        return "\n".join(rows) + "\n"
+    def to_tsv(self) -> str:
+        """Render all results as a TSV string."""
+        if not self.results:
+            return ""
 
-    def to_anchor_tsv(self) -> str:
-        """Format as TSV matching results/h100/anchor.tsv schema.
+        columns = type(self.results[0]).tsv_columns()
+        buf = io.StringIO()
+        writer = csv.DictWriter(
+            buf,
+            fieldnames=columns,
+            delimiter="\t",
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        for r in self.results:
+            writer.writerow(r.to_tsv_dict())
+        return buf.getvalue()
 
-        Columns: model, format, backend, rep, time_ms, tensors, bytes
-        """
-        header = "model\tformat\tbackend\trep\ttime_ms\ttensors\tbytes"
-        rows = [header] + [r.to_anchor_row() for r in self.results]
-        return "\n".join(rows) + "\n"
-
-    def write_tsv(self, output_dir: Path, anchor: bool = False) -> Path:
-        """Write results to a TSV file in the given directory.
-
-        Args:
-            output_dir: Directory to write into (created if missing).
-            anchor: If True, use anchor schema (with rep column).
-
-        Returns:
-            Path to the written file.
-        """
+    def write_tsv(self, output_dir: Path) -> Path:
+        """Write results TSV to *output_dir/<name>.tsv*."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{self.name.replace(' ', '_')}.tsv"
-        filepath = output_dir / filename
-
-        content = self.to_anchor_tsv() if anchor else self.to_matrix_tsv()
-        filepath.write_text(content)
+        filepath = output_dir / f"{self.name.replace(' ', '_')}.tsv"
+        filepath.write_text(self.to_tsv())
         return filepath
 
+    # ── human-readable output ─────────────────────────────────────
+
     def summary(self) -> str:
-        """Human-readable summary of the report."""
         lines = [
             f"Report: {self.name}",
             f"  Total results: {len(self.results)}",
@@ -92,60 +85,18 @@ class Report:
         ]
         if self.failures:
             lines.append("  Failed cells:")
-            for failure in self.failures:
-                lines.append(
-                    f"    {failure.model} / {failure.format} / "
-                    f"{failure.backend} rep={failure.rep}: {failure.error}"
-                )
+            for f in self.failures:
+                row = f.to_tsv_dict()
+                lines.append(f"    {row}")
         return "\n".join(lines)
 
-    def preview(self, anchor: bool = False, max_rows: int = 12) -> str:
-        """Return the first N rows of the TSV output for display."""
-        tsv = self.to_anchor_tsv() if anchor else self.to_matrix_tsv()
-        lines = tsv.split("\n")
-        preview_lines = ["--- TSV Preview ---"]
-        for line in lines[:max_rows]:
+    def preview(self, max_rows: int = 12) -> str:
+        tsv = self.to_tsv()
+        tsv_lines = tsv.split("\n")
+        preview_lines = [f"--- TSV Preview ({self.name}) ---"]
+        for line in tsv_lines[: max_rows + 1]:
             preview_lines.append(f"  {line}")
-        remaining = len(self.results) - (max_rows - 1)
+        remaining = len(self.results) - max_rows
         if remaining > 0:
             preview_lines.append(f"  ... ({remaining} more rows)")
         return "\n".join(preview_lines)
-
-    def separability_analysis(self) -> str:
-        """Analyze whether ranges overlap for close-call backend pairs.
-
-        Groups results by (model, format) and compares backend medians/ranges
-        to determine if the ranking is statistically separable.
-        """
-        grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
-        for r in self.successes:
-            grouped[(r.model, r.format, r.backend)].append(r.time_ms)
-
-        # Group by (model, format) to compare backends
-        model_format_groups: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(dict)
-        for (model, fmt, backend), times in grouped.items():
-            model_format_groups[(model, fmt)][backend] = times
-
-        lines: list[str] = ["Separability Analysis", "=" * 40]
-
-        for (model, fmt), backends in sorted(model_format_groups.items()):
-            lines.append(f"\n{model} / {fmt}:")
-
-            # Compute stats per backend
-            stats: list[tuple[str, float, float, float]] = []
-            for backend, times in sorted(backends.items()):
-                med = median(times)
-                stats.append((backend, min(times), med, max(times)))
-                lines.append(
-                    f"  {backend:>10}: median={med:.2f}ms "
-                    f"range=[{min(times):.2f}, {max(times):.2f}] "
-                    f"n={len(times)}"
-                )
-
-            stats.sort(key=lambda s: s[2])  # sort by median
-            for (name_a, min_a, _, max_a), (name_b, min_b, _, max_b) in pairwise(stats):
-                overlaps = min_a <= max_b and min_b <= max_a
-                verdict = "ranges OVERLAP" if overlaps else "SEPARABLE"
-                lines.append(f"  → {name_a} vs {name_b}: {verdict}")
-
-        return "\n".join(lines)
